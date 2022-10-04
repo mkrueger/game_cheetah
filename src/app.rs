@@ -127,7 +127,6 @@ impl eframe::App for GameCheetahEngine {
             ui.spacing_mut().item_spacing = egui::Vec2::splat(12.0);
 
             ui.horizontal(|ui| {
-
                 ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
                 ui.label("Process:");
 
@@ -149,92 +148,101 @@ impl eframe::App for GameCheetahEngine {
                     self.filter.clear();
                 }
             });
+            
+            if self.show_process_window {
+                self.render_process_window(ctx);
+            }
+
+            if self.pid <= 0 {
+                return;
+            }
 
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
                 ui.label("Value:");
-                ui.add(egui::TextEdit::singleline(&mut self.text).hint_text("Search for value"));
+                ui.add(egui::TextEdit::singleline(&mut self.text).hint_text("Search for value").interactive(!self.searching));
             });
 
             if self.searching {
-                let current_bytes = self.current_bytes.load(Ordering::Relaxed);
-                let progress_bar = egui::widgets::ProgressBar::new(current_bytes as f32 / self.total_bytes as f32).show_percentage();
+                self.render_search_bar(ui);
+                return;
+            } 
 
-                let bb = gabi::BytesConfig::default();
-                let current_bytes_out = bb.bytes(current_bytes as u64);
-                let total_bytes_out = bb.bytes(self.total_bytes as u64);
-                ui.label( format!("Search {}/{}", current_bytes_out, total_bytes_out));
-
-                ui.add(progress_bar);
-
-                if current_bytes >= self.total_bytes {
-                    self.searching = false;
-                }
-            } else {
-                if i32::from_str_radix(self.text.as_str(), 10).is_ok()  {
-                    let len = self.results.lock().unwrap().len();
-                    if len == 0 { 
-                        if ui.button("initial search").clicked() {
-                            self.initial_search();
+            if i32::from_str_radix(self.text.as_str(), 10).is_ok()  {
+                let len = self.results.lock().unwrap().len();
+                if len == 0 { 
+                    if ui.button("initial search").clicked() {
+                        self.initial_search();
+                    }
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
+        
+                        if ui.button("update").clicked() {
+                            self.search();
                         }
-                    } else {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
-            
-                            if ui.button("update").clicked() {
-                                self.search();
-                            }
-                            if ui.button("clear").clicked() {
-                                self.results.lock().unwrap().clear();
-                            }
+                        if ui.button("clear").clicked() {
+                            self.results.lock().unwrap().clear();
+                        }
 
-                            ui.label(format!("found {} items.", len));
-                        });
-                        
-                        if len > 0 && len < 10 {
-                            let table = TableBuilder::new(ui)
-                            .striped(true)
-                            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                            .column(Size::initial(120.0).at_least(40.0))
-                            .column(Size::initial(120.0).at_least(40.0))
-                            .column(Size::remainder().at_least(60.0));
-                            let row_height = 18.0;
-                
-                            table
-                            .header(20.0, |mut header| {
-                                header.col(|ui| {
-                                    ui.heading("Address");
-                                });
-                                header.col(|ui| {
-                                    ui.heading("Value");
-                                });
-                                // header.col(|ui| {
-                                //     ui.heading("Freezed");
-                                // });
-                            })
-                            .body(|mut body| {
-                                let cloned_results = self.results.lock().unwrap().clone();
-                                for i in 0..cloned_results.len() {
-                                    let result = &cloned_results[i];
-                                    body.row(row_height, |mut row| {
-                                        row.col(|ui| {
-                                            ui.label(format!("0x{:X}", result.addr));
-                                        });
-                                        row.col(|ui| {
-                                            if let Ok (handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
-                                                if let Ok(buf) = copy_address(result.addr, 4, &handle) {
-                                                    let mut val = i32::from_le_bytes(buf.try_into().unwrap());
-                                                    if ui.add(egui::DragValue::new(&mut val)).changed() {
-                                                        let output_buffer = val.to_le_bytes();
-                                                        handle.put_address(result.addr, &output_buffer).unwrap_or_default();
-                                                    }
-                                                } else {
-                                                    ui.label("<error>");
-                                                }
-                                            }
-                                        });
+                        ui.label(format!("found {} items.", len));
+                    });
+                    
+                    if len > 0 && len < 20 {
+                        self.render_result_table(ui);
+                    }
+                }
+            }
 
-                                       /*  row.col(|ui| {
+            self.update_freezed_values();
+        });
+    }
+}
+
+impl GameCheetahEngine {
+    fn render_result_table(&mut self, ui: &mut egui::Ui) {
+        let table = TableBuilder::new(ui)
+        .striped(true)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        .column(Size::initial(120.0).at_least(40.0))
+        .column(Size::initial(120.0).at_least(40.0))
+        .column(Size::remainder().at_least(60.0));
+        let row_height = 18.0;
+        table
+        .header(20.0, |mut header| {
+            header.col(|ui| {
+                ui.heading("Address");
+            });
+            header.col(|ui| {
+                ui.heading("Value");
+            });
+            // header.col(|ui| {
+            //     ui.heading("Freezed");
+            // });
+        })
+        .body(|mut body| {
+            let cloned_results = self.results.lock().unwrap().clone();
+            for i in 0..cloned_results.len() {
+                let result = &cloned_results[i];
+                body.row(row_height, |mut row| {
+                    row.col(|ui| {
+                        ui.label(format!("0x{:X}", result.addr));
+                    });
+                    row.col(|ui| {
+                        if let Ok (handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
+                            if let Ok(buf) = copy_address(result.addr, 4, &handle) {
+                                let mut val = i32::from_le_bytes(buf.try_into().unwrap());
+                                if ui.add(egui::DragValue::new(&mut val)).changed() {
+                                    let output_buffer = val.to_le_bytes();
+                                    handle.put_address(result.addr, &output_buffer).unwrap_or_default();
+                                }
+                            } else {
+                                ui.label("<error>");
+                            }
+                        }
+                    });
+
+                   /*  row.col(|ui| {
                                             let mut b = result.freezed;
                                             if ui.checkbox(&mut b, "").changed() {
                                                 if let Ok (handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
@@ -250,20 +258,24 @@ impl eframe::App for GameCheetahEngine {
                                                 }
                                             }
                                         });*/
-                                    });
-                                }
-                            });
-                        }
-
-
-                    }
-                }
+                });
             }
-            if self.show_process_window {
-                self.render_process_window(ctx);
-            }
-            self.update_freezed_values();
         });
+    }
+}
+
+impl GameCheetahEngine {
+    fn render_search_bar(&mut self, ui: &mut egui::Ui) {
+        let current_bytes = self.current_bytes.load(Ordering::Relaxed);
+        let progress_bar = egui::widgets::ProgressBar::new(current_bytes as f32 / self.total_bytes as f32).show_percentage();
+        let bb = gabi::BytesConfig::default();
+        let current_bytes_out = bb.bytes(current_bytes as u64);
+        let total_bytes_out = bb.bytes(self.total_bytes as u64);
+        ui.label( format!("Search {}/{}", current_bytes_out, total_bytes_out));
+        ui.add(progress_bar);
+        if current_bytes >= self.total_bytes {
+            self.searching = false;
+        }
     }
 }
 
