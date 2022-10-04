@@ -1,4 +1,4 @@
-use std::{sync::{Arc, atomic::{AtomicUsize, Ordering}, Mutex}};
+use std::{sync::{Arc, atomic::{AtomicUsize, Ordering}, Mutex}, vec};
 use egui_extras::{Size, TableBuilder};
 use proc_maps::get_process_maps;
 use process_memory::*;
@@ -9,51 +9,67 @@ use threadpool::ThreadPool;
 #[derive(Clone)]
 pub struct Result {
     addr: usize,
-    freeze_value: i64,
-    freezed: bool
+    _freeze_value: i64,
+    _freezed: bool
 }
 
 impl Result {
     pub fn new(addr: usize) -> Self {
         Self {
             addr,
-            freeze_value: 0,
-            freezed: false
+            _freeze_value: 0,
+            _freezed: false
+        }
+    }
+}
+
+pub struct SearchContext {
+    description: String,
+    search_value_text: String,
+    searching: bool,
+    total_bytes: usize,
+    current_bytes: Arc<AtomicUsize>,
+    results: Arc<Mutex<Vec<Result>>>,
+}
+
+impl SearchContext {
+    fn new(description: String) -> Self {
+        Self {
+            description,
+            search_value_text: "".to_owned(),
+            searching: false,
+            results: Arc::new(Mutex::new(Vec::new())),
+            total_bytes: 0,
+            current_bytes: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
 
 pub struct GameCheetahEngine {
-    text: String,
     pid: i32,
     process_name: String,
     show_process_window: bool,
-    results: Arc<Mutex<Vec<Result>>>,
 
-    filter: String,
+    process_filter: String,
     processes: Vec<(u32, String, String)>,
-    searching: bool,
-    total_bytes: usize,
-    current_bytes: Arc<AtomicUsize>,
+
+    current_search: usize,
+    searches: Vec<SearchContext>,
     search_threads: ThreadPool
 }
 
 impl Default for GameCheetahEngine {
     fn default() -> Self {
-        
         Self {
-            text: "".to_owned(),
             pid: 0,
             process_name: "".to_owned(),
 
             show_process_window: false,
-            results: Arc::new(Mutex::new(Vec::new())),
-            filter: "".to_owned(),
+            process_filter: "".to_owned(),
             processes: Vec::new(),
-            searching: false,
+            current_search: 0,
+            searches: vec![SearchContext::new("default".to_string())],
             search_threads: ThreadPool::new(32),
-            total_bytes: 0,
-            current_bytes: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -66,9 +82,9 @@ impl GameCheetahEngine {
     fn render_process_window(&mut self, ctx: &egui::Context) {
         egui::Window::new("Select process").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("Filter processes"));
+                ui.add(egui::TextEdit::singleline(&mut self.process_filter).hint_text("Filter processes"));
                 if ui.button("ｘ").clicked() {
-                    self.filter.clear();
+                    self.process_filter.clear();
                 }
             });
             let table = TableBuilder::new(ui)
@@ -91,7 +107,7 @@ impl GameCheetahEngine {
                     });
                 })
                 .body(|mut body| {
-                    let filter = self.filter.to_ascii_uppercase();
+                    let filter = self.process_filter.to_ascii_uppercase();
 
                     for (pid, process_name, cmd) in &self.processes {
                         if filter.len() > 0 && (!process_name.to_ascii_uppercase().contains(filter.as_str()) || !cmd.to_ascii_uppercase().contains(filter.as_str())) {
@@ -123,76 +139,68 @@ impl GameCheetahEngine {
 impl eframe::App for GameCheetahEngine {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
-
             ui.spacing_mut().item_spacing = egui::Vec2::splat(12.0);
 
             ui.horizontal(|ui| {
+
                 ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
                 ui.label("Process:");
-
+    
                 if ui.button(if self.pid != 0 {
                     format!("{} ({})", self.process_name, self.pid)
                 } else {
                     "<no process set>".to_string()
                 }).clicked() {
                     self.show_process_window = !self.show_process_window;
-
+    
                     if self.show_process_window {
                         self.show_process_window();
                     }
                 }
-
+    
                 if ui.button("ｘ").clicked() {
                     self.pid = 0;
-                    self.results.lock().unwrap().clear();
-                    self.filter.clear();
+                    self.searches.clear();
+                    self.searches.push(SearchContext::new("default".to_string()));
+                    self.process_filter.clear();
                 }
             });
-            
+
             if self.show_process_window {
                 self.render_process_window(ctx);
             }
-
             if self.pid <= 0 {
                 return;
-            }
-
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
-                ui.label("Value:");
-                ui.add(egui::TextEdit::singleline(&mut self.text).hint_text("Search for value").interactive(!self.searching));
-            });
-
-            if self.searching {
-                self.render_search_bar(ui);
-                return;
-            } 
-
-            if i32::from_str_radix(self.text.as_str(), 10).is_ok()  {
-                let len = self.results.lock().unwrap().len();
-                if len == 0 { 
-                    if ui.button("initial search").clicked() {
-                        self.initial_search();
-                    }
-                } else {
+            }            
+            if self.searches.len() > 1 {
+                //if self.searches.len() < 5 {
                     ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
-        
-                        if ui.button("update").clicked() {
-                            self.search();
-                        }
-                        if ui.button("clear").clicked() {
-                            self.results.lock().unwrap().clear();
-                        }
+                        ui.spacing_mut().item_spacing = egui::Vec2::splat(8.0);
 
-                        ui.label(format!("found {} items.", len));
+                        for i in 0..self.searches.len() {
+                            if ui.selectable_label(self.current_search == i, self.searches[i].description.clone()).clicked() {
+                                self.current_search = i;
+                            }
+                        }
+                        if ui.button("-").clicked() {
+                            let ctx = SearchContext::new("foo".to_string());
+                            self.searches.remove(self.current_search);
+                            if self.current_search >= self.searches.len() - 1 {
+                                self.current_search -= 1;
+                            }
+                            return;
+                        }
+                        if ui.button("+").clicked() {
+                            let ctx = SearchContext::new("foo".to_string());
+                            self.current_search = self.searches.len();
+                            self.searches.push(ctx);
+                            return;
+                        }
+            
                     });
-                    
-                    if len > 0 && len < 20 {
-                        self.render_result_table(ui);
-                    }
-                }
+               // }
             }
+            self.render_content(ui, ctx, self.current_search);
 
             self.update_freezed_values();
         });
@@ -200,7 +208,73 @@ impl eframe::App for GameCheetahEngine {
 }
 
 impl GameCheetahEngine {
-    fn render_result_table(&mut self, ui: &mut egui::Ui) {
+    fn render_content(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context, search_index: usize) {
+
+
+        if self.searches.len() > 1 {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
+                ui.label("Name:");
+                let search_context = self.searches.get_mut(search_index).unwrap();
+                ui.add(egui::TextEdit::singleline(&mut search_context.description).hint_text("Search description").interactive(!search_context.searching));
+            });
+        }
+
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
+            ui.label("Value:");
+            let search_context = self.searches.get_mut(search_index).unwrap();
+            ui.add(egui::TextEdit::singleline(&mut search_context.search_value_text).hint_text("Search for value").interactive(!search_context.searching));
+            if self.searches.len() <= 1 {
+                if ui.button("+").clicked() {
+                    let ctx = SearchContext::new("foo".to_string());
+                    self.current_search = self.searches.len();
+                    self.searches.push(ctx);
+                    return;
+                }
+            }
+        });
+
+        if self.searches.get(search_index).unwrap().searching {
+            self.render_search_bar(ui, search_index);
+            return;
+        }
+        if i32::from_str_radix(self.searches.get(search_index).unwrap().search_value_text.as_str(), 10).is_ok()  {
+
+            let len = self.searches.get(search_index).unwrap().results.lock().unwrap().len();
+            if len == 0 { 
+                if ui.button("initial search").clicked() {
+                    self.initial_search(search_index);
+                    return;
+                }
+            } else {
+                ui.horizontal(|ui| {
+                    let search_context = self.searches.get_mut(search_index).unwrap();
+
+                    ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
+        
+                    if ui.button("update").clicked() {
+                        self.search(search_index);
+                        return;
+                    }
+                    if ui.button("clear").clicked() {
+                        search_context.results.lock().unwrap().clear();
+                    }
+
+                    ui.label(format!("found {} items.", len));
+                });
+        
+                if len > 0 && len < 20 {
+                    self.render_result_table(ui, search_index);
+                }
+            }
+        }
+    }
+
+    fn render_result_table(&mut self, ui: &mut egui::Ui, search_index: usize) {
+
+        let search_context = self.searches.get_mut(search_index).unwrap();
+
         let table = TableBuilder::new(ui)
         .striped(true)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
@@ -221,7 +295,7 @@ impl GameCheetahEngine {
             // });
         })
         .body(|mut body| {
-            let cloned_results = self.results.lock().unwrap().clone();
+            let cloned_results = search_context.results.lock().unwrap().clone();
             for i in 0..cloned_results.len() {
                 let result = &cloned_results[i];
                 body.row(row_height, |mut row| {
@@ -262,26 +336,22 @@ impl GameCheetahEngine {
             }
         });
     }
-}
 
-impl GameCheetahEngine {
-    fn render_search_bar(&mut self, ui: &mut egui::Ui) {
-        let current_bytes = self.current_bytes.load(Ordering::Relaxed);
-        let progress_bar = egui::widgets::ProgressBar::new(current_bytes as f32 / self.total_bytes as f32).show_percentage();
+    fn render_search_bar(&mut self, ui: &mut egui::Ui, search_index: usize) {
+        let mut search_context = self.searches.get_mut(search_index).unwrap();
+        let current_bytes = search_context.current_bytes.load(Ordering::Relaxed);
+        let progress_bar = egui::widgets::ProgressBar::new(current_bytes as f32 / search_context.total_bytes as f32).show_percentage();
         let bb = gabi::BytesConfig::default();
         let current_bytes_out = bb.bytes(current_bytes as u64);
-        let total_bytes_out = bb.bytes(self.total_bytes as u64);
+        let total_bytes_out = bb.bytes(search_context.total_bytes as u64);
         ui.label( format!("Search {}/{}", current_bytes_out, total_bytes_out));
         ui.add(progress_bar);
-        if current_bytes >= self.total_bytes {
-            self.searching = false;
+        if current_bytes >= search_context.total_bytes {
+            search_context.searching = false;
         }
     }
-}
-
-impl GameCheetahEngine {
-
     fn update_freezed_values(&self) {
+        /* TODO
         for result in self.results.lock().unwrap().clone() {
             if result.freezed {
                 if let Ok (handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
@@ -289,20 +359,21 @@ impl GameCheetahEngine {
                     handle.put_address(result.addr, &output_buffer).unwrap_or_default();
                 }
             }
-        }
+        }*/
     }
 
-    fn initial_search(&mut self) {
-        let my_int = i32::from_str_radix(self.text.as_str(), 10).unwrap();
+    fn initial_search(&mut self, search_index: usize) {
+
+        let my_int = i32::from_str_radix(self.searches.get(search_index).unwrap().search_value_text.as_str(), 10).unwrap();
         let b = i32::to_le_bytes(my_int);
         
-        self.searching = true;
+        self.searches.get_mut(search_index).unwrap().searching = true;
 
         if let Ok(maps) = get_process_maps(self.pid.try_into().unwrap()) {
 
-            self.total_bytes = 0;
+            self.searches.get_mut(search_index).unwrap().total_bytes = 0;
 
-            self.current_bytes.swap(0, Ordering::SeqCst);
+            self.searches.get_mut(search_index).unwrap().current_bytes.swap(0, Ordering::SeqCst);
 
             for map in maps {
                 if !map.is_write() || map.is_exec() {
@@ -311,26 +382,27 @@ impl GameCheetahEngine {
                 let mut size = map.size();
                 let mut start = map.start();
                 
-                self.total_bytes += size;
+                self.searches.get_mut(search_index).unwrap().total_bytes += size;
 
                 let max_block = 10 * 1024 * 1024;
                 while size > max_block + 3 {
-                    self.spawn_thread(b,  start, max_block + 3);
+                    self.spawn_thread(b,  start, max_block + 3, search_index);
 
                     start += max_block;
                     size -= max_block;
                 }
-                self.spawn_thread(b,  start, size);
+                self.spawn_thread(b,  start, size, search_index);
             }
         } else {
             println!("error getting process maps.");
         }
     }
 
-    fn spawn_thread(&mut self, b: [u8; 4], start: usize, mut size: usize) {
+    fn spawn_thread(&mut self, b: [u8; 4], start: usize, mut size: usize, search_index: usize) {
+        let search_context = self.searches.get(search_index).unwrap();
         let pid = self.pid;
-        let results = self.results.clone();
-        let current_bytes = self.current_bytes.clone();
+        let results = search_context.results.clone();
+        let current_bytes = search_context.current_bytes.clone();
 
         self.search_threads.execute(move || {
             let n =&b[..];
@@ -350,12 +422,14 @@ impl GameCheetahEngine {
         });
     }
     
-    fn search(&mut self) {
+    fn search(&mut self, search_index: usize) {
+        let mut search_context = self.searches.get_mut(search_index).unwrap();
+    
         let mut new_results = Vec::new();
         let handle = (self.pid as process_memory::Pid).try_into_process_handle().unwrap();
-        let my_int = i32::from_str_radix(self.text.as_str(), 10).unwrap();
+        let my_int = i32::from_str_radix(search_context.search_value_text.as_str(), 10).unwrap();
 
-        for result in self.results.lock().unwrap().clone() {
+        for result in search_context.results.lock().unwrap().clone() {
             if let Ok(buf) = copy_address(result.addr, 4, &handle) {
                 let val = i32::from_le_bytes(buf.try_into().unwrap());
                 if val == my_int {
@@ -363,7 +437,7 @@ impl GameCheetahEngine {
                 }
             }
         }
-        self.results = Arc::new(Mutex::new(new_results));
+        search_context.results = Arc::new(Mutex::new(new_results));
     }
 
     fn show_process_window(&mut self) {
