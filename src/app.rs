@@ -309,34 +309,45 @@ impl GameCheetahEngine {
                     continue;
                 }
                 let mut size = map.size();
-                let start = map.start();
+                let mut start = map.start();
                 
                 self.total_bytes += size;
-                
-                let results = self.results.clone();
-                let current_bytes = self.current_bytes.clone();
-                let pid = self.pid;
 
-                self.search_threads.execute(move || {
-                    let n =&b[..];
-                    let handle = (pid as process_memory::Pid).try_into_process_handle().unwrap();
- 
-                    let search_bytes = BoyerMoore::new(n);
-                    if let Ok(buf) = copy_address(start, size, &handle) {
-                        let mut last_i = 0;
-                        for i in search_bytes.find_in(&buf) {
-                            current_bytes.fetch_add(i - last_i, Ordering::SeqCst); 
-                            size -= i - last_i;
-                            results.lock().unwrap().push(Result::new(i + map.start()));
-                            last_i = i;
-                        }
-                    }
-                    current_bytes.fetch_add(size, Ordering::SeqCst); 
-                });
+                let max_block = 10 * 1024 * 1024;
+                while size > max_block + 3 {
+                    self.spawn_thread(b,  start, max_block + 3);
+
+                    start += max_block;
+                    size -= max_block;
+                }
+                self.spawn_thread(b,  start, size);
             }
         } else {
             println!("error getting process maps.");
         }
+    }
+
+    fn spawn_thread(&mut self, b: [u8; 4], start: usize, mut size: usize) {
+        let pid = self.pid;
+        let results = self.results.clone();
+        let current_bytes = self.current_bytes.clone();
+
+        self.search_threads.execute(move || {
+            let n =&b[..];
+            let handle = (pid as process_memory::Pid).try_into_process_handle().unwrap();
+ 
+            let search_bytes = BoyerMoore::new(n);
+            if let Ok(buf) = copy_address(start, size, &handle) {
+                let mut last_i = 0;
+                for i in search_bytes.find_in(&buf) {
+                    current_bytes.fetch_add(i - last_i, Ordering::SeqCst); 
+                    size -= i - last_i;
+                    results.lock().unwrap().push(Result::new(i + start));
+                    last_i = i;
+                }
+            }
+            current_bytes.fetch_add(size, Ordering::SeqCst); 
+        });
     }
     
     fn search(&mut self) {
