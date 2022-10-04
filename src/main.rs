@@ -33,9 +33,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>>
         native_options,
         Box::new(|cc| Box::new(game_cheetah::GameCheetahEngine::new(cc))),
     );
-
     Ok(())
 }
+
 #[cfg(target_os = "windows")]
 fn main() -> Result<(), Box<dyn std::error::Error>> 
 {

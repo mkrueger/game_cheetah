@@ -6,12 +6,29 @@ use sysinfo::*;
 use needle::BoyerMoore;
 use threadpool::ThreadPool;
 
+#[derive(Clone)]
+pub struct Result {
+    addr: usize,
+    freeze_value: i64,
+    freezed: bool
+}
+
+impl Result {
+    pub fn new(addr: usize) -> Self {
+        Self {
+            addr,
+            freeze_value: 0,
+            freezed: false
+        }
+    }
+}
+
 pub struct GameCheetahEngine {
     text: String,
     pid: i32,
     process_name: String,
     show_process_window: bool,
-    results: Arc<Mutex<Vec<usize>>>,
+    results: Arc<Mutex<Vec<Result>>>,
 
     filter: String,
     processes: Vec<(u32, String, String)>,
@@ -23,6 +40,7 @@ pub struct GameCheetahEngine {
 
 impl Default for GameCheetahEngine {
     fn default() -> Self {
+        
         Self {
             text: "".to_owned(),
             pid: 0,
@@ -30,11 +48,10 @@ impl Default for GameCheetahEngine {
 
             show_process_window: false,
             results: Arc::new(Mutex::new(Vec::new())),
-
             filter: "".to_owned(),
             processes: Vec::new(),
             searching: false,
-            search_threads: ThreadPool::new(8),
+            search_threads: ThreadPool::new(32),
             total_bytes: 0,
             current_bytes: Arc::new(AtomicUsize::new(0)),
         }
@@ -105,7 +122,6 @@ impl GameCheetahEngine {
 
 impl eframe::App for GameCheetahEngine {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-
         egui::CentralPanel::default().show(ctx, |ui| {
 
             ui.spacing_mut().item_spacing = egui::Vec2::splat(12.0);
@@ -137,12 +153,17 @@ impl eframe::App for GameCheetahEngine {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
                 ui.label("Value:");
-                ui.add(egui::TextEdit::singleline(&mut self.text).hint_text("Value text"));
+                ui.add(egui::TextEdit::singleline(&mut self.text).hint_text("Search for value"));
             });
 
             if self.searching {
                 let current_bytes = self.current_bytes.load(Ordering::Relaxed);
                 let progress_bar = egui::widgets::ProgressBar::new(current_bytes as f32 / self.total_bytes as f32).show_percentage();
+
+                let bb = gabi::BytesConfig::default();
+                let current_bytes_out = bb.bytes(current_bytes as u64);
+                let total_bytes_out = bb.bytes(self.total_bytes as u64);
+                ui.label( format!("Search {}/{}", current_bytes_out, total_bytes_out));
 
                 ui.add(progress_bar);
 
@@ -175,6 +196,7 @@ impl eframe::App for GameCheetahEngine {
                             .striped(true)
                             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                             .column(Size::initial(120.0).at_least(40.0))
+                            .column(Size::initial(120.0).at_least(40.0))
                             .column(Size::remainder().at_least(60.0));
                             let row_height = 18.0;
                 
@@ -186,27 +208,48 @@ impl eframe::App for GameCheetahEngine {
                                 header.col(|ui| {
                                     ui.heading("Value");
                                 });
+                                // header.col(|ui| {
+                                //     ui.heading("Freezed");
+                                // });
                             })
                             .body(|mut body| {
-                                for addr in self.results.lock().unwrap().clone() {
+                                let cloned_results = self.results.lock().unwrap().clone();
+                                for i in 0..cloned_results.len() {
+                                    let result = &cloned_results[i];
                                     body.row(row_height, |mut row| {
                                         row.col(|ui| {
-                                            ui.label(format!("0x{:X}", addr));
+                                            ui.label(format!("0x{:X}", result.addr));
                                         });
-
                                         row.col(|ui| {
                                             if let Ok (handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
-                                                if let Ok(buf) = copy_address(addr, 4, &handle) {
+                                                if let Ok(buf) = copy_address(result.addr, 4, &handle) {
                                                     let mut val = i32::from_le_bytes(buf.try_into().unwrap());
                                                     if ui.add(egui::DragValue::new(&mut val)).changed() {
                                                         let output_buffer = val.to_le_bytes();
-                                                        handle.put_address(addr, &output_buffer).unwrap_or_default();
+                                                        handle.put_address(result.addr, &output_buffer).unwrap_or_default();
                                                     }
                                                 } else {
                                                     ui.label("<error>");
                                                 }
                                             }
                                         });
+
+                                       /*  row.col(|ui| {
+                                            let mut b = result.freezed;
+                                            if ui.checkbox(&mut b, "").changed() {
+                                                if let Ok (handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
+                                                    if let Ok(buf) = copy_address(result.addr, 4, &handle) {
+                                                        let value = i32::from_le_bytes(buf.try_into().unwrap());
+                                                        self.results.lock().as_mut().unwrap().remove(i);
+                                                        self.results.lock().as_mut().unwrap().insert(i, Result {
+                                                            addr: result.addr,
+                                                            freezed: b,
+                                                            freeze_value: value as i64
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                        });*/
                                     });
                                 }
                             });
@@ -219,11 +262,23 @@ impl eframe::App for GameCheetahEngine {
             if self.show_process_window {
                 self.render_process_window(ctx);
             }
+            self.update_freezed_values();
         });
     }
 }
 
 impl GameCheetahEngine {
+
+    fn update_freezed_values(&self) {
+        for result in self.results.lock().unwrap().clone() {
+            if result.freezed {
+                if let Ok (handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
+                    let output_buffer = (result.freeze_value as i32).to_le_bytes();
+                    handle.put_address(result.addr, &output_buffer).unwrap_or_default();
+                }
+            }
+        }
+    }
 
     fn initial_search(&mut self) {
         let my_int = i32::from_str_radix(self.text.as_str(), 10).unwrap();
@@ -238,13 +293,10 @@ impl GameCheetahEngine {
             self.current_bytes.swap(0, Ordering::SeqCst);
 
             for map in maps {
-                //let pl = Path::new("");
-                //let p = map.filename().unwrap_or(pl);
-                // println!("{:x}:{:x} is_exec  {}, is_read {}, is_write {}, filename {}", map.start(), map.size(), map.is_exec(), map.is_read(), map.is_write(), p.to_str().unwrap());
                 if !map.is_write() || map.is_exec() {
                     continue;
                 }
-                let size = map.size();
+                let mut size = map.size();
                 let start = map.start();
                 
                 self.total_bytes += size;
@@ -259,8 +311,12 @@ impl GameCheetahEngine {
  
                     let search_bytes = BoyerMoore::new(n);
                     if let Ok(buf) = copy_address(start, size, &handle) {
+                        let mut last_i = 0;
                         for i in search_bytes.find_in(&buf) {
-                            results.lock().unwrap().push(i + map.start());
+                            current_bytes.fetch_add(i - last_i, Ordering::SeqCst); 
+                            size -= i - last_i;
+                            results.lock().unwrap().push(Result::new(i + map.start()));
+                            last_i = i;
                         }
                     }
                     current_bytes.fetch_add(size, Ordering::SeqCst); 
@@ -276,11 +332,11 @@ impl GameCheetahEngine {
         let handle = (self.pid as process_memory::Pid).try_into_process_handle().unwrap();
         let my_int = i32::from_str_radix(self.text.as_str(), 10).unwrap();
 
-        for address in self.results.lock().unwrap().clone() {
-            if let Ok(buf) = copy_address(address, 4, &handle) {
+        for result in self.results.lock().unwrap().clone() {
+            if let Ok(buf) = copy_address(result.addr, 4, &handle) {
                 let val = i32::from_le_bytes(buf.try_into().unwrap());
                 if val == my_int {
-                    new_results.push(address);
+                    new_results.push(result);
                 }
             }
         }
