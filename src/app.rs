@@ -231,9 +231,8 @@ impl GameCheetahEngine {
         
         self.searching = true;
 
-        if let Ok(maps) = get_process_maps(self.pid) {
+        if let Ok(maps) = get_process_maps(self.pid.try_into().unwrap()) {
 
-            let handle = (self.pid as process_memory::Pid).try_into_process_handle().unwrap();
             self.total_bytes = 0;
 
             self.current_bytes.swap(0, Ordering::SeqCst);
@@ -246,26 +245,25 @@ impl GameCheetahEngine {
                     continue;
                 }
                 let size = map.size();
+                let start = map.start();
+                
                 self.total_bytes += size;
                 
                 let results = self.results.clone();
                 let current_bytes = self.current_bytes.clone();
+                let pid = self.pid;
 
                 self.search_threads.execute(move || {
                     let n =&b[..];
-
-                    let search_bytes =  BoyerMoore::new(n);
-
-                    if let Ok(buf) = copy_address(map.start(), map.size(), &handle) {
-                        if buf.len() < 1 {
-                            return;
-                        }
-
+                    let handle = (pid as process_memory::Pid).try_into_process_handle().unwrap();
+ 
+                    let search_bytes = BoyerMoore::new(n);
+                    if let Ok(buf) = copy_address(start, size, &handle) {
                         for i in search_bytes.find_in(&buf) {
                             results.lock().unwrap().push(i + map.start());
                         }
                     }
-                    current_bytes.fetch_add(size, Ordering::SeqCst);
+                    current_bytes.fetch_add(size, Ordering::SeqCst); 
                 });
             }
         } else {

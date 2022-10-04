@@ -1,9 +1,9 @@
-#![warn(clippy::all, rust_2018_idioms)]
+#![warn(clippy::all, clippy::pedantic)]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
-// When compiling natively:
-#[cfg(not(target_arch = "wasm32"))]
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[cfg(target_os = "linux")]
+fn main() -> Result<(), Box<dyn std::error::Error>> 
+{
     sudo::escalate_if_needed()?;
 
     // Log to stdout (if you run with `RUST_LOG=debug`).
@@ -19,20 +19,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-// when compiling to web using trunk.
-#[cfg(target_arch = "wasm32")]
-fn main() {
-    // Make sure panics are logged using `console.error`.
-    console_error_panic_hook::set_once();
+#[cfg(target_os = "macos")]
+fn main() -> Result<(), Box<dyn std::error::Error>> 
+{
+    sudo::escalate_if_needed()?;
 
-    // Redirect tracing to console.log and friends:
-    tracing_wasm::set_as_global_default();
+    // Log to stdout (if you run with `RUST_LOG=debug`).
+    tracing_subscriber::fmt::init();
 
-    let web_options = eframe::WebOptions::default();
-    eframe::start_web(
-        "the_canvas_id", // hardcode it
-        web_options,
+    let native_options = eframe::NativeOptions::default();
+    eframe::run_native(
+        "Game Cheetah",
+        native_options,
         Box::new(|cc| Box::new(game_cheetah::GameCheetahEngine::new(cc))),
-    )
-    .expect("failed to start eframe");
+    );
+
+    Ok(())
+}
+#[cfg(target_os = "windows")]
+fn main() -> Result<(), Box<dyn std::error::Error>> 
+{
+    // Log to stdout (if you run with `RUST_LOG=debug`).
+    tracing_subscriber::fmt::init();
+
+    let native_options = eframe::NativeOptions::default();
+    eframe::run_native(
+        "Game Cheetah",
+        native_options,
+        Box::new(|cc| Box::new(game_cheetah::GameCheetahEngine::new(cc))),
+    );
+
+    Ok(())
 }
