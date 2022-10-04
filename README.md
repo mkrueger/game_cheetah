@@ -1,10 +1,14 @@
 # game_cheetah
 Game memory editor for altering variables in computer games (resources, lifes, etc.)
 
-#build
+![Screenshot](/assets/Screenshot.png)
+
+# Build
 
 Just install rust and compile with "cargo build --release".
 Executable will be in target/release/game_cheetah
+
+Just follow https://gtk-rs.org/gtk4-rs/git/book/installation.html
 
 Note: You may need the nightly toolchain of rust
 
