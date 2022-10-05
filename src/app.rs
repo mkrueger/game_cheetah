@@ -1,4 +1,4 @@
-use std::{sync::{Arc, atomic::{AtomicUsize, Ordering}, Mutex}, vec};
+use std::{sync::{Arc, atomic::{AtomicUsize, Ordering}, Mutex, mpsc::{self}}, vec, thread, time::Duration, collections::HashMap};
 use egui_extras::{Size, TableBuilder};
 use proc_maps::get_process_maps;
 use process_memory::*;
@@ -9,16 +9,14 @@ use threadpool::ThreadPool;
 #[derive(Clone)]
 pub struct Result {
     addr: usize,
-    _freeze_value: i64,
-    _freezed: bool
+    freezed: bool
 }
 
 impl Result {
     pub fn new(addr: usize) -> Self {
         Self {
             addr,
-            _freeze_value: 0,
-            _freezed: false
+            freezed: false
         }
     }
 }
@@ -30,6 +28,7 @@ pub struct SearchContext {
     total_bytes: usize,
     current_bytes: Arc<AtomicUsize>,
     results: Arc<Mutex<Vec<Result>>>,
+    search_results : i64
 }
 
 impl SearchContext {
@@ -41,6 +40,7 @@ impl SearchContext {
             results: Arc::new(Mutex::new(Vec::new())),
             total_bytes: 0,
             current_bytes: Arc::new(AtomicUsize::new(0)),
+            search_results: -1
         }
     }
 }
@@ -55,11 +55,60 @@ pub struct GameCheetahEngine {
 
     current_search: usize,
     searches: Vec<SearchContext>,
-    search_threads: ThreadPool
+    search_threads: ThreadPool,
+
+    freeze_sender: mpsc::Sender<Message>
+}
+
+enum MessageCommand {
+    Quit,
+    Freeze,
+    Unfreeze,
+    Pid
+}
+
+struct Message {
+    msg: MessageCommand,
+    addr: usize,
+    value: i32
 }
 
 impl Default for GameCheetahEngine {
     fn default() -> Self {
+        let (tx, rx) = mpsc::channel::<Message>();
+
+        thread::spawn(move || {
+            let mut freezed_values = HashMap::new();
+            let mut pid = 0;
+
+            loop {
+                if let Ok(msg) = rx.try_recv() {
+                    match msg.msg {
+                        MessageCommand::Quit => { return; },
+                        MessageCommand::Pid => { 
+                            pid = msg.value; 
+                            if pid == 0 {
+                                freezed_values.clear();
+                            }
+                        },
+                        MessageCommand::Freeze => { 
+                            freezed_values.insert(msg.addr, msg.value); 
+                        },
+                        MessageCommand::Unfreeze => { 
+                            freezed_values.remove(&msg.addr);
+                        },
+                    }
+                }
+                for (addr, value) in &freezed_values {
+                    if let Ok (handle) = (pid as process_memory::Pid).try_into_process_handle() {
+                        let output_buffer = (*value as i32).to_le_bytes();
+                        handle.put_address(*addr, &output_buffer).unwrap_or_default();
+                    }
+                }
+                thread::sleep(Duration::from_millis(500));
+            }
+        });
+
         Self {
             pid: 0,
             process_name: "".to_owned(),
@@ -70,6 +119,7 @@ impl Default for GameCheetahEngine {
             current_search: 0,
             searches: vec![SearchContext::new("default".to_string())],
             search_threads: ThreadPool::new(32),
+            freeze_sender: tx
         }
     }
 }
@@ -118,8 +168,13 @@ impl GameCheetahEngine {
                             row.col(|ui| {
                                 if ui.selectable_label(false, pid.to_string()).clicked() {
                                     self.pid = *pid as i32;
+                                    self.freeze_sender.send(Message {
+                                        msg: MessageCommand::Pid,
+                                        addr: 0,
+                                        value: *pid as i32
+                                    }).unwrap_or_default();
                                     self.process_name = process_name.clone();
-                                        self.show_process_window = false;
+                                    self.show_process_window = false;
                                 }
                             });
 
@@ -160,6 +215,11 @@ impl eframe::App for GameCheetahEngine {
     
                 if ui.button("ｘ").clicked() {
                     self.pid = 0;
+                    self.freeze_sender.send(Message {
+                        msg: MessageCommand::Pid,
+                        addr: 0,
+                        value: 0
+                    }).unwrap_or_default();
                     self.searches.clear();
                     self.searches.push(SearchContext::new("default".to_string()));
                     self.process_filter.clear();
@@ -183,7 +243,6 @@ impl eframe::App for GameCheetahEngine {
                             }
                         }
                         if ui.button("-").clicked() {
-                            let ctx = SearchContext::new("foo".to_string());
                             self.searches.remove(self.current_search);
                             if self.current_search >= self.searches.len() - 1 {
                                 self.current_search -= 1;
@@ -201,15 +260,12 @@ impl eframe::App for GameCheetahEngine {
                // }
             }
             self.render_content(ui, ctx, self.current_search);
-
-            self.update_freezed_values();
         });
     }
 }
 
 impl GameCheetahEngine {
     fn render_content(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context, search_index: usize) {
-
 
         if self.searches.len() > 1 {
             ui.horizontal(|ui| {
@@ -224,7 +280,20 @@ impl GameCheetahEngine {
             ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
             ui.label("Value:");
             let search_context = self.searches.get_mut(search_index).unwrap();
-            ui.add(egui::TextEdit::singleline(&mut search_context.search_value_text).hint_text("Search for value").interactive(!search_context.searching));
+            let re = ui.add(egui::TextEdit::singleline(&mut search_context.search_value_text)
+                .hint_text("Search for value")
+                .interactive(!search_context.searching)
+            );
+            
+            if re.lost_focus() && re.ctx.input().key_down(egui::Key::Enter) {
+                let len = self.searches.get(search_index).unwrap().results.lock().unwrap().len();
+                if len == 0 { 
+                    self.initial_search(search_index);
+                } else {
+                    self.search(search_index);
+                }
+            }
+
             if self.searches.len() <= 1 {
                 if ui.button("+").clicked() {
                     let ctx = SearchContext::new("foo".to_string());
@@ -239,13 +308,16 @@ impl GameCheetahEngine {
             self.render_search_bar(ui, search_index);
             return;
         }
-        if i32::from_str_radix(self.searches.get(search_index).unwrap().search_value_text.as_str(), 10).is_ok()  {
 
-            let len = self.searches.get(search_index).unwrap().results.lock().unwrap().len();
-            if len == 0 { 
+        if i32::from_str_radix(self.searches.get(search_index).unwrap().search_value_text.as_str(), 10).is_ok()  {
+            let len = self.searches.get(search_index).unwrap().search_results;
+            if len <= 0 { 
                 if ui.button("initial search").clicked() {
                     self.initial_search(search_index);
                     return;
+                }
+                if len == 0 {
+                    ui.label("No results found.".to_string());
                 }
             } else {
                 ui.horizontal(|ui| {
@@ -259,9 +331,14 @@ impl GameCheetahEngine {
                     }
                     if ui.button("clear").clicked() {
                         search_context.results.lock().unwrap().clear();
+                        search_context.search_results = -1;
                     }
 
-                    ui.label(format!("found {} items.", len));
+                    if len == 1 {
+                        ui.label(format!("found {} result.", len));
+                    } else {
+                        ui.label(format!("found {} results.", len));
+                    }
                 });
         
                 if len > 0 && len < 20 {
@@ -290,9 +367,9 @@ impl GameCheetahEngine {
             header.col(|ui| {
                 ui.heading("Value");
             });
-            // header.col(|ui| {
-            //     ui.heading("Freezed");
-            // });
+            header.col(|ui| {
+                 ui.heading("Freezed");
+            });
         })
         .body(|mut body| {
             let cloned_results = search_context.results.lock().unwrap().clone();
@@ -309,29 +386,47 @@ impl GameCheetahEngine {
                                 if ui.add(egui::DragValue::new(&mut val)).changed() {
                                     let output_buffer = val.to_le_bytes();
                                     handle.put_address(result.addr, &output_buffer).unwrap_or_default();
+                                    if result.freezed {
+                                        self.freeze_sender.send(Message {
+                                            msg: MessageCommand::Freeze,
+                                            addr: result.addr,
+                                            value: val
+                                        }).unwrap_or_default();
+                                    }
                                 }
                             } else {
                                 ui.label("<error>");
                             }
                         }
                     });
-
-                   /*  row.col(|ui| {
-                                            let mut b = result.freezed;
-                                            if ui.checkbox(&mut b, "").changed() {
-                                                if let Ok (handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
-                                                    if let Ok(buf) = copy_address(result.addr, 4, &handle) {
-                                                        let value = i32::from_le_bytes(buf.try_into().unwrap());
-                                                        self.results.lock().as_mut().unwrap().remove(i);
-                                                        self.results.lock().as_mut().unwrap().insert(i, Result {
-                                                            addr: result.addr,
-                                                            freezed: b,
-                                                            freeze_value: value as i64
-                                                        });
-                                                    }
-                                                }
-                                            }
-                                        });*/
+                    row.col(|ui| {
+                        let mut b = result.freezed;
+                        if ui.checkbox(&mut b, "").changed() {
+                            if let Ok (handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
+                                if let Ok(buf) = copy_address(result.addr, 4, &handle) {
+                                    let value = i32::from_le_bytes(buf.try_into().unwrap());
+                                    search_context.results.lock().as_mut().unwrap().remove(i);
+                                    if b {
+                                        self.freeze_sender.send(Message {
+                                            msg: MessageCommand::Freeze,
+                                            addr: result.addr,
+                                            value
+                                        }).unwrap_or_default();
+                                    } else {
+                                        self.freeze_sender.send(Message {
+                                            msg: MessageCommand::Unfreeze,
+                                            addr: result.addr,
+                                            value
+                                        }).unwrap_or_default();
+                                    }
+                                    search_context.results.lock().as_mut().unwrap().insert(i, Result {
+                                        addr: result.addr,
+                                        freezed: b
+                                    });
+                                }
+                            }
+                        }
+                    });
                 });
             }
         });
@@ -347,19 +442,9 @@ impl GameCheetahEngine {
         ui.label( format!("Search {}/{}", current_bytes_out, total_bytes_out));
         ui.add(progress_bar);
         if current_bytes >= search_context.total_bytes {
+            search_context.search_results = search_context.results.lock().unwrap().len() as i64;
             search_context.searching = false;
         }
-    }
-    fn update_freezed_values(&self) {
-        /* TODO
-        for result in self.results.lock().unwrap().clone() {
-            if result.freezed {
-                if let Ok (handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
-                    let output_buffer = (result.freeze_value as i32).to_le_bytes();
-                    handle.put_address(result.addr, &output_buffer).unwrap_or_default();
-                }
-            }
-        }*/
     }
 
     fn initial_search(&mut self, search_index: usize) {
@@ -437,6 +522,7 @@ impl GameCheetahEngine {
                 }
             }
         }
+        search_context.search_results = new_results.len() as i64;
         search_context.results = Arc::new(Mutex::new(new_results));
     }
 
@@ -447,4 +533,6 @@ impl GameCheetahEngine {
             self.processes.push((pid.as_u32(), process.name().to_string(), process.cmd().join(" ")));
         }
     }
+
+
 }
