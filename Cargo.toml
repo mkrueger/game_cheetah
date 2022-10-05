@@ -1,6 +1,6 @@
 [package]
 name = "game_cheetah"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Mike Krüger <mkrueger@posteo.de>"]
 edition = "2021"
 rust-version = "1.60"
@@ -16,7 +16,6 @@ needle = "0.1.1"
 threadpool = "1.0"
 sudo = "0.5"
 gabi = "0.2.6"
-
 # native:
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tracing-subscriber = "0.3"
@@ -27,6 +26,6 @@ console_error_panic_hook = "0.1.6"
 tracing-wasm = "0.2"
 
 [profile.release]
-opt-level = 2 # fast and small wasm
+strip = "symbols"
 
 [patch.crates-io]

@@ -1,3 +1,4 @@
+
 use std::{sync::{Arc, atomic::{AtomicUsize, Ordering}, Mutex, mpsc::{self}}, vec, thread, time::Duration, collections::HashMap};
 use egui_extras::{Size, TableBuilder};
 use proc_maps::get_process_maps;
@@ -117,7 +118,7 @@ impl Default for GameCheetahEngine {
             process_filter: "".to_owned(),
             processes: Vec::new(),
             current_search: 0,
-            searches: vec![SearchContext::new("default".to_string())],
+            searches: vec![SearchContext::new("Search 1".to_string())],
             search_threads: ThreadPool::new(32),
             freeze_sender: tx
         }
@@ -129,73 +130,95 @@ impl GameCheetahEngine {
         Default::default()
     }
 
-    fn render_process_window(&mut self, ctx: &egui::Context) {
-        egui::Window::new("Select process").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.process_filter).hint_text("Filter processes"));
-                if ui.button("ｘ").clicked() {
-                    self.process_filter.clear();
+    fn render_process_window(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        if ctx.input().key_down(egui::Key::Escape) {
+            self.show_process_window = false;
+            return;
+        }
+        ui.spacing_mut().item_spacing = egui::Vec2::splat(20.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
+
+            let i = ui.add(egui::TextEdit::singleline(&mut self.process_filter).hint_text("Filter processes"));
+            if ui.memory().focus().is_none() {
+                ui.memory().request_focus(i.id);
+            }
+
+            ui.spacing_mut().item_spacing = egui::Vec2::splat(25.0);
+
+            if ui.button("ｘ").clicked() {
+                self.process_filter.clear();
+            }
+
+            if ui.button("Close").clicked() {
+                self.show_process_window = false;
+                return;
+            }
+        });
+        ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
+
+        let table = TableBuilder::new(ui)
+            .striped(true)
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+            .column(Size::initial(80.0).at_least(40.0))
+            .column(Size::initial(200.0).at_least(40.0))
+            .column(Size::remainder().at_least(60.0));
+
+            table
+            .header(20.0, |mut header| {
+                header.col(|ui| {
+                    ui.heading("Pid");
+                });
+                header.col(|ui| {
+                    ui.heading("Name");
+                });
+                header.col(|ui| {
+                    ui.heading("Command");
+                });
+            })
+            .body(|mut body| {
+                let filter = self.process_filter.to_ascii_uppercase();
+
+                for (pid, process_name, cmd) in &self.processes {
+                    if filter.len() > 0 && (!process_name.to_ascii_uppercase().contains(filter.as_str()) || !cmd.to_ascii_uppercase().contains(filter.as_str())) {
+                        continue;
+                    }
+                    let row_height = 17.0;
+                    body.row(row_height, |mut row| {
+                        row.col(|ui| {
+                            if ui.selectable_label(false, pid.to_string()).clicked() {
+                                self.pid = *pid as i32;
+                                self.freeze_sender.send(Message {
+                                    msg: MessageCommand::Pid,
+                                    addr: 0,
+                                    value: *pid as i32
+                                }).unwrap_or_default();
+                                self.process_name = process_name.clone();
+                                self.show_process_window = false;
+                            }
+                        });
+
+                        row.col(|ui| {
+                            ui.label(process_name);
+                        });
+                        row.col(|ui| {
+                            ui.label(cmd);
+                        });
+                    });
                 }
             });
-            let table = TableBuilder::new(ui)
-                .striped(true)
-                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                .column(Size::initial(120.0).at_least(40.0))
-                .column(Size::initial(60.0).at_least(40.0))
-                .column(Size::remainder().at_least(60.0));
-    
-                table
-                .header(20.0, |mut header| {
-                    header.col(|ui| {
-                        ui.heading("Pid");
-                    });
-                    header.col(|ui| {
-                        ui.heading("Name");
-                    });
-                    header.col(|ui| {
-                        ui.heading("Command");
-                    });
-                })
-                .body(|mut body| {
-                    let filter = self.process_filter.to_ascii_uppercase();
-
-                    for (pid, process_name, cmd) in &self.processes {
-                        if filter.len() > 0 && (!process_name.to_ascii_uppercase().contains(filter.as_str()) || !cmd.to_ascii_uppercase().contains(filter.as_str())) {
-                            continue;
-                        }
-                        let row_height = 18.0;
-                        body.row(row_height, |mut row| {
-                            row.col(|ui| {
-                                if ui.selectable_label(false, pid.to_string()).clicked() {
-                                    self.pid = *pid as i32;
-                                    self.freeze_sender.send(Message {
-                                        msg: MessageCommand::Pid,
-                                        addr: 0,
-                                        value: *pid as i32
-                                    }).unwrap_or_default();
-                                    self.process_name = process_name.clone();
-                                    self.show_process_window = false;
-                                }
-                            });
-
-                            row.col(|ui| {
-                                ui.label(process_name);
-                            });
-                            row.col(|ui| {
-                                ui.label(cmd);
-                            });
-                        });
-                    }
-                });
-        });
     }
 }
 
 impl eframe::App for GameCheetahEngine {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.spacing_mut().item_spacing = egui::Vec2::splat(12.0);
+            if self.show_process_window {
+                self.render_process_window(ui, ctx);
+                return;
+            }
 
+            ui.spacing_mut().item_spacing = egui::Vec2::splat(12.0);
             ui.horizontal(|ui| {
 
                 ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
@@ -210,6 +233,7 @@ impl eframe::App for GameCheetahEngine {
     
                     if self.show_process_window {
                         self.show_process_window();
+                        return;
                     }
                 }
     
@@ -226,15 +250,12 @@ impl eframe::App for GameCheetahEngine {
                 }
             });
 
-            if self.show_process_window {
-                self.render_process_window(ctx);
-            }
-            if self.pid <= 0 {
-                return;
-            }            
-            if self.searches.len() > 1 {
-                //if self.searches.len() < 5 {
-                    ui.horizontal(|ui| {
+            if self.pid > 0 {
+                if self.searches.len() > 1 {
+                    ui.spacing_mut().item_spacing = egui::Vec2::splat(1.0);
+
+                    ui.separator();
+                    ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = egui::Vec2::splat(8.0);
 
                         for i in 0..self.searches.len() {
@@ -251,16 +272,17 @@ impl eframe::App for GameCheetahEngine {
                             return;
                         }
                         if ui.button("+").clicked() {
-                            let ctx = SearchContext::new("foo".to_string());
-                            self.current_search = self.searches.len();
-                            self.searches.push(ctx);
+                            self.new_search();
                             return;
                         }
-            
                     });
-               // }
-            }
-            self.render_content(ui, ctx, self.current_search);
+                    ui.separator();
+                    ui.spacing_mut().item_spacing = egui::Vec2::splat(8.0);
+
+                    ui.add_space(8.0);
+                }
+                self.render_content(ui, ctx, self.current_search);
+            }            
         });
     }
 }
@@ -286,6 +308,7 @@ impl GameCheetahEngine {
                 .interactive(!search_context.searching)
             );
             
+
             if re.lost_focus() && re.ctx.input().key_down(egui::Key::Enter) {
                 let len = self.searches.get(search_index).unwrap().results.lock().unwrap().len();
                 if len == 0 { 
@@ -293,13 +316,17 @@ impl GameCheetahEngine {
                 } else {
                     self.search(search_index);
                 }
+            } else {
+                if ui.memory().focus().is_none() {
+                    ui.memory().request_focus(re.id);
+                }
             }
 
             if self.searches.len() <= 1 {
                 if ui.button("+").clicked() {
-                    let ctx = SearchContext::new("foo".to_string());
-                    self.current_search = self.searches.len();
-                    self.searches.push(ctx);
+
+                    self.new_search();
+
                     return;
                 }
             }
@@ -313,7 +340,7 @@ impl GameCheetahEngine {
         if i32::from_str_radix(self.searches.get(search_index).unwrap().search_value_text.as_str(), 10).is_ok()  {
             let len = self.searches.get(search_index).unwrap().search_results;
             if len <= 0 { 
-                if ui.button("initial search").clicked() {
+                if ui.button("Initial search").clicked() {
                     self.initial_search(search_index);
                     return;
                 }
@@ -326,11 +353,11 @@ impl GameCheetahEngine {
 
                     ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
         
-                    if ui.button("update").clicked() {
+                    if ui.button("Update").clicked() {
                         self.search(search_index);
                         return;
                     }
-                    if ui.button("clear").clicked() {
+                    if ui.button("Clear").clicked() {
                         GameCheetahEngine::remove_freezes_from(&self.freeze_sender, &search_context.results.lock().unwrap().clone());
                         search_context.results.lock().unwrap().clear();
                         search_context.search_results = -1;
@@ -351,6 +378,11 @@ impl GameCheetahEngine {
         }
     }
 
+    fn new_search(&mut self) {
+        let ctx = SearchContext::new(format!("Search {}", 1 + self.searches.len()));
+        self.current_search = self.searches.len();
+        self.searches.push(ctx);
+    }
 
     fn render_result_table(&mut self, ui: &mut egui::Ui, search_index: usize) {
 
@@ -362,7 +394,6 @@ impl GameCheetahEngine {
         .column(Size::initial(120.0).at_least(40.0))
         .column(Size::initial(120.0).at_least(40.0))
         .column(Size::remainder().at_least(60.0));
-        let row_height = 18.0;
         table
         .header(20.0, |mut header| {
             header.col(|ui| {
@@ -377,6 +408,7 @@ impl GameCheetahEngine {
         })
         .body(|mut body| {
             let cloned_results = search_context.results.lock().unwrap().clone();
+            let row_height = 17.0;
             for i in 0..cloned_results.len() {
                 let result = &cloned_results[i];
                 body.row(row_height, |mut row| {
