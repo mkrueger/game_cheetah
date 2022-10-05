@@ -180,7 +180,10 @@ impl GameCheetahEngine {
                 let filter = self.process_filter.to_ascii_uppercase();
 
                 for (pid, process_name, cmd) in &self.processes {
-                    if filter.len() > 0 && (!process_name.to_ascii_uppercase().contains(filter.as_str()) || !cmd.to_ascii_uppercase().contains(filter.as_str())) {
+                    if filter.len() > 0 && (
+                        !process_name.to_ascii_uppercase().contains(filter.as_str()) && 
+                        !cmd.to_ascii_uppercase().contains(filter.as_str()) && 
+                        !pid.to_string().contains(filter.as_str())) {
                         continue;
                     }
                     let row_height = 17.0;
