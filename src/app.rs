@@ -119,7 +119,7 @@ impl Default for GameCheetahEngine {
             processes: Vec::new(),
             current_search: 0,
             searches: vec![SearchContext::new("Search 1".to_string())],
-            search_threads: ThreadPool::new(32),
+            search_threads: ThreadPool::new(64),
             freeze_sender: tx
         }
     }
@@ -494,14 +494,26 @@ impl GameCheetahEngine {
         self.searches.get_mut(search_index).unwrap().searching = true;
 
         if let Ok(maps) = get_process_maps(self.pid.try_into().unwrap()) {
-
             self.searches.get_mut(search_index).unwrap().total_bytes = 0;
 
             self.searches.get_mut(search_index).unwrap().current_bytes.swap(0, Ordering::SeqCst);
 
             for map in maps {
-                if !map.is_write() || map.is_exec() {
-                    continue;
+                if cfg!(windows) {
+                    if let Some(file_name)  = map.filename() {
+                        if file_name.starts_with("C:\\WINDOWS\\SysWOW64") {
+                            continue;
+                        }
+                    }
+                } else {
+                    if !map.is_write() || map.is_exec() || map.filename().is_none() || map.size() < 1 * 1024 * 1024 {
+                        continue;
+                    }
+                    if let Some(file_name)  = map.filename() {
+                        if file_name.starts_with("/usr/lib") {
+                            continue;
+                        }
+                    }
                 }
                 let mut size = map.size();
                 let mut start = map.start();
@@ -533,6 +545,7 @@ impl GameCheetahEngine {
             let handle = (pid as process_memory::Pid).try_into_process_handle().unwrap();
  
             let search_bytes = BoyerMoore::new(n);
+            current_bytes.fetch_add(size, Ordering::SeqCst); 
             if let Ok(buf) = copy_address(start, size, &handle) {
                 let mut last_i = 0;
                 for i in search_bytes.find_in(&buf) {
@@ -542,7 +555,6 @@ impl GameCheetahEngine {
                     last_i = i;
                 }
             }
-            current_bytes.fetch_add(size, Ordering::SeqCst); 
         });
     }
     
