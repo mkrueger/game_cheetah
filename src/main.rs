@@ -25,8 +25,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>>
 #[cfg(target_os = "macos")]
 fn main() -> Result<(), Box<dyn std::error::Error>> 
 {
-    sudo::escalate_if_needed()?;
-
     // Log to stdout (if you run with `RUST_LOG=debug`).
     tracing_subscriber::fmt::init();
 
