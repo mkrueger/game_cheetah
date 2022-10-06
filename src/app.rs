@@ -500,7 +500,6 @@ impl GameCheetahEngine {
             self.searches.get_mut(search_index).unwrap().total_bytes = 0;
 
             self.searches.get_mut(search_index).unwrap().current_bytes.swap(0, Ordering::SeqCst);
-            println!("-----");
             for map in maps {
                 if cfg!(target_os = "windows") {
                     if let Some(file_name)  = map.filename() {
@@ -509,10 +508,9 @@ impl GameCheetahEngine {
                         }
                     }
                 } else if cfg!(target_os = "linux") {
-                    if !map.is_write() || map.is_exec() || map.filename().is_none() || map.size() < 1 * 1024 * 1024 {
+                    if !map.is_write() {
                         continue;
                     }
-
                     if let Some(file_name)  = map.filename() {
                         if file_name.starts_with("/dev") {
                             continue;
@@ -538,7 +536,7 @@ impl GameCheetahEngine {
                 let max_block = 10 * 1024 * 1024;
                 while size > max_block + 3 {
                     self.spawn_thread(b,  start, max_block + 3, search_index);
-
+                    
                     start += max_block;
                     size -= max_block;
                 }
@@ -560,7 +558,6 @@ impl GameCheetahEngine {
             let handle = (pid as process_memory::Pid).try_into_process_handle().unwrap();
  
             let search_bytes = BoyerMoore::new(n);
-            current_bytes.fetch_add(size, Ordering::SeqCst); 
             if let Ok(buf) = copy_address(start, size, &handle) {
                 let mut last_i = 0;
                 for i in search_bytes.find_in(&buf) {
@@ -570,6 +567,7 @@ impl GameCheetahEngine {
                     last_i = i;
                 }
             }
+            current_bytes.fetch_add(size, Ordering::SeqCst); 
         });
     }
     

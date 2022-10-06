@@ -7,7 +7,14 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(target_os = "linux")]
 fn main() -> Result<(), Box<dyn std::error::Error>> 
 {
-    sudo::escalate_if_needed()?;
+    use std::process::Command;
+    if sudo::check() != sudo::RunningAs::Root {
+        Command::new("pkexec")
+            .args(["env", format!("DISPLAY={}",  &std::env::var("DISPLAY").unwrap()).as_str(), format!("XAUTHORITY={}", &std::env::var("XAUTHORITY").unwrap()).as_str(), std::env::current_exe().unwrap().to_str().unwrap()])
+            .output()
+            .expect("failed to execute process");
+        return Ok(());
+    }
 
     // Log to stdout (if you run with `RUST_LOG=debug`).
     tracing_subscriber::fmt::init();
