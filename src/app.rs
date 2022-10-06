@@ -487,6 +487,9 @@ impl GameCheetahEngine {
     }
 
     fn initial_search(&mut self, search_index: usize) {
+        if self.searches.get_mut(search_index).unwrap().searching {
+            return;
+        }
         self.remove_freezes(search_index);
         let my_int = i32::from_str_radix(self.searches.get(search_index).unwrap().search_value_text.as_str(), 10).unwrap();
         let b = i32::to_le_bytes(my_int);
@@ -497,11 +500,24 @@ impl GameCheetahEngine {
             self.searches.get_mut(search_index).unwrap().total_bytes = 0;
 
             self.searches.get_mut(search_index).unwrap().current_bytes.swap(0, Ordering::SeqCst);
-
+            println!("-----");
             for map in maps {
-                if cfg!(windows) {
+                if cfg!(target_os = "windows") {
                     if let Some(file_name)  = map.filename() {
                         if file_name.starts_with("C:\\WINDOWS\\SysWOW64") {
+                            continue;
+                        }
+                    }
+                } else if cfg!(target_os = "linux") {
+                    if !map.is_write() || map.is_exec() || map.filename().is_none() || map.size() < 1 * 1024 * 1024 {
+                        continue;
+                    }
+
+                    if let Some(file_name)  = map.filename() {
+                        if file_name.starts_with("/dev") {
+                            continue;
+                        }
+                        if file_name.as_os_str().to_str().unwrap().starts_with("/memfd") {
                             continue;
                         }
                     }
@@ -517,7 +533,6 @@ impl GameCheetahEngine {
                 }
                 let mut size = map.size();
                 let mut start = map.start();
-                
                 self.searches.get_mut(search_index).unwrap().total_bytes += size;
 
                 let max_block = 10 * 1024 * 1024;
