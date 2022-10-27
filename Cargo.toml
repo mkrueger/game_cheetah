@@ -1,6 +1,6 @@
 [package]
 name = "game_cheetah"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Mike Krüger <mkrueger@posteo.de>"]
 edition = "2021"
 rust-version = "1.60"
@@ -10,7 +10,6 @@ description = "An in memory trainer for games."
 name = "GameCheetah"
 identifier = "com.github.game_cheetah"
 icon = [ "assets/128x128.png", "assets/128x128@2x.png"]
-version = "0.2.0"
 resources = []
 copyright = "Copyright (c) Mike Krüger 2022. All rights reserved."
 short_description = "An in memory trainer for games."
@@ -26,13 +25,13 @@ process-memory = "0.4.0"
 sysinfo = "0.26.4"
 needle = "0.1.1"
 threadpool = "1.0"
-sudo = "0.5"
+sudo = "0.6.0"
 gabi = "0.2.6"
 
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+[target.'cfg(target_os = "windows")'.dependencies]
 proc-maps = "0.3.0"
 
-[target.'cfg(target_os = "macos")'.dependencies]
+[target.'cfg(not(target_os = "windows"))'.dependencies]
 proc-maps = "0.2.1"
 
 # native:
