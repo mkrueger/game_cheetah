@@ -8,127 +8,20 @@ use sysinfo::*;
 use needle::BoyerMoore;
 use threadpool::ThreadPool;
 
-#[derive(Clone)]
+use crate::{SearchType, SearchValue};
+
+#[derive(Clone, Copy)]
 pub struct SearchResult {
     addr: usize,
+    search_type: SearchType,
     freezed: bool
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum SearchValue {
-    Short(i16),
-    Int(i32),
-    Int64(i64),
-    Float(f32),
-    Double(f64)
-}
-
-impl SearchValue {
-
-    pub fn get_bytes(&self) -> Vec<u8> {
-        match self {
-            SearchValue::Short(v) => v.to_le_bytes().to_vec(),
-            SearchValue::Int(v) => v.to_le_bytes().to_vec(),
-            SearchValue::Int64(v) => v.to_le_bytes().to_vec(),
-            SearchValue::Float(v) => v.to_le_bytes().to_vec(),
-            SearchValue::Double(v) => v.to_le_bytes().to_vec(),
-        }
-    }
-    pub fn get_byte_length(&self) -> usize {
-        match self {
-            SearchValue::Short(_) => 2,
-            SearchValue::Int(_) => 4,
-            SearchValue::Int64(_) => 8,
-            SearchValue::Float(_) => 4,
-            SearchValue::Double(_) => 8,
-        }
-    }
-
-    pub fn from_bytes(&self, bytes: &[u8]) -> SearchValue {
-        match self {
-            SearchValue::Short(_) => SearchValue::Short(i16::from_le_bytes(bytes.try_into().unwrap_or_default())),
-            SearchValue::Int(_) => SearchValue::Int(i32::from_le_bytes(bytes.try_into().unwrap_or_default())),
-            SearchValue::Int64(_) => SearchValue::Int64(i64::from_le_bytes(bytes.try_into().unwrap_or_default())),
-            SearchValue::Float(_) => SearchValue::Float(f32::from_le_bytes(bytes.try_into().unwrap_or_default())),
-            SearchValue::Double(_) => SearchValue::Double(f64::from_le_bytes(bytes.try_into().unwrap_or_default()))
-        }
-    }
-
-    pub fn from_string(&self, txt: &str) -> Result<SearchValue, &str> {
-        match self {
-            SearchValue::Short(_) => {
-                let parsed = txt.parse::<i16>();
-                match parsed {
-                    Ok(f) => Ok(SearchValue::Short(f)),
-                    Err(_) => Err("Invalid input")
-                }
-            }
-            SearchValue::Int(_) =>  {
-                let parsed = txt.parse::<i32>();
-                match parsed {
-                    Ok(f) => Ok(SearchValue::Int(f)),
-                    Err(_) => Err("Invalid input")
-                }
-            }
-            SearchValue::Int64(_) =>  {
-                let parsed = txt.parse::<i64>();
-                match parsed {
-                    Ok(f) => Ok(SearchValue::Int64(f)),
-                    Err(_) => Err("Invalid input")
-                }
-            }
-            SearchValue::Float(_) => {
-                let parsed = txt.parse::<f32>();
-                match parsed {
-                    Ok(f) => Ok(SearchValue::Float(f)),
-                    Err(_) => Err("Invalid input")
-                }
-            }
-            SearchValue::Double(_) => {
-                let parsed = txt.parse::<f64>();
-                match parsed {
-                    Ok(f) => Ok(SearchValue::Double(f)),
-                    Err(_) => Err("Invalid input")
-                }
-            }
-        }
-    }
-
-    pub fn to_string(&self) -> String {
-        match self {
-            SearchValue::Short(v) => v.to_string(),
-            SearchValue::Int(v) => v.to_string(),
-            SearchValue::Int64(v) => v.to_string(),
-            SearchValue::Float(v) => v.to_string(),
-            SearchValue::Double(v) => v.to_string(),
-        }
-    }
-
-    pub fn get_description_text(&self) -> &str {
-        match self {
-            SearchValue::Short(_) => "short (2 bytes)",
-            SearchValue::Int(_) => "int (4 bytes)",
-            SearchValue::Int64(_) => "int64 (4 bytes)",
-            SearchValue::Float(_) => "float (4 bytes)",
-            SearchValue::Double(_) => "double (8 bytes)"
-        }
-    }
-
-    pub fn get_short_description_text(&self) -> &str {
-        match self {
-            SearchValue::Short(_) => "short",
-            SearchValue::Int(_) => "int32",
-            SearchValue::Int64(_) => "int64",
-            SearchValue::Float(_) => "float",
-            SearchValue::Double(_) => "double"
-        }
-    }
-}
-
 impl SearchResult {
-    pub fn new(addr: usize) -> Self {
+    pub fn new(addr: usize, search_type: SearchType) -> Self {
         Self {
             addr,
+            search_type,
             freezed: false
         }
     }
@@ -136,7 +29,10 @@ impl SearchResult {
 
 pub struct SearchContext {
     description: String,
+
     search_value_text: String,
+    search_type: SearchType,
+
     searching: bool,
     total_bytes: usize,
     current_bytes: Arc<AtomicUsize>,
@@ -144,7 +40,6 @@ pub struct SearchContext {
 
     old_results:Vec<Vec<SearchResult>>,
     search_results: i64,
-    search_type: SearchValue
 }
 
 impl SearchContext {
@@ -157,7 +52,7 @@ impl SearchContext {
             total_bytes: 0,
             current_bytes: Arc::new(AtomicUsize::new(0)),
             search_results: -1,
-            search_type: SearchValue::Int(0),
+            search_type: SearchType::Guess,
             old_results: Vec::new()
         }
     }
@@ -181,7 +76,8 @@ pub struct GameCheetahEngine {
     searches: Vec<SearchContext>,
     search_threads: ThreadPool,
 
-    freeze_sender: mpsc::Sender<Message>
+    freeze_sender: mpsc::Sender<Message>,
+    error_text: String
 }
 
 enum MessageCommand {
@@ -195,6 +91,16 @@ struct Message {
     msg: MessageCommand,
     addr: usize,
     value: SearchValue
+}
+
+impl Message {
+    pub fn from_addr(cmd: MessageCommand, addr: usize) -> Self  {
+        Message {
+            msg: cmd,
+            addr,
+            value: SearchValue(SearchType::Guess, Vec::new())
+        }
+    }
 }
 
 impl Default for GameCheetahEngine {
@@ -225,8 +131,7 @@ impl Default for GameCheetahEngine {
                 }
                 for (addr, value) in &freezed_values {
                     if let Ok (handle) = (pid as process_memory::Pid).try_into_process_handle() {
-                        let output_buffer = value.get_bytes();
-                        handle.put_address(*addr, &output_buffer).unwrap_or_default();
+                        handle.put_address(*addr, &value.1).unwrap_or_default();
                     }
                 }
                 thread::sleep(Duration::from_millis(500));
@@ -236,7 +141,7 @@ impl Default for GameCheetahEngine {
         Self {
             pid: 0,
             process_name: "".to_owned(),
-
+            error_text: String::new(),
             show_process_window: false,
             process_filter: "".to_owned(),
             processes: Vec::new(),
@@ -314,11 +219,7 @@ impl GameCheetahEngine {
                         row.col(|ui| {
                             if ui.selectable_label(false, pid.to_string()).clicked() {
                                 self.pid = *pid as i32;
-                                self.freeze_sender.send(Message {
-                                    msg: MessageCommand::Pid,
-                                    addr: *pid as usize,
-                                    value: SearchValue::Int(0)
-                                }).unwrap_or_default();
+                                self.freeze_sender.send(Message::from_addr(MessageCommand::Pid, *pid as usize)).unwrap_or_default();
                                 self.process_name = process_name.clone();
                                 self.show_process_window = false;
                             }
@@ -364,11 +265,7 @@ impl eframe::App for GameCheetahEngine {
     
                 if ui.button("ｘ").clicked() {
                     self.pid = 0;
-                    self.freeze_sender.send(Message {
-                        msg: MessageCommand::Pid,
-                        addr: 0,
-                        value: SearchValue::Int(0)
-                    }).unwrap_or_default();
+                    self.freeze_sender.send(Message::from_addr(MessageCommand::Pid, 0)).unwrap_or_default();
                     self.searches.clear();
                     self.searches.push(SearchContext::new("default".to_string()));
                     self.process_filter.clear();
@@ -406,6 +303,10 @@ impl eframe::App for GameCheetahEngine {
 
                     ui.add_space(8.0);
                 }
+                if self.error_text.len() > 0 {
+                    ui.label(self.error_text.clone());
+                }
+
                 self.render_content(ui, ctx, self.current_search);
             }            
         });
@@ -437,11 +338,12 @@ impl GameCheetahEngine {
             egui::ComboBox::from_id_source(1)
             .selected_text(search_context.search_type.get_description_text())
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut search_context.search_type, SearchValue::Short(0), SearchValue::Short(0).get_short_description_text());
-                ui.selectable_value(&mut search_context.search_type, SearchValue::Int(0), SearchValue::Int(0).get_short_description_text());
-                ui.selectable_value(&mut search_context.search_type, SearchValue::Int64(0), SearchValue::Int64(0).get_short_description_text());
-                ui.selectable_value(&mut search_context.search_type, SearchValue::Float(0.0), SearchValue::Float(0.0).get_short_description_text());
-                ui.selectable_value(&mut search_context.search_type, SearchValue::Double(0.0), SearchValue::Double(0.0).get_short_description_text());
+                ui.selectable_value(&mut search_context.search_type, SearchType::Guess, SearchType::Guess.get_short_description_text());
+                ui.selectable_value(&mut search_context.search_type, SearchType::Short, SearchType::Short.get_short_description_text());
+                ui.selectable_value(&mut search_context.search_type, SearchType::Int, SearchType::Int.get_short_description_text());
+                ui.selectable_value(&mut search_context.search_type, SearchType::Int64, SearchType::Int64.get_short_description_text());
+                ui.selectable_value(&mut search_context.search_type, SearchType::Float, SearchType::Float.get_short_description_text());
+                ui.selectable_value(&mut search_context.search_type, SearchType::Double, SearchType::Double.get_short_description_text());
             });
 
             if old_value != search_context.search_type {
@@ -461,7 +363,7 @@ impl GameCheetahEngine {
                 if len == 0 { 
                     self.initial_search(search_index);
                 } else {
-                    self.search(search_index);
+                    self.filter_searches(search_index);
                 }
             } else {
                 if ui.memory().focus().is_none() {
@@ -504,7 +406,7 @@ impl GameCheetahEngine {
                     ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
         
                     if ui.button("Update").clicked() {
-                        self.search(search_index);
+                        self.filter_searches(search_index);
                         return;
                     }
                     if ui.button("Clear").clicked() {
@@ -565,23 +467,27 @@ impl GameCheetahEngine {
                     });
                     row.col(|ui| {
                         if let Ok (handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
-                            if let Ok(buf) = copy_address(result.addr, search_context.search_type.get_byte_length(), &handle) {
-                                let val = search_context.search_type.from_bytes(&buf);
+                            if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
+                                let val = SearchValue(result.search_type, buf);
                                 let mut value_text  = val.to_string();
                                 let old_text = value_text.clone();
                                 ui.add(egui::TextEdit::singleline(&mut value_text));
                                 if old_text != value_text {
-                                    let val = search_context.search_type.from_string(&value_text);
-                                    if val.is_ok() {
-                                        let val = val.unwrap();
-                                        let output_buffer = val.get_bytes();
-                                        handle.put_address(result.addr, &output_buffer).unwrap_or_default();
-                                        if result.freezed {
-                                            self.freeze_sender.send(Message {
-                                                msg: MessageCommand::Freeze,
-                                                addr: result.addr,
-                                                value: val
-                                            }).unwrap_or_default();
+                                    let val = result.search_type.from_string(&value_text);
+                                    match val {
+                                        Ok(value) => {
+                                            handle.put_address(result.addr, &value.1).unwrap_or_default();
+                                            if result.freezed {
+                                                self.freeze_sender.send(Message {
+                                                    msg: MessageCommand::Freeze,
+                                                    addr: result.addr,
+                                                    value
+                                                }).unwrap_or_default();
+                                            }
+                                        }
+                                        Err(err) => {
+                                            eprintln!("Error converting {:?}: {}", result.search_type, err);
+                                            self.error_text = format!("Error converting {:?}: {}", result.search_type, err);
                                         }
                                     }
                                 }
@@ -594,24 +500,20 @@ impl GameCheetahEngine {
                         let mut b = result.freezed;
                         if ui.checkbox(&mut b, "").changed() {
                             if let Ok (handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
-                                if let Ok(buf) = copy_address(result.addr, search_context.search_type.get_byte_length(), &handle) {
-                                    let value = search_context.search_type.from_bytes(&buf);
+                                if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
                                     search_context.results.lock().as_mut().unwrap().remove(i);
                                     if b {
                                         self.freeze_sender.send(Message {
                                             msg: MessageCommand::Freeze,
                                             addr: result.addr,
-                                            value
+                                            value: SearchValue(result.search_type, buf)
                                         }).unwrap_or_default();
                                     } else {
-                                        self.freeze_sender.send(Message {
-                                            msg: MessageCommand::Unfreeze,
-                                            addr: result.addr,
-                                            value
-                                        }).unwrap_or_default();
+                                        self.freeze_sender.send(Message::from_addr(MessageCommand::Unfreeze, result.addr)).unwrap_or_default();
                                     }
                                     search_context.results.lock().as_mut().unwrap().insert(i, SearchResult {
                                         addr: result.addr,
+                                        search_type: result.search_type,
                                         freezed: b
                                     });
                                 }
@@ -643,106 +545,92 @@ impl GameCheetahEngine {
             return;
         }
         self.remove_freezes(search_index);
-        let my_int = i32::from_str_radix(self.searches.get(search_index).unwrap().search_value_text.as_str(), 10).unwrap();
-        let b = i32::to_le_bytes(my_int);
         
         self.searches.get_mut(search_index).unwrap().searching = true;
 
-        if let Ok(maps) = get_process_maps(self.pid.try_into().unwrap()) {
-            self.searches.get_mut(search_index).unwrap().total_bytes = 0;
-
-            self.searches.get_mut(search_index).unwrap().current_bytes.swap(0, Ordering::SeqCst);
-            for map in maps {
-                if cfg!(target_os = "windows") {
-                    if let Some(file_name)  = map.filename() {
-                        if file_name.starts_with("C:\\WINDOWS\\SysWOW64") {
-                            continue;
+        match get_process_maps(self.pid.try_into().unwrap()) {
+            Ok(maps) => {
+                self.searches.get_mut(search_index).unwrap().total_bytes = 0;
+                self.searches.get_mut(search_index).unwrap().current_bytes.swap(0, Ordering::SeqCst);
+                for map in maps {
+                    if cfg!(target_os = "windows") {
+                        if let Some(file_name)  = map.filename() {
+                            if file_name.starts_with("C:\\WINDOWS\\SysWOW64") {
+                                continue;
+                            }
                         }
-                    }
-                } else if cfg!(target_os = "linux") {
-                   
-                } else {
-                    if !map.is_write() || map.is_exec() || map.filename().is_none() || map.size() < 1 * 1024 * 1024 {
-                        continue;
-                    }
-                    if let Some(file_name)  = map.filename() {
-                        if file_name.starts_with("/usr/lib") {
-                            continue;
-                        }
-                    }
-                }
-                let mut size = map.size();
-                let mut start = map.start();
-                self.searches.get_mut(search_index).unwrap().total_bytes += size;
-
-                let max_block = 10 * 1024 * 1024;
-                while size > max_block + 3 {
-                    self.spawn_thread(b,  start, max_block + 3, search_index);
+                    } else if cfg!(target_os = "linux") {
                     
-                    start += max_block;
-                    size -= max_block;
+                    } else {
+                        if !map.is_write() || map.is_exec() || map.filename().is_none() || map.size() < 1 * 1024 * 1024 {
+                            continue;
+                        }
+                        if let Some(file_name)  = map.filename() {
+                            if file_name.starts_with("/usr/lib") {
+                                continue;
+                            }
+                        }
+                    }
+                    let mut size = map.size();
+                    let mut start = map.start();
+                    self.searches.get_mut(search_index).unwrap().total_bytes += size;
+
+                    let max_block = 10 * 1024 * 1024;
+
+                    let current_search = self.searches.get(search_index).unwrap();
+                    let search_for_value = current_search.search_type.from_string(&current_search.search_value_text).unwrap();
+                    self.error_text.clear();
+
+                    while size > max_block + 3 {
+                        self.spawn_thread(search_for_value.clone(), start, max_block + 3, search_index);
+                        
+                        start += max_block;
+                        size -= max_block;
+                    }
+                    self.spawn_thread(search_for_value, start, size, search_index);
                 }
-                self.spawn_thread(b,  start, size, search_index);
+            } 
+            Err(err) => {
+                eprintln!("error getting process maps for pid {}: {}", self.pid, err);
+                self.error_text = format!("error getting process maps for pid {}: {}", self.pid, err);
             }
-        } else {
-            println!("error getting process maps.");
         }
     }
 
-    fn spawn_thread(&mut self, b: [u8; 4], start: usize, mut size: usize, search_index: usize) {
-        let search_context = self.searches.get(search_index).unwrap();
-        let pid = self.pid;
-        let results = search_context.results.clone();
-        let current_bytes = search_context.current_bytes.clone();
-
-        self.search_threads.execute(move || {
-            let n =&b[..];
-            let handle = (pid as process_memory::Pid).try_into_process_handle().unwrap();
- 
-            let search_bytes = BoyerMoore::new(n);
-            if let Ok(buf) = copy_address(start, size, &handle) {
-                let mut last_i = 0;
-                for i in search_bytes.find_in(&buf) {
-                    current_bytes.fetch_add(i - last_i, Ordering::SeqCst); 
-                    size -= i - last_i;
-                    results.lock().unwrap().push(SearchResult::new(i + start));
-                    last_i = i;
-                }
-            }
-            current_bytes.fetch_add(size, Ordering::SeqCst); 
-        });
-    }
-    
-    fn search(&mut self, search_index: usize) {
+    fn filter_searches(&mut self, search_index: usize) {
         self.remove_freezes(search_index);
         let mut search_context = self.searches.get_mut(search_index).unwrap();
     
         let mut new_results = Vec::new();
         let handle = (self.pid as process_memory::Pid).try_into_process_handle().unwrap();
-        let my_int = search_context.search_type.from_string(&search_context.search_value_text);
-        if my_int.is_ok() {
-            let my_int = my_int.unwrap();
-            let old_results = search_context.results.lock().unwrap().clone();
-            for i in 0..old_results.len() {
-                let result = &old_results[i];
-                if let Ok(buf) = copy_address(result.addr, search_context.search_type.get_byte_length(), &handle) {
-                    let val = search_context.search_type.from_bytes(&buf);
-                    if val == my_int {
-                        if result.freezed {
-                            self.freeze_sender.send(Message {
-                                msg: MessageCommand::Freeze,
-                                addr: result.addr,
-                                value: val
-                            }).unwrap_or_default();
+        let old_results = search_context.results.lock().unwrap().clone();
+        for result in &old_results {
+            match result.search_type.from_string(&search_context.search_value_text) {
+                Ok(my_int) => {
+                    if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
+                        let val = SearchValue(result.search_type, buf);
+                        if val.1 == my_int.1 {
+                            if result.freezed {
+                                self.freeze_sender.send(Message {
+                                    msg: MessageCommand::Freeze,
+                                    addr: result.addr,
+                                    value: val
+                                }).unwrap_or_default();
+                            }
+                            new_results.push(result.clone());
                         }
-                        new_results.push(result.clone());
                     }
                 }
+                Err(err) => { 
+                    eprintln!("Error converting {:?}: {}", result.search_type, err);
+                    self.error_text = format!("Error converting {:?}: {}", result.search_type, err);
+                }
             }
-            search_context.search_results = new_results.len() as i64;
-            search_context.results = Arc::new(Mutex::new(new_results));
-            search_context.old_results.push(old_results);
         }
+        search_context.search_results = new_results.len() as i64;
+        search_context.results = Arc::new(Mutex::new(new_results));
+        search_context.old_results.push(old_results);
+
     }
 
     fn remove_freezes(&self, search_index: usize) {
@@ -753,15 +641,11 @@ impl GameCheetahEngine {
     fn remove_freezes_from(freeze_sender: &mpsc::Sender<Message>, v: &Vec<SearchResult>) {
         for result in v {
             if result.freezed {
-                freeze_sender.send(Message {
-                    msg: MessageCommand::Unfreeze,
-                    addr: result.addr,
-                    value: SearchValue::Int(0)
-                }).unwrap_or_default();
+                freeze_sender.send(Message::from_addr(MessageCommand::Unfreeze, result.addr)).unwrap_or_default();
             }
         }
     }
-
+    
     fn show_process_window(&mut self) {
         let sys = System::new_all();
         self.processes.clear();
@@ -771,4 +655,47 @@ impl GameCheetahEngine {
     }
 
 
+    fn spawn_thread(&mut self, search_value: SearchValue, start: usize, size: usize, search_index: usize) {
+        let search_context = self.searches.get(search_index).unwrap();
+        let pid = self.pid;
+        let results = search_context.results.clone();
+        let current_bytes = search_context.current_bytes.clone();
+
+        self.search_threads.execute(move || {
+            let handle = (pid as process_memory::Pid).try_into_process_handle().unwrap();
+            if let Ok(memory_data) = copy_address(start, size, &handle) {
+                match search_value.0 {
+                    SearchType::Guess => {
+                        let val = String::from_utf8(search_value.1).unwrap();
+
+                        if let Ok(search_value) = SearchType::Int.from_string(&val) {
+                            let search_data =&search_value.1[..];
+                            search_memory(&memory_data, search_data, search_value.0,  &results, start);
+                        }
+                        if let Ok(search_value) = SearchType::Float.from_string(&val) {
+                            let search_data =&search_value.1[..];
+                            search_memory(&memory_data, search_data, search_value.0, &results, start);
+                        }
+                        if let Ok(search_value) = SearchType::Double.from_string(&val) {
+                            let search_data =&search_value.1[..];
+                            search_memory(&memory_data, search_data, search_value.0,  &results, start);
+                        }
+                    }
+                    _ => {
+                        let search_data =&search_value.1[..];
+                        search_memory(&memory_data, search_data, search_value.0, &results, start);
+                    }
+                }
+            }
+            current_bytes.fetch_add(size, Ordering::SeqCst); 
+        });
+    }
+    
+}
+
+fn search_memory( memory_data: &Vec<u8>, search_data: &[u8], search_type: SearchType, results: &Arc<Mutex<Vec<SearchResult>>>, start: usize) {
+    let search_bytes = BoyerMoore::new(search_data);
+    for i in search_bytes.find_in(&memory_data) {
+        results.lock().unwrap().push(SearchResult::new(i + start, search_type));
+    }
 }
