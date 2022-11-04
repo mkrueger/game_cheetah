@@ -1,5 +1,5 @@
 
-use std::{sync::{Arc, atomic::{AtomicUsize, Ordering}, Mutex, mpsc::{self}}, vec, thread, time::Duration, collections::HashMap};
+use std::{sync::{Arc, atomic::{Ordering}, Mutex, mpsc::{self}}, vec, thread, time::Duration, collections::HashMap};
 use egui::{RichText, Color32};
 use egui_extras::{Size, TableBuilder};
 use proc_maps::get_process_maps;
@@ -8,61 +8,7 @@ use sysinfo::*;
 use needle::BoyerMoore;
 use threadpool::ThreadPool;
 
-use crate::{SearchType, SearchValue};
-
-#[derive(Clone, Copy)]
-pub struct SearchResult {
-    addr: usize,
-    search_type: SearchType,
-    freezed: bool
-}
-
-impl SearchResult {
-    pub fn new(addr: usize, search_type: SearchType) -> Self {
-        Self {
-            addr,
-            search_type,
-            freezed: false
-        }
-    }
-}
-
-pub struct SearchContext {
-    description: String,
-
-    search_value_text: String,
-    search_type: SearchType,
-
-    searching: bool,
-    total_bytes: usize,
-    current_bytes: Arc<AtomicUsize>,
-    results: Arc<Mutex<Vec<SearchResult>>>,
-
-    old_results:Vec<Vec<SearchResult>>,
-    search_results: i64,
-}
-
-impl SearchContext {
-    fn new(description: String) -> Self {
-        Self {
-            description,
-            search_value_text: "".to_owned(),
-            searching: false,
-            results: Arc::new(Mutex::new(Vec::new())),
-            total_bytes: 0,
-            current_bytes: Arc::new(AtomicUsize::new(0)),
-            search_results: -1,
-            search_type: SearchType::Guess,
-            old_results: Vec::new()
-        }
-    }
-
-    fn clear_results(&mut self, freeze_sender: &mpsc::Sender<Message>) {
-        GameCheetahEngine::remove_freezes_from(freeze_sender, &self.results.lock().unwrap().clone());
-        self.results.lock().unwrap().clear();
-        self.search_results = -1;
-    }
-}
+use crate::{SearchType, SearchValue, SearchContext, Message, MessageCommand, SearchResult};
 
 pub struct GameCheetahEngine {
     pid: i32,
@@ -73,34 +19,11 @@ pub struct GameCheetahEngine {
     processes: Vec<(u32, String, String)>,
 
     current_search: usize,
-    searches: Vec<SearchContext>,
+    searches: Vec<Box<SearchContext>>,
     search_threads: ThreadPool,
 
     freeze_sender: mpsc::Sender<Message>,
     error_text: String
-}
-
-enum MessageCommand {
-    // Quit,
-    Freeze,
-    Unfreeze,
-    Pid
-}
-
-struct Message {
-    msg: MessageCommand,
-    addr: usize,
-    value: SearchValue
-}
-
-impl Message {
-    pub fn from_addr(cmd: MessageCommand, addr: usize) -> Self  {
-        Message {
-            msg: cmd,
-            addr,
-            value: SearchValue(SearchType::Guess, Vec::new())
-        }
-    }
 }
 
 impl Default for GameCheetahEngine {
@@ -146,8 +69,8 @@ impl Default for GameCheetahEngine {
             process_filter: "".to_owned(),
             processes: Vec::new(),
             current_search: 0,
-            searches: vec![SearchContext::new("Search 1".to_string())],
-            search_threads: ThreadPool::new(64),
+            searches: vec![Box::new(SearchContext::new("Search 1".to_string()))],
+            search_threads: ThreadPool::new(16),
             freeze_sender: tx
         }
     }
@@ -267,7 +190,7 @@ impl eframe::App for GameCheetahEngine {
                     self.pid = 0;
                     self.freeze_sender.send(Message::from_addr(MessageCommand::Pid, 0)).unwrap_or_default();
                     self.searches.clear();
-                    self.searches.push(SearchContext::new("default".to_string()));
+                    self.searches.push(Box::new(SearchContext::new("default".to_string())));
                     self.process_filter.clear();
                 }
             });
@@ -308,73 +231,75 @@ impl eframe::App for GameCheetahEngine {
                 }
 
                 self.render_content(ui, ctx, self.current_search);
-            }            
+            }
         });
     }
 }
 
 impl GameCheetahEngine {
     fn render_content(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context, search_index: usize) {
-
         if self.searches.len() > 1 {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
                 ui.label("Name:");
-                let search_context = self.searches.get_mut(search_index).unwrap();
-                ui.add(egui::TextEdit::singleline(&mut search_context.description).hint_text("Search description").interactive(!search_context.searching));
+                if let Some(search_context) = self.searches.get_mut(search_index) {
+                    ui.add(egui::TextEdit::singleline(&mut search_context.description).hint_text("Search description").interactive(!search_context.searching));
+                }
             });
         }
 
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
             ui.label("Value:");
-            let search_context = self.searches.get_mut(search_index).unwrap();
-            let re = ui.add(egui::TextEdit::singleline(&mut search_context.search_value_text)
-                .hint_text(format!("Search for {} value", search_context.search_type.get_description_text()))
-                .interactive(!search_context.searching)
-            );
+            if let Some(search_context) = self.searches.get_mut(search_index) {
+                let re = ui.add(egui::TextEdit::singleline(&mut search_context.search_value_text)
+                    .hint_text(format!("Search for {} value", search_context.search_type.get_description_text()))
+                    .interactive(!search_context.searching)
+                );
 
-            let old_value = search_context.search_type.clone();
-            egui::ComboBox::from_id_source(1)
-            .selected_text(search_context.search_type.get_description_text())
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut search_context.search_type, SearchType::Guess, SearchType::Guess.get_short_description_text());
-                ui.selectable_value(&mut search_context.search_type, SearchType::Short, SearchType::Short.get_short_description_text());
-                ui.selectable_value(&mut search_context.search_type, SearchType::Int, SearchType::Int.get_short_description_text());
-                ui.selectable_value(&mut search_context.search_type, SearchType::Int64, SearchType::Int64.get_short_description_text());
-                ui.selectable_value(&mut search_context.search_type, SearchType::Float, SearchType::Float.get_short_description_text());
-                ui.selectable_value(&mut search_context.search_type, SearchType::Double, SearchType::Double.get_short_description_text());
-            });
+                let old_value = search_context.search_type.clone();
+                egui::ComboBox::from_id_source(1)
+                .selected_text(search_context.search_type.get_description_text())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut search_context.search_type, SearchType::Guess, SearchType::Guess.get_short_description_text());
+                    ui.selectable_value(&mut search_context.search_type, SearchType::Short, SearchType::Short.get_short_description_text());
+                    ui.selectable_value(&mut search_context.search_type, SearchType::Int, SearchType::Int.get_short_description_text());
+                    ui.selectable_value(&mut search_context.search_type, SearchType::Int64, SearchType::Int64.get_short_description_text());
+                    ui.selectable_value(&mut search_context.search_type, SearchType::Float, SearchType::Float.get_short_description_text());
+                    ui.selectable_value(&mut search_context.search_type, SearchType::Double, SearchType::Double.get_short_description_text());
+                });
 
-            if old_value != search_context.search_type {
-                search_context.clear_results(&self.freeze_sender);
-            }
-
-
-            if ui.add_enabled(search_context.old_results.len() > 0, egui::Button::new("Undo")).clicked() {
-                let old = search_context.old_results.pop().unwrap();
-                search_context.search_results = old.len() as i64;
-                search_context.results = Arc::new(Mutex::new(old));
-                return;
-            }
-
-            if re.lost_focus() && re.ctx.input().key_down(egui::Key::Enter) {
-                let len = self.searches.get(search_index).unwrap().results.lock().unwrap().len();
-                if len == 0 { 
-                    self.initial_search(search_index);
-                } else {
-                    self.filter_searches(search_index);
+                if old_value != search_context.search_type {
+                    search_context.clear_results(&self.freeze_sender);
                 }
-            } else {
-                if ui.memory().focus().is_none() {
-                    ui.memory().request_focus(re.id);
-                }
-            }
 
-            if self.searches.len() <= 1 {
-                if ui.button("+").clicked() {
-                    self.new_search();
+
+                if ui.add_enabled(search_context.old_results.len() > 0, egui::Button::new("Undo")).clicked() {
+                    if let Some(old) = search_context.old_results.pop() {
+                        search_context.search_results = old.len() as i64;
+                        search_context.results = Arc::new(Mutex::new(old));
+                    }
                     return;
+                }
+
+                if re.lost_focus() && re.ctx.input().key_down(egui::Key::Enter) {
+                    let len = self.searches.get(search_index).unwrap().results.lock().unwrap().len();
+                    if len == 0 { 
+                        self.initial_search(search_index);
+                    } else {
+                        self.filter_searches(search_index);
+                    }
+                } else {
+                    if ui.memory().focus().is_none() {
+                        ui.memory().request_focus(re.id);
+                    }
+                }
+
+                if self.searches.len() <= 1 {
+                    if ui.button("+").clicked() {
+                        self.new_search();
+                        return;
+                    }
                 }
             }
         });
@@ -431,7 +356,7 @@ impl GameCheetahEngine {
     fn new_search(&mut self) {
         let ctx = SearchContext::new(format!("Search {}", 1 + self.searches.len()));
         self.current_search = self.searches.len();
-        self.searches.push(ctx);
+        self.searches.push(Box::new(ctx));
     }
 
     fn render_result_table(&mut self, ui: &mut egui::Ui, search_index: usize) {
@@ -527,12 +452,12 @@ impl GameCheetahEngine {
 
     fn render_search_bar(&mut self, ui: &mut egui::Ui, search_index: usize) {
         let mut search_context = self.searches.get_mut(search_index).unwrap();
-        let current_bytes = search_context.current_bytes.load(Ordering::Relaxed);
+        let current_bytes = search_context.current_bytes.load(Ordering::Acquire);
         let progress_bar = egui::widgets::ProgressBar::new(current_bytes as f32 / search_context.total_bytes as f32).show_percentage();
         let bb = gabi::BytesConfig::default();
         let current_bytes_out = bb.bytes(current_bytes as u64);
         let total_bytes_out = bb.bytes(search_context.total_bytes as u64);
-        ui.label( format!("Search {}/{}", current_bytes_out, total_bytes_out));
+        ui.label(format!("Search {}/{}", current_bytes_out, total_bytes_out));
         ui.add(progress_bar);
         if current_bytes >= search_context.total_bytes {
             search_context.search_results = search_context.results.lock().unwrap().len() as i64;
@@ -604,7 +529,7 @@ impl GameCheetahEngine {
         let mut new_results = Vec::new();
         let handle = (self.pid as process_memory::Pid).try_into_process_handle().unwrap();
         let old_results = search_context.results.lock().unwrap().clone();
-        for result in &old_results {
+        for result in &*old_results {
             match result.search_type.from_string(&search_context.search_value_text) {
                 Ok(my_int) => {
                     if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
@@ -638,7 +563,7 @@ impl GameCheetahEngine {
         GameCheetahEngine::remove_freezes_from(&self.freeze_sender, &search_context.results.lock().unwrap().clone());
     }
     
-    fn remove_freezes_from(freeze_sender: &mpsc::Sender<Message>, v: &Vec<SearchResult>) {
+    pub fn remove_freezes_from(freeze_sender: &mpsc::Sender<Message>, v: &Vec<SearchResult>) {
         for result in v {
             if result.freezed {
                 freeze_sender.send(Message::from_addr(MessageCommand::Unfreeze, result.addr)).unwrap_or_default();
@@ -658,9 +583,8 @@ impl GameCheetahEngine {
     fn spawn_thread(&mut self, search_value: SearchValue, start: usize, size: usize, search_index: usize) {
         let search_context = self.searches.get(search_index).unwrap();
         let pid = self.pid;
-        let results = search_context.results.clone();
         let current_bytes = search_context.current_bytes.clone();
-
+        let results = search_context.results.clone();
         self.search_threads.execute(move || {
             let handle = (pid as process_memory::Pid).try_into_process_handle().unwrap();
             if let Ok(memory_data) = copy_address(start, size, &handle) {
@@ -670,20 +594,32 @@ impl GameCheetahEngine {
 
                         if let Ok(search_value) = SearchType::Int.from_string(&val) {
                             let search_data =&search_value.1[..];
-                            search_memory(&memory_data, search_data, search_value.0,  &results, start);
+                            let r = search_memory(&memory_data, search_data, search_value.0, start);
+                            if r.len() > 0 {
+                                results.lock().unwrap().extend_from_slice(&r);
+                            }
                         }
                         if let Ok(search_value) = SearchType::Float.from_string(&val) {
                             let search_data =&search_value.1[..];
-                            search_memory(&memory_data, search_data, search_value.0, &results, start);
+                            let r = search_memory(&memory_data, search_data, search_value.0, start);
+                            if r.len() > 0 {
+                                results.lock().unwrap().extend_from_slice(&r);
+                            }
                         }
                         if let Ok(search_value) = SearchType::Double.from_string(&val) {
                             let search_data =&search_value.1[..];
-                            search_memory(&memory_data, search_data, search_value.0,  &results, start);
+                            let r = search_memory(&memory_data, search_data, search_value.0, start);
+                            if r.len() > 0 {
+                                results.lock().unwrap().extend_from_slice(&r);
+                            }
                         }
                     }
                     _ => {
                         let search_data =&search_value.1[..];
-                        search_memory(&memory_data, search_data, search_value.0, &results, start);
+                        let r = search_memory(&memory_data, search_data, search_value.0, start);
+                        if r.len() > 0 {
+                            results.lock().unwrap().extend_from_slice(&r);
+                        }
                     }
                 }
             }
@@ -693,9 +629,11 @@ impl GameCheetahEngine {
     
 }
 
-fn search_memory( memory_data: &Vec<u8>, search_data: &[u8], search_type: SearchType, results: &Arc<Mutex<Vec<SearchResult>>>, start: usize) {
+fn search_memory(memory_data: &Vec<u8>, search_data: &[u8], search_type: SearchType, start: usize) -> Vec<SearchResult> {
+    let mut result = Vec::new();
     let search_bytes = BoyerMoore::new(search_data);
     for i in search_bytes.find_in(&memory_data) {
-        results.lock().unwrap().push(SearchResult::new(i + start, search_type));
+        result.push(SearchResult::new(i + start, search_type));
     }
+    result
 }

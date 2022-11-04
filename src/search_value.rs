@@ -17,3 +17,20 @@ impl SearchValue {
         }
     }
 }
+
+#[derive(Clone, Copy)]
+pub struct SearchResult {
+    pub addr: usize,
+    pub search_type: SearchType,
+    pub freezed: bool
+}
+
+impl SearchResult {
+    pub fn new(addr: usize, search_type: SearchType) -> Self {
+        Self {
+            addr,
+            search_type,
+            freezed: false
+        }
+    }
+}
