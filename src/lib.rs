@@ -10,7 +10,9 @@ pub mod search_context;
 pub use search_context::*;
 
 mod app;
-pub use app::GameCheetahEngine;
+
+mod state;
+pub use state::*;
 
 pub enum MessageCommand {
     // Quit,
