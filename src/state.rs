@@ -30,7 +30,6 @@ impl Default for GameCheetahEngine {
         thread::spawn(move || {
             let mut freezed_values = HashMap::new();
             let mut pid = 0;
-
             loop {
                 if let Ok(msg) = rx.try_recv() {
                     match msg.msg {
@@ -208,21 +207,21 @@ impl GameCheetahEngine {
 
                         if let Ok(search_value) = SearchType::Int.from_string(&val) {
                             let search_data =&search_value.1[..];
-                            let r = search_memory(&memory_data, search_data, search_value.0, start);
+                            let r = search_memory(&memory_data, search_data, SearchType::Int, start);
                             if r.len() > 0 {
                                 results.lock().unwrap().extend_from_slice(&r);
                             }
                         }
                         if let Ok(search_value) = SearchType::Float.from_string(&val) {
                             let search_data =&search_value.1[..];
-                            let r = search_memory(&memory_data, search_data, search_value.0, start);
+                            let r = search_memory(&memory_data, search_data, SearchType::Float, start);
                             if r.len() > 0 {
                                 results.lock().unwrap().extend_from_slice(&r);
                             }
                         }
                         if let Ok(search_value) = SearchType::Double.from_string(&val) {
                             let search_data =&search_value.1[..];
-                            let r = search_memory(&memory_data, search_data, search_value.0, start);
+                            let r = search_memory(&memory_data, search_data, SearchType::Double, start);
                             if r.len() > 0 {
                                 results.lock().unwrap().extend_from_slice(&r);
                             }
