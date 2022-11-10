@@ -56,28 +56,28 @@ impl SearchType {
             SearchType::Int =>  {
                 let parsed = txt.parse::<i32>();
                 match parsed {
-                    Ok(f) => Ok(SearchValue(SearchType::Short, i32::to_le_bytes(f).to_vec())),
+                    Ok(f) => Ok(SearchValue(SearchType::Int, i32::to_le_bytes(f).to_vec())),
                     Err(_) => Err("Invalid input")
                 }
             }
             SearchType::Int64 =>  {
                 let parsed = txt.parse::<i64>();
                 match parsed {
-                    Ok(f) => Ok(SearchValue(SearchType::Short, i64::to_le_bytes(f).to_vec())),
+                    Ok(f) => Ok(SearchValue(SearchType::Int64, i64::to_le_bytes(f).to_vec())),
                     Err(_) => Err("Invalid input")
                 }
             }
             SearchType::Float => {
                 let parsed = txt.parse::<f32>();
                 match parsed {
-                    Ok(f) => Ok(SearchValue(SearchType::Short, f32::to_le_bytes(f).to_vec())),
+                    Ok(f) => Ok(SearchValue(SearchType::Float, f32::to_le_bytes(f).to_vec())),
                     Err(_) => Err("Invalid input")
                 }
             }
             SearchType::Double => {
                 let parsed = txt.parse::<f64>();
                 match parsed {
-                    Ok(f) => Ok(SearchValue(SearchType::Short, f64::to_le_bytes(f).to_vec())),
+                    Ok(f) => Ok(SearchValue(SearchType::Double, f64::to_le_bytes(f).to_vec())),
                     Err(_) => Err("Invalid input")
                 }
             }
