@@ -1,6 +1,6 @@
 [package]
 name = "game_cheetah"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Mike Krüger <mkrueger@posteo.de>"]
 edition = "2021"
 rust-version = "1.60"
@@ -18,11 +18,11 @@ Allows to alter values in computer games or freeze them to certain values.
 """
 
 [dependencies]
-egui = "0.19.0"
-egui_extras = "0.19.0"
-eframe = { version = "0.19.0", features = ["persistence"] }
-process-memory = "0.4.0"
-sysinfo = "0.26.4"
+egui = "0.20.1"
+egui_extras = "0.20.0"
+eframe = { version = "0.20.1", features = ["persistence"] }
+process-memory = "0.5.0"
+sysinfo = "0.27.1"
 needle = "0.1.1"
 threadpool = "1.0"
 sudo = "0.6.0"

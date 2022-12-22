@@ -1,7 +1,7 @@
 
-use std::{sync::{Arc, atomic::{Ordering}, Mutex}};
+use std::{sync::{Arc, atomic::{Ordering}, Mutex}, time::Duration};
 use egui::{RichText, Color32};
-use egui_extras::{Size, TableBuilder};
+use egui_extras::{TableBuilder, Column};
 use process_memory::*;
 
 use crate::{SearchType, SearchValue, SearchContext, Message, MessageCommand, SearchResult, GameCheetahEngine};
@@ -41,9 +41,9 @@ impl GameCheetahEngine {
         let table = TableBuilder::new(ui)
             .striped(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Size::initial(80.0).at_least(40.0))
-            .column(Size::initial(200.0).at_least(40.0))
-            .column(Size::remainder().at_least(60.0));
+            .column(Column::initial(80.0).at_least(40.0))
+            .column(Column::initial(200.0).at_least(40.0))
+            .column(Column::remainder().at_least(60.0));
 
             table
             .header(20.0, |mut header| {
@@ -167,7 +167,7 @@ impl eframe::App for GameCheetahEngine {
 }
 
 impl GameCheetahEngine {
-    fn render_content(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context, search_index: usize) {
+    fn render_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, search_index: usize) {
         if self.searches.len() > 1 {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
@@ -241,6 +241,7 @@ impl GameCheetahEngine {
 
         if self.searches.get(search_index).unwrap().searching {
             self.render_search_bar(ui, search_index);
+            ctx.request_repaint_after(Duration::from_millis(200));
             return;
         }
 
@@ -289,9 +290,9 @@ impl GameCheetahEngine {
         let table = TableBuilder::new(ui)
         .striped(true)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Size::initial(120.0).at_least(40.0))
-        .column(Size::initial(120.0).at_least(40.0))
-        .column(Size::remainder().at_least(60.0));
+        .column(Column::initial(120.0).at_least(40.0))
+        .column(Column::initial(120.0).at_least(40.0))
+        .column(Column::remainder().at_least(60.0));
         table
         .header(20.0, |mut header| {
             header.col(|ui| {
