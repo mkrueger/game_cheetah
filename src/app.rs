@@ -12,7 +12,7 @@ impl GameCheetahEngine {
     }
 
     fn render_process_window(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        if ctx.input().key_down(egui::Key::Escape) {
+        if ctx.input(|i| i.key_down(egui::Key::Escape)) {
             self.show_process_window = false;
             return;
         }
@@ -21,8 +21,8 @@ impl GameCheetahEngine {
             ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
 
             let i = ui.add(egui::TextEdit::singleline(&mut self.process_filter).hint_text("Filter processes"));
-            if ui.memory().focus().is_none() {
-                ui.memory().request_focus(i.id);
+            if ui.memory( |m| m.focus().is_none()) {
+                ui.memory_mut(|m| m.request_focus(i.id));
             }
 
             ui.spacing_mut().item_spacing = egui::Vec2::splat(25.0);
@@ -212,7 +212,7 @@ impl GameCheetahEngine {
                     return;
                 }
 
-                if re.lost_focus() && re.ctx.input().key_down(egui::Key::Enter) {
+                if re.lost_focus() && re.ctx.input(|i| i.key_down(egui::Key::Enter)) {
                     let len = self.searches.get(search_index).unwrap().results.lock().unwrap().len();
                     if len == 0 { 
                         self.initial_search(search_index);
@@ -220,8 +220,8 @@ impl GameCheetahEngine {
                         self.filter_searches(search_index);
                     }
                 } else {
-                    if ui.memory().focus().is_none() {
-                        ui.memory().request_focus(re.id);
+                    if ui.memory(|m| m.focus().is_none()) {
+                        ui.memory_mut(|m| m.request_focus(re.id));
                     }
                 }
 
