@@ -150,7 +150,7 @@ impl GameCheetahEngine {
 
         let mut i = 0;
         let max_i: usize = old_results.len();
-        let max_block = max(1024 * 1024, max_i / 32);
+        let max_block = 200 * 1024;
         while i < max_i {
             let j = min(i + max_block, max_i);
             self.spawn_update_thread(search_index, old_results_arc.clone(), i, j);
@@ -191,19 +191,19 @@ impl GameCheetahEngine {
         let results: Arc<Mutex<Vec<SearchResult>>> = search_context.results.clone();
 
         self.search_threads.execute(move || {
-            thread::sleep(std::time::Duration::from_millis(100));
-            match old_results_arc.lock() {
+            let old_results = match old_results_arc.lock() {
                 Ok(old_results) => {
                     // println!("{}-{} max:{}", from, to, old_results.len());
-                    let old_results = old_results[from..to].to_vec();
-                    let handle: (i32, process_memory::Architecture) = (pid as process_memory::Pid).try_into_process_handle().unwrap();
-                    let updated_results = update_results(&old_results, &value_text, &handle);
-                    results.lock().unwrap().extend_from_slice(&updated_results);
+                    old_results[from..to].to_vec()
                 },
                 Err(err) => {
                     eprintln!("{}", err);
+                    return;
                 }
-            }
+            };
+            let handle: (i32, process_memory::Architecture) = (pid as process_memory::Pid).try_into_process_handle().unwrap();
+            let updated_results = update_results(&old_results, &value_text, &handle);
+            results.lock().unwrap().extend_from_slice(&updated_results);
             current_bytes.fetch_add(to - from, Ordering::SeqCst); 
         });
 
