@@ -4,7 +4,7 @@ use egui::{RichText, Color32};
 use egui_extras::{TableBuilder, Column};
 use process_memory::*;
 
-use crate::{SearchType, SearchValue, SearchContext, Message, MessageCommand, SearchResult, GameCheetahEngine};
+use crate::{SearchType, SearchValue, SearchContext, Message, MessageCommand, SearchResult, GameCheetahEngine, SearchMode};
 
 impl GameCheetahEngine {
     pub fn new(_: &eframe::CreationContext<'_>) -> Self {
@@ -173,7 +173,7 @@ impl GameCheetahEngine {
                 ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
                 ui.label("Name:");
                 if let Some(search_context) = self.searches.get_mut(search_index) {
-                    ui.add(egui::TextEdit::singleline(&mut search_context.description).hint_text("Search description").interactive(!search_context.searching));
+                    ui.add(egui::TextEdit::singleline(&mut search_context.description).hint_text("Search description").interactive(matches!(search_context.searching, SearchMode::None)));
                 }
             });
         }
@@ -184,7 +184,7 @@ impl GameCheetahEngine {
             if let Some(search_context) = self.searches.get_mut(search_index) {
                 let re = ui.add(egui::TextEdit::singleline(&mut search_context.search_value_text)
                     .hint_text(format!("Search for {} value", search_context.search_type.get_description_text()))
-                    .interactive(!search_context.searching)
+                    .interactive(matches!(search_context.searching, SearchMode::None))
                 );
 
                 let old_value = search_context.search_type.clone();
@@ -239,7 +239,7 @@ impl GameCheetahEngine {
             ui.label(RichText::new("Invalid number").color(Color32::from_rgb(200, 0, 0)));
         }
 
-        if self.searches.get(search_index).unwrap().searching {
+        if !matches!(self.searches.get(search_index).unwrap().searching, SearchMode::None) {
             self.render_search_bar(ui, search_index);
             ctx.request_repaint_after(Duration::from_millis(200));
             return;
@@ -269,6 +269,16 @@ impl GameCheetahEngine {
                         search_context.clear_results(&self.freeze_sender);
                         return;
                     }
+                    if self.show_results {
+                        if ui.button("Hide Results").clicked() {
+                            self.show_results = false;
+                            return;
+                        }
+
+                    } else if ui.button("Show Results").clicked() {
+                        self.show_results = true;
+                        return;
+                    }
 
                     if len == 1 {
                         ui.label(format!("found {} result.", len));
@@ -277,7 +287,7 @@ impl GameCheetahEngine {
                     }
                 });
         
-                if len > 0 && len < 20 {
+                if len > 0 && len < 20 || self.show_results {
                     self.render_result_table(ui, search_index);
                 }
             }
@@ -378,14 +388,23 @@ impl GameCheetahEngine {
         let mut search_context = self.searches.get_mut(search_index).unwrap();
         let current_bytes = search_context.current_bytes.load(Ordering::Acquire);
         let progress_bar = egui::widgets::ProgressBar::new(current_bytes as f32 / search_context.total_bytes as f32).show_percentage();
-        let bb = gabi::BytesConfig::default();
-        let current_bytes_out = bb.bytes(current_bytes as u64);
-        let total_bytes_out = bb.bytes(search_context.total_bytes as u64);
-        ui.label(format!("Search {}/{}", current_bytes_out, total_bytes_out));
+        match search_context.searching {
+            SearchMode::None => {},
+            SearchMode::Percent => {
+                ui.label(format!("Update {}/{}…", current_bytes, search_context.total_bytes));
+            },
+            SearchMode::Memory => {
+                let bb = gabi::BytesConfig::default();
+                let current_bytes_out = bb.bytes(current_bytes as u64);
+                let total_bytes_out = bb.bytes(search_context.total_bytes as u64);
+                ui.label(format!("Search {}/{}", current_bytes_out, total_bytes_out));
+            }
+        }
+
         ui.add(progress_bar);
         if current_bytes >= search_context.total_bytes {
             search_context.search_results = search_context.results.lock().unwrap().len() as i64;
-            search_context.searching = false;
+            search_context.searching = SearchMode::None;
         }
     }
 

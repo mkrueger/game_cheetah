@@ -2,13 +2,19 @@ use std::sync::{Arc, atomic::AtomicUsize, Mutex, mpsc};
 
 use crate::{SearchType, GameCheetahEngine, SearchResult, Message};
 
+pub enum SearchMode {
+    None,
+    Percent,
+    Memory
+}
+
 pub struct SearchContext {
     pub description: String,
 
     pub search_value_text: String,
     pub search_type: SearchType,
 
-    pub searching: bool,
+    pub searching: SearchMode,
     pub total_bytes: usize,
     pub current_bytes: Arc<AtomicUsize>,
     pub results: Arc<Mutex<Vec<SearchResult>>>,
@@ -22,7 +28,7 @@ impl SearchContext {
         Self {
             description,
             search_value_text: "".to_owned(),
-            searching: false,
+            searching: SearchMode::None,
             results: Arc::new(Mutex::new(Vec::new())),
             total_bytes: 0,
             current_bytes: Arc::new(AtomicUsize::new(0)),
@@ -33,15 +39,8 @@ impl SearchContext {
     }
 
     pub fn clear_results(&mut self, freeze_sender: &mpsc::Sender<Message>) {
-        match &mut self.results.lock() {
-            Ok(r) => {
-                GameCheetahEngine::remove_freezes_from(freeze_sender, &r.clone());
-                r.clear();
-            }
-            Err(err) => {
-                eprintln!("Error while clearing {}", err);
-            }
-        }
+        GameCheetahEngine::remove_freezes_from(freeze_sender, &self.results);
+        self.results.lock().unwrap().clear();
         self.search_results = -1;
     }
 }
