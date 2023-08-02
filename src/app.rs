@@ -9,8 +9,7 @@ use std::{
 };
 
 use crate::{
-    GameCheetahEngine, Message, MessageCommand, SearchContext, SearchMode, SearchResult,
-    SearchType, SearchValue,
+    GameCheetahEngine, Message, MessageCommand, SearchContext, SearchMode, SearchType, SearchValue,
 };
 
 impl GameCheetahEngine {
