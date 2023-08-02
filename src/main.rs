@@ -5,12 +5,16 @@ const APP_NAME: &str = "Game Cheetah";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(target_os = "linux")]
-fn main()
-{
+fn main() {
     use std::process::Command;
     if sudo::check() != sudo::RunningAs::Root {
         Command::new("pkexec")
-            .args(["env", format!("DISPLAY={}",  &std::env::var("DISPLAY").unwrap()).as_str(), format!("XAUTHORITY={}", &std::env::var("XAUTHORITY").unwrap()).as_str(), std::env::current_exe().unwrap().to_str().unwrap()])
+            .args([
+                "env",
+                format!("DISPLAY={}", &std::env::var("DISPLAY").unwrap()).as_str(),
+                format!("XAUTHORITY={}", &std::env::var("XAUTHORITY").unwrap()).as_str(),
+                std::env::current_exe().unwrap().to_str().unwrap(),
+            ])
             .output()
             .expect("failed to execute process");
         return;
@@ -24,12 +28,12 @@ fn main()
         format!("{APP_NAME} {VERSION}").as_str(),
         native_options,
         Box::new(|cc| Box::new(game_cheetah::GameCheetahEngine::new(cc))),
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 #[cfg(target_os = "macos")]
-fn main()
-{
+fn main() {
     // Log to stdout (if you run with `RUST_LOG=debug`).
     tracing_subscriber::fmt::init();
 
@@ -42,8 +46,7 @@ fn main()
 }
 
 #[cfg(target_os = "windows")]
-fn main()
-{
+fn main() {
     // Log to stdout (if you run with `RUST_LOG=debug`).
     tracing_subscriber::fmt::init();
 

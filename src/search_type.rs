@@ -7,7 +7,7 @@ pub enum SearchType {
     Int,
     Int64,
     Float,
-    Double
+    Double,
 }
 
 impl SearchType {
@@ -18,7 +18,7 @@ impl SearchType {
             SearchType::Int => "int (4 bytes)",
             SearchType::Int64 => "int64 (4 bytes)",
             SearchType::Float => "float (4 bytes)",
-            SearchType::Double => "double (8 bytes)"
+            SearchType::Double => "double (8 bytes)",
         }
     }
 
@@ -29,10 +29,10 @@ impl SearchType {
             SearchType::Int => 4,
             SearchType::Int64 => 4,
             SearchType::Float => 4,
-            SearchType::Double => 8
+            SearchType::Double => 8,
         }
     }
-    
+
     pub fn get_short_description_text(&self) -> &str {
         match self {
             SearchType::Guess => "Guess",
@@ -40,7 +40,7 @@ impl SearchType {
             SearchType::Int => "int",
             SearchType::Int64 => "int64",
             SearchType::Float => "float",
-            SearchType::Double => "double"
+            SearchType::Double => "double",
         }
     }
 
@@ -50,35 +50,38 @@ impl SearchType {
                 let parsed = txt.parse::<i16>();
                 match parsed {
                     Ok(f) => Ok(SearchValue(SearchType::Short, i16::to_le_bytes(f).to_vec())),
-                    Err(_) => Err("Invalid input")
+                    Err(_) => Err("Invalid input"),
                 }
             }
-            SearchType::Int =>  {
+            SearchType::Int => {
                 let parsed = txt.parse::<i32>();
                 match parsed {
                     Ok(f) => Ok(SearchValue(SearchType::Int, i32::to_le_bytes(f).to_vec())),
-                    Err(_) => Err("Invalid input")
+                    Err(_) => Err("Invalid input"),
                 }
             }
-            SearchType::Int64 =>  {
+            SearchType::Int64 => {
                 let parsed = txt.parse::<i64>();
                 match parsed {
                     Ok(f) => Ok(SearchValue(SearchType::Int64, i64::to_le_bytes(f).to_vec())),
-                    Err(_) => Err("Invalid input")
+                    Err(_) => Err("Invalid input"),
                 }
             }
             SearchType::Float => {
                 let parsed = txt.parse::<f32>();
                 match parsed {
                     Ok(f) => Ok(SearchValue(SearchType::Float, f32::to_le_bytes(f).to_vec())),
-                    Err(_) => Err("Invalid input")
+                    Err(_) => Err("Invalid input"),
                 }
             }
             SearchType::Double => {
                 let parsed = txt.parse::<f64>();
                 match parsed {
-                    Ok(f) => Ok(SearchValue(SearchType::Double, f64::to_le_bytes(f).to_vec())),
-                    Err(_) => Err("Invalid input")
+                    Ok(f) => Ok(SearchValue(
+                        SearchType::Double,
+                        f64::to_le_bytes(f).to_vec(),
+                    )),
+                    Err(_) => Err("Invalid input"),
                 }
             }
             SearchType::Guess => {

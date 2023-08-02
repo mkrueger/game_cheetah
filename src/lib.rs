@@ -18,21 +18,21 @@ pub enum MessageCommand {
     // Quit,
     Freeze,
     Unfreeze,
-    Pid
+    Pid,
 }
 
 pub struct Message {
     msg: MessageCommand,
     addr: usize,
-    value: SearchValue
+    value: SearchValue,
 }
 
 impl Message {
-    pub fn from_addr(cmd: MessageCommand, addr: usize) -> Self  {
+    pub fn from_addr(cmd: MessageCommand, addr: usize) -> Self {
         Message {
             msg: cmd,
             addr,
-            value: SearchValue(SearchType::Guess, Vec::new())
+            value: SearchValue(SearchType::Guess, Vec::new()),
         }
     }
 }

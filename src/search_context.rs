@@ -1,11 +1,11 @@
-use std::sync::{Arc, atomic::AtomicUsize, Mutex, mpsc};
+use std::sync::{atomic::AtomicUsize, mpsc, Arc, Mutex};
 
-use crate::{SearchType, GameCheetahEngine, SearchResult, Message};
+use crate::{GameCheetahEngine, Message, SearchResult, SearchType};
 
 pub enum SearchMode {
     None,
     Percent,
-    Memory
+    Memory,
 }
 
 pub struct SearchContext {
@@ -34,7 +34,7 @@ impl SearchContext {
             current_bytes: Arc::new(AtomicUsize::new(0)),
             search_results: -1,
             search_type: SearchType::Guess,
-            old_results: Vec::new()
+            old_results: Vec::new(),
         }
     }
 

@@ -1,10 +1,16 @@
-
-use std::{sync::{Arc, atomic::Ordering, Mutex}, time::Duration, cmp::max};
-use egui::{RichText, Color32};
-use egui_extras::{TableBuilder, Column};
+use egui::{Color32, RichText};
+use egui_extras::{Column, TableBuilder};
 use process_memory::*;
+use std::{
+    cmp::max,
+    sync::{atomic::Ordering, Arc, Mutex},
+    time::Duration,
+};
 
-use crate::{SearchType, SearchValue, SearchContext, Message, MessageCommand, SearchResult, GameCheetahEngine, SearchMode};
+use crate::{
+    GameCheetahEngine, Message, MessageCommand, SearchContext, SearchMode, SearchResult,
+    SearchType, SearchValue,
+};
 
 impl GameCheetahEngine {
     pub fn new(_: &eframe::CreationContext<'_>) -> Self {
@@ -20,8 +26,10 @@ impl GameCheetahEngine {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
 
-            let i = ui.add(egui::TextEdit::singleline(&mut self.process_filter).hint_text("Filter processes"));
-            if ui.memory( |m| m.focus().is_none()) {
+            let i = ui.add(
+                egui::TextEdit::singleline(&mut self.process_filter).hint_text("Filter processes"),
+            );
+            if ui.memory(|m| m.focus().is_none()) {
                 ui.memory_mut(|m| m.request_focus(i.id));
             }
 
@@ -45,7 +53,7 @@ impl GameCheetahEngine {
             .column(Column::initial(80.0).at_least(40.0))
             .column(Column::remainder().at_least(60.0));
 
-            table
+        table
             .header(20.0, |mut header| {
                 header.col(|ui| {
                     ui.heading("Pid");
@@ -64,18 +72,27 @@ impl GameCheetahEngine {
                 let filter = self.process_filter.to_ascii_uppercase();
 
                 for process in &self.processes {
-                    if !filter.is_empty() && (
-                        !process.name.to_ascii_uppercase().contains(filter.as_str()) && 
-                        !process.cmd.to_ascii_uppercase().contains(filter.as_str()) && 
-                        !process.pid.to_string().contains(filter.as_str())) {
+                    if !filter.is_empty()
+                        && (!process.name.to_ascii_uppercase().contains(filter.as_str())
+                            && !process.cmd.to_ascii_uppercase().contains(filter.as_str())
+                            && !process.pid.to_string().contains(filter.as_str()))
+                    {
                         continue;
                     }
                     let row_height = 17.0;
                     body.row(row_height, |mut row| {
                         row.col(|ui| {
-                            if ui.selectable_label(false, process.pid.to_string()).clicked() {
+                            if ui
+                                .selectable_label(false, process.pid.to_string())
+                                .clicked()
+                            {
                                 self.pid = process.pid as i32;
-                                self.freeze_sender.send(Message::from_addr(MessageCommand::Pid, process.pid as usize)).unwrap_or_default();
+                                self.freeze_sender
+                                    .send(Message::from_addr(
+                                        MessageCommand::Pid,
+                                        process.pid as usize,
+                                    ))
+                                    .unwrap_or_default();
                                 self.process_name = process.name.clone();
                                 self.show_process_window = false;
                             }
@@ -110,25 +127,31 @@ impl eframe::App for GameCheetahEngine {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
                 ui.label("Process:");
-    
-                if ui.button(if self.pid != 0 {
-                    format!("{} ({})", self.process_name, self.pid)
-                } else {
-                    "<no process set>".to_string()
-                }).clicked() {
+
+                if ui
+                    .button(if self.pid != 0 {
+                        format!("{} ({})", self.process_name, self.pid)
+                    } else {
+                        "<no process set>".to_string()
+                    })
+                    .clicked()
+                {
                     self.show_process_window = !self.show_process_window;
-    
+
                     if self.show_process_window {
                         self.show_process_window();
                         return;
                     }
                 }
-    
+
                 if ui.button("ｘ").clicked() {
                     self.pid = 0;
-                    self.freeze_sender.send(Message::from_addr(MessageCommand::Pid, 0)).unwrap_or_default();
+                    self.freeze_sender
+                        .send(Message::from_addr(MessageCommand::Pid, 0))
+                        .unwrap_or_default();
                     self.searches.clear();
-                    self.searches.push(Box::new(SearchContext::new("default".to_string())));
+                    self.searches
+                        .push(Box::new(SearchContext::new("default".to_string())));
                     self.process_filter.clear();
                 }
             });
@@ -142,7 +165,13 @@ impl eframe::App for GameCheetahEngine {
                         ui.spacing_mut().item_spacing = egui::Vec2::splat(8.0);
 
                         for i in 0..self.searches.len() {
-                            if ui.selectable_label(self.current_search == i, self.searches[i].description.clone()).clicked() {
+                            if ui
+                                .selectable_label(
+                                    self.current_search == i,
+                                    self.searches[i].description.clone(),
+                                )
+                                .clicked()
+                            {
                                 self.current_search = i;
                             }
                         }
@@ -180,7 +209,11 @@ impl GameCheetahEngine {
                 ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
                 ui.label("Name:");
                 if let Some(search_context) = self.searches.get_mut(search_index) {
-                    ui.add(egui::TextEdit::singleline(&mut search_context.description).hint_text("Search description").interactive(matches!(search_context.searching, SearchMode::None)));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut search_context.description)
+                            .hint_text("Search description")
+                            .interactive(matches!(search_context.searching, SearchMode::None)),
+                    );
                 }
             });
         }
@@ -189,29 +222,62 @@ impl GameCheetahEngine {
             ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
             ui.label("Value:");
             if let Some(search_context) = self.searches.get_mut(search_index) {
-                let re = ui.add(egui::TextEdit::singleline(&mut search_context.search_value_text)
-                    .hint_text(format!("Search for {} value", search_context.search_type.get_description_text()))
-                    .interactive(matches!(search_context.searching, SearchMode::None))
+                let re = ui.add(
+                    egui::TextEdit::singleline(&mut search_context.search_value_text)
+                        .hint_text(format!(
+                            "Search for {} value",
+                            search_context.search_type.get_description_text()
+                        ))
+                        .interactive(matches!(search_context.searching, SearchMode::None)),
                 );
 
                 let old_value = search_context.search_type;
                 egui::ComboBox::from_id_source(1)
-                .selected_text(search_context.search_type.get_description_text())
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut search_context.search_type, SearchType::Guess, SearchType::Guess.get_short_description_text());
-                    ui.selectable_value(&mut search_context.search_type, SearchType::Short, SearchType::Short.get_short_description_text());
-                    ui.selectable_value(&mut search_context.search_type, SearchType::Int, SearchType::Int.get_short_description_text());
-                    ui.selectable_value(&mut search_context.search_type, SearchType::Int64, SearchType::Int64.get_short_description_text());
-                    ui.selectable_value(&mut search_context.search_type, SearchType::Float, SearchType::Float.get_short_description_text());
-                    ui.selectable_value(&mut search_context.search_type, SearchType::Double, SearchType::Double.get_short_description_text());
-                });
+                    .selected_text(search_context.search_type.get_description_text())
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut search_context.search_type,
+                            SearchType::Guess,
+                            SearchType::Guess.get_short_description_text(),
+                        );
+                        ui.selectable_value(
+                            &mut search_context.search_type,
+                            SearchType::Short,
+                            SearchType::Short.get_short_description_text(),
+                        );
+                        ui.selectable_value(
+                            &mut search_context.search_type,
+                            SearchType::Int,
+                            SearchType::Int.get_short_description_text(),
+                        );
+                        ui.selectable_value(
+                            &mut search_context.search_type,
+                            SearchType::Int64,
+                            SearchType::Int64.get_short_description_text(),
+                        );
+                        ui.selectable_value(
+                            &mut search_context.search_type,
+                            SearchType::Float,
+                            SearchType::Float.get_short_description_text(),
+                        );
+                        ui.selectable_value(
+                            &mut search_context.search_type,
+                            SearchType::Double,
+                            SearchType::Double.get_short_description_text(),
+                        );
+                    });
 
                 if old_value != search_context.search_type {
                     search_context.clear_results(&self.freeze_sender);
                 }
 
-
-                if ui.add_enabled(!search_context.old_results.is_empty(), egui::Button::new("Undo")).clicked() {
+                if ui
+                    .add_enabled(
+                        !search_context.old_results.is_empty(),
+                        egui::Button::new("Undo"),
+                    )
+                    .clicked()
+                {
                     if let Some(old) = search_context.old_results.pop() {
                         search_context.search_results = old.len() as i64;
                         search_context.results = Arc::new(Mutex::new(old));
@@ -220,8 +286,15 @@ impl GameCheetahEngine {
                 }
 
                 if re.lost_focus() && re.ctx.input(|i| i.key_down(egui::Key::Enter)) {
-                    let len = self.searches.get(search_index).unwrap().results.lock().unwrap().len();
-                    if len == 0 { 
+                    let len = self
+                        .searches
+                        .get(search_index)
+                        .unwrap()
+                        .results
+                        .lock()
+                        .unwrap()
+                        .len();
+                    if len == 0 {
                         self.initial_search(search_index);
                     } else {
                         self.filter_searches(search_index);
@@ -237,19 +310,35 @@ impl GameCheetahEngine {
         });
 
         let search_context = self.searches.get(search_index).unwrap();
-        if !search_context.search_value_text.is_empty() && search_context.search_type.from_string(&search_context.search_value_text).is_err() {
+        if !search_context.search_value_text.is_empty()
+            && search_context
+                .search_type
+                .from_string(&search_context.search_value_text)
+                .is_err()
+        {
             ui.label(RichText::new("Invalid number").color(Color32::from_rgb(200, 0, 0)));
         }
 
-        if !matches!(self.searches.get(search_index).unwrap().searching, SearchMode::None) {
+        if !matches!(
+            self.searches.get(search_index).unwrap().searching,
+            SearchMode::None
+        ) {
             self.render_search_bar(ui, search_index);
             ctx.request_repaint_after(Duration::from_millis(200));
             return;
         }
 
-        if self.searches.get(search_index).unwrap().search_value_text.as_str().parse::<i32>().is_ok()  {
+        if self
+            .searches
+            .get(search_index)
+            .unwrap()
+            .search_value_text
+            .as_str()
+            .parse::<i32>()
+            .is_ok()
+        {
             let len = self.searches.get(search_index).unwrap().search_results;
-            if len <= 0 { 
+            if len <= 0 {
                 if ui.button("Initial search").clicked() {
                     self.initial_search(search_index);
                     return;
@@ -264,7 +353,7 @@ impl GameCheetahEngine {
                     let search_context = self.searches.get_mut(search_index).unwrap();
 
                     ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
-        
+
                     if ui.button("Update").clicked() {
                         self.filter_searches(search_index);
                         return;
@@ -279,7 +368,6 @@ impl GameCheetahEngine {
                                 self.show_results = false;
                                 return;
                             }
-
                         } else if ui.button("Show Results").clicked() {
                             self.show_results = true;
                             return;
@@ -292,7 +380,7 @@ impl GameCheetahEngine {
                         ui.label(format!("found {len} results."));
                     }
                 });
-        
+
                 if len > 0 && len < auto_show_treshold || self.show_results {
                     self.render_result_table(ui, search_index);
                 }
@@ -304,101 +392,144 @@ impl GameCheetahEngine {
         let search_context = self.searches.get_mut(search_index).unwrap();
 
         let table = TableBuilder::new(ui)
-        .striped(true)
-        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::initial(120.0).at_least(40.0))
-        .column(Column::initial(120.0).at_least(40.0))
-        .column(Column::remainder().at_least(60.0));
+            .striped(true)
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+            .column(Column::initial(120.0).at_least(40.0))
+            .column(Column::initial(120.0).at_least(40.0))
+            .column(Column::remainder().at_least(60.0));
         table
-        .header(20.0, |mut header| {
-            header.col(|ui| {
-                ui.heading("Address");
-            });
-            header.col(|ui| {
-                ui.heading("Value");
-            });
-            header.col(|ui| {
-                 ui.heading("Freezed");
-            });
-        })
-        .body(|body| {
-            let row_height = 17.0;
-            let results = search_context.results.lock().unwrap();
-            let num_rows = results.len();
-            
-            body.rows(row_height, num_rows, |row_index, mut row| {
-                let result = &results[row_index];
-                row.col(|ui| {
-                    ui.label(format!("0x{:X}", result.addr));
+            .header(20.0, |mut header| {
+                header.col(|ui| {
+                    ui.heading("Address");
                 });
-                row.col(|ui| {
-                    if let Ok (handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
-                        if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
-                            let val = SearchValue(result.search_type, buf);
-                            let mut value_text  = val.to_string();
-                            let old_text = value_text.clone();
-                            ui.add(egui::TextEdit::singleline(&mut value_text));
-                            if old_text != value_text {
-                                let val = result.search_type.from_string(&value_text);
-                                match val {
-                                    Ok(value) => {
-                                        handle.put_address(result.addr, &value.1).unwrap_or_default();
-                                        if result.freezed {
-                                            self.freeze_sender.send(Message {
-                                                msg: MessageCommand::Freeze,
-                                                addr: result.addr,
-                                                value
-                                            }).unwrap_or_default();
+                header.col(|ui| {
+                    ui.heading("Value");
+                });
+                header.col(|ui| {
+                    ui.heading("Freezed");
+                });
+            })
+            .body(|body| {
+                let row_height = 17.0;
+                let results = search_context.results.lock().unwrap();
+                let num_rows = results.len();
+
+                body.rows(row_height, num_rows, |row_index, mut row| {
+                    let result = &results[row_index];
+                    row.col(|ui| {
+                        ui.label(format!("0x{:X}", result.addr));
+                    });
+                    row.col(|ui| {
+                        if let Ok(handle) =
+                            (self.pid as process_memory::Pid).try_into_process_handle()
+                        {
+                            if let Ok(buf) = copy_address(
+                                result.addr,
+                                result.search_type.get_byte_length(),
+                                &handle,
+                            ) {
+                                let val = SearchValue(result.search_type, buf);
+                                let mut value_text = val.to_string();
+                                let old_text = value_text.clone();
+                                ui.add(egui::TextEdit::singleline(&mut value_text));
+                                if old_text != value_text {
+                                    let val = result.search_type.from_string(&value_text);
+                                    match val {
+                                        Ok(value) => {
+                                            handle
+                                                .put_address(result.addr, &value.1)
+                                                .unwrap_or_default();
+                                            if result.freezed {
+                                                self.freeze_sender
+                                                    .send(Message {
+                                                        msg: MessageCommand::Freeze,
+                                                        addr: result.addr,
+                                                        value,
+                                                    })
+                                                    .unwrap_or_default();
+                                            }
+                                        }
+                                        Err(err) => {
+                                            eprintln!(
+                                                "Error converting {:?}: {}",
+                                                result.search_type, err
+                                            );
+                                            self.error_text = format!(
+                                                "Error converting {:?}: {}",
+                                                result.search_type, err
+                                            );
                                         }
                                     }
-                                    Err(err) => {
-                                        eprintln!("Error converting {:?}: {}", result.search_type, err);
-                                        self.error_text = format!("Error converting {:?}: {}", result.search_type, err);
+                                }
+                            } else {
+                                ui.label("<error>");
+                            }
+                        }
+                    });
+                    row.col(|ui| {
+                        let mut b = result.freezed;
+                        if ui.checkbox(&mut b, "").changed() {
+                            if let Ok(handle) =
+                                (self.pid as process_memory::Pid).try_into_process_handle()
+                            {
+                                if let Ok(buf) = copy_address(
+                                    result.addr,
+                                    result.search_type.get_byte_length(),
+                                    &handle,
+                                ) {
+                                    search_context
+                                        .results
+                                        .lock()
+                                        .as_mut()
+                                        .unwrap()
+                                        .remove(row_index);
+                                    if b {
+                                        self.freeze_sender
+                                            .send(Message {
+                                                msg: MessageCommand::Freeze,
+                                                addr: result.addr,
+                                                value: SearchValue(result.search_type, buf),
+                                            })
+                                            .unwrap_or_default();
+                                    } else {
+                                        self.freeze_sender
+                                            .send(Message::from_addr(
+                                                MessageCommand::Unfreeze,
+                                                result.addr,
+                                            ))
+                                            .unwrap_or_default();
                                     }
+                                    search_context.results.lock().as_mut().unwrap().insert(
+                                        row_index,
+                                        SearchResult {
+                                            addr: result.addr,
+                                            search_type: result.search_type,
+                                            freezed: b,
+                                        },
+                                    );
                                 }
                             }
-                        } else {
-                            ui.label("<error>");
                         }
-                    }
-                });
-                row.col(|ui| {
-                    let mut b = result.freezed;
-                    if ui.checkbox(&mut b, "").changed() {
-                        if let Ok (handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
-                            if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
-                                search_context.results.lock().as_mut().unwrap().remove(row_index);
-                                if b {
-                                    self.freeze_sender.send(Message {
-                                        msg: MessageCommand::Freeze,
-                                        addr: result.addr,
-                                        value: SearchValue(result.search_type, buf)
-                                    }).unwrap_or_default();
-                                } else {
-                                    self.freeze_sender.send(Message::from_addr(MessageCommand::Unfreeze, result.addr)).unwrap_or_default();
-                                }
-                                search_context.results.lock().as_mut().unwrap().insert(row_index, SearchResult {
-                                    addr: result.addr,
-                                    search_type: result.search_type,
-                                    freezed: b
-                                });
-                            }
-                        }
-                    }
+                    });
                 });
             });
-        });
     }
 
     fn render_search_bar(&mut self, ui: &mut egui::Ui, search_index: usize) {
         let mut search_context = self.searches.get_mut(search_index).unwrap();
         let current_bytes = search_context.current_bytes.load(Ordering::Acquire);
-        let progress_bar = egui::widgets::ProgressBar::new(current_bytes as f32 / search_context.total_bytes as f32).show_percentage();
+        let progress_bar = egui::widgets::ProgressBar::new(
+            current_bytes as f32 / search_context.total_bytes as f32,
+        )
+        .show_percentage();
         match search_context.searching {
-            SearchMode::None => {},
+            SearchMode::None => {}
             SearchMode::Percent => {
-                ui.label(format!("Update {}/{}…", current_bytes, search_context.total_bytes));
-            },
+                ui.label(format!(
+                    "Update {}/{}…",
+                    current_bytes, search_context.total_bytes
+                ));
+            }
             SearchMode::Memory => {
                 let bb = gabi::BytesConfig::default();
                 let current_bytes_out = bb.bytes(current_bytes as u64);
@@ -413,6 +544,4 @@ impl GameCheetahEngine {
             search_context.searching = SearchMode::None;
         }
     }
-
 }
-
