@@ -1,5 +1,5 @@
 
-use std::{sync::{Arc, atomic::Ordering, Mutex}, time::Duration};
+use std::{sync::{Arc, atomic::Ordering, Mutex}, time::Duration, cmp::max};
 use egui::{RichText, Color32};
 use egui_extras::{TableBuilder, Column};
 use process_memory::*;
@@ -150,7 +150,7 @@ impl eframe::App for GameCheetahEngine {
                             self.remove_freezes(self.current_search);
                             self.searches.remove(self.current_search);
                             if self.current_search >= self.searches.len() - 1 {
-                                self.current_search -= 1;
+                                self.current_search = max(0, self.current_search - 1);
                             }
                             return;
                         }
