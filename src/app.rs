@@ -3,7 +3,6 @@ use egui_extras::{Column, TableBuilder};
 use i18n_embed_fl::fl;
 use process_memory::*;
 use std::{
-    cmp::max,
     sync::{atomic::Ordering, Arc, Mutex},
     time::Duration,
 };
@@ -90,7 +89,7 @@ impl GameCheetahEngine {
                                 .selectable_label(false, process.pid.to_string())
                                 .clicked()
                             {
-                                self.pid = process.pid as i32;
+                                self.pid = process.pid;
                                 self.freeze_sender
                                     .send(Message::from_addr(
                                         MessageCommand::Pid,

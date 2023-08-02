@@ -17,14 +17,14 @@ use sysinfo::*;
 use threadpool::ThreadPool;
 
 pub struct ProcessInfo {
-    pub pid: u32,
+    pub pid: process_memory::Pid,
     pub name: String,
     pub cmd: String,
     pub memory: usize,
 }
 
 pub struct GameCheetahEngine {
-    pub pid: i32,
+    pub pid: process_memory::Pid,
     pub process_name: String,
     pub show_process_window: bool,
 
@@ -219,12 +219,13 @@ impl GameCheetahEngine {
     pub fn show_process_window(&mut self) {
         let sys = System::new_all();
         self.processes.clear();
-        for (pid, process) in sys.processes() {
+        for (pid2, process) in sys.processes() {
             if process.memory() == 0 {
                 continue;
             }
+            let pid = pid2.as_u32();
             self.processes.push(ProcessInfo {
-                pid: pid.as_u32(),
+                pid: pid.try_into().unwrap(),
                 name: process.name().to_string(),
                 cmd: process.cmd().join(" "),
                 memory: process.memory() as usize,
@@ -260,9 +261,7 @@ impl GameCheetahEngine {
                     return;
                 }
             };
-            let handle: (i32, process_memory::Architecture) = (pid as process_memory::Pid)
-                .try_into_process_handle()
-                .unwrap();
+            let handle = pid.try_into_process_handle().unwrap();
             let updated_results = update_results(&old_results, &value_text, &handle);
             results.lock().unwrap().extend_from_slice(&updated_results);
             current_bytes.fetch_add(to - from, Ordering::SeqCst);
@@ -328,11 +327,14 @@ impl GameCheetahEngine {
     }
 }
 
-fn update_results(
+fn update_results<T>(
     old_results: &[SearchResult],
     value_text: &str,
-    handle: &(i32, process_memory::Architecture),
-) -> Vec<SearchResult> {
+    handle: &T,
+) -> Vec<SearchResult>
+where
+    T: process_memory::CopyAddress,
+{
     let mut results = Vec::new();
     for result in old_results {
         match result.search_type.from_string(value_text) {

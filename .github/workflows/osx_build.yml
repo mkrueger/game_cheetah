@@ -1,4 +1,4 @@
-name: Windows Build
+name: OSX Build
 
 on:
   push:
@@ -22,3 +22,13 @@ jobs:
       with:
         name: game_cheetah_osx
         path: target/release/game_cheetah
+  release-project:
+    name: Release project
+    runs-on: macos-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: game_cheetah_osx
+      - name: Test artifact download
+        run: ls -R

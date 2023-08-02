@@ -36,7 +36,7 @@ boyer-moore-magiclen = "0.2.16"
 proc-maps = "0.3.1"
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
-proc-maps = "0.2.1"
+proc-maps = "0.3.1"
 
 # native:
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
