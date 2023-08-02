@@ -27,6 +27,10 @@ needle = "0.1.1"
 threadpool = "1.0"
 sudo = "0.6.0"
 gabi = "0.2.6"
+i18n-embed = { version = "0.13.4", features = ["fluent-system", "desktop-requester"]} 
+i18n-embed-fl = "0.6.4"
+once_cell = "1.16.0"
+rust-embed = "6.4.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 proc-maps = "0.3.1"
