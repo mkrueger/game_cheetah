@@ -22,3 +22,13 @@ jobs:
       with:
         name: game_cheetah_windows
         path: target/release/game_cheetah.exe
+  release-project:
+    name: Release project
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: game_cheetah_windows
+      - name: Test artifact download
+        run: ls -R

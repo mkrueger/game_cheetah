@@ -17,7 +17,7 @@ use sysinfo::*;
 use threadpool::ThreadPool;
 
 pub struct ProcessInfo {
-    pub pid: u32,
+    pub pid: process_memory::Pid,
     pub name: String,
     pub cmd: String,
     pub memory: usize,
@@ -219,12 +219,13 @@ impl GameCheetahEngine {
     pub fn show_process_window(&mut self) {
         let sys = System::new_all();
         self.processes.clear();
-        for (pid, process) in sys.processes() {
+        for (pid2, process) in sys.processes() {
             if process.memory() == 0 {
                 continue;
             }
+            let pid = pid2.as_u32();
             self.processes.push(ProcessInfo {
-                pid: pid.as_u32(),
+                pid: pid.try_into().unwrap(),
                 name: process.name().to_string(),
                 cmd: process.cmd().join(" "),
                 memory: process.memory() as usize,
@@ -260,9 +261,7 @@ impl GameCheetahEngine {
                     return;
                 }
             };
-            let handle = (pid as u32)
-                .try_into_process_handle()
-                .unwrap();
+            let handle = pid.try_into_process_handle().unwrap();
             let updated_results = update_results(&old_results, &value_text, &handle);
             results.lock().unwrap().extend_from_slice(&updated_results);
             current_bytes.fetch_add(to - from, Ordering::SeqCst);
@@ -334,7 +333,7 @@ fn update_results<T>(
     handle: &T,
 ) -> Vec<SearchResult>
 where
-    T: process_memory::CopyAddress
+    T: process_memory::CopyAddress,
 {
     let mut results = Vec::new();
     for result in old_results {
