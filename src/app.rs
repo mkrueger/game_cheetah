@@ -256,6 +256,8 @@ impl GameCheetahEngine {
                     ui.label("No results found.".to_string());
                 }
             } else {
+                let auto_show_treshold = 20;
+
                 ui.horizontal(|ui| {
                     let search_context = self.searches.get_mut(search_index).unwrap();
 
@@ -269,15 +271,17 @@ impl GameCheetahEngine {
                         search_context.clear_results(&self.freeze_sender);
                         return;
                     }
-                    if self.show_results {
-                        if ui.button("Hide Results").clicked() {
-                            self.show_results = false;
+                    if len >= auto_show_treshold {
+                        if self.show_results {
+                            if ui.button("Hide Results").clicked() {
+                                self.show_results = false;
+                                return;
+                            }
+
+                        } else if ui.button("Show Results").clicked() {
+                            self.show_results = true;
                             return;
                         }
-
-                    } else if ui.button("Show Results").clicked() {
-                        self.show_results = true;
-                        return;
                     }
 
                     if len == 1 {
@@ -287,7 +291,7 @@ impl GameCheetahEngine {
                     }
                 });
         
-                if len > 0 && len < 20 || self.show_results {
+                if len > 0 && len < auto_show_treshold || self.show_results {
                     self.render_result_table(ui, search_index);
                 }
             }
@@ -316,71 +320,71 @@ impl GameCheetahEngine {
             });
         })
         .body(|mut body| {
-            let cloned_results = search_context.results.lock().unwrap().clone();
             let row_height = 17.0;
-            for i in 0..cloned_results.len() {
-                let result = &cloned_results[i];
-                body.row(row_height, |mut row| {
-                    row.col(|ui| {
-                        ui.label(format!("0x{:X}", result.addr));
-                    });
-                    row.col(|ui| {
+            let results = search_context.results.lock().unwrap();
+            let num_rows = results.len();
+            
+            body.rows(row_height, num_rows, |row_index, mut row| {
+                let result = &results[row_index];
+                row.col(|ui| {
+                    ui.label(format!("0x{:X}", result.addr));
+                });
+                row.col(|ui| {
+                    if let Ok (handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
+                        if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
+                            let val = SearchValue(result.search_type, buf);
+                            let mut value_text  = val.to_string();
+                            let old_text = value_text.clone();
+                            ui.add(egui::TextEdit::singleline(&mut value_text));
+                            if old_text != value_text {
+                                let val = result.search_type.from_string(&value_text);
+                                match val {
+                                    Ok(value) => {
+                                        handle.put_address(result.addr, &value.1).unwrap_or_default();
+                                        if result.freezed {
+                                            self.freeze_sender.send(Message {
+                                                msg: MessageCommand::Freeze,
+                                                addr: result.addr,
+                                                value
+                                            }).unwrap_or_default();
+                                        }
+                                    }
+                                    Err(err) => {
+                                        eprintln!("Error converting {:?}: {}", result.search_type, err);
+                                        self.error_text = format!("Error converting {:?}: {}", result.search_type, err);
+                                    }
+                                }
+                            }
+                        } else {
+                            ui.label("<error>");
+                        }
+                    }
+                });
+                row.col(|ui| {
+                    let mut b = result.freezed;
+                    if ui.checkbox(&mut b, "").changed() {
                         if let Ok (handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
                             if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
-                                let val = SearchValue(result.search_type, buf);
-                                let mut value_text  = val.to_string();
-                                let old_text = value_text.clone();
-                                ui.add(egui::TextEdit::singleline(&mut value_text));
-                                if old_text != value_text {
-                                    let val = result.search_type.from_string(&value_text);
-                                    match val {
-                                        Ok(value) => {
-                                            handle.put_address(result.addr, &value.1).unwrap_or_default();
-                                            if result.freezed {
-                                                self.freeze_sender.send(Message {
-                                                    msg: MessageCommand::Freeze,
-                                                    addr: result.addr,
-                                                    value
-                                                }).unwrap_or_default();
-                                            }
-                                        }
-                                        Err(err) => {
-                                            eprintln!("Error converting {:?}: {}", result.search_type, err);
-                                            self.error_text = format!("Error converting {:?}: {}", result.search_type, err);
-                                        }
-                                    }
-                                }
-                            } else {
-                                ui.label("<error>");
-                            }
-                        }
-                    });
-                    row.col(|ui| {
-                        let mut b = result.freezed;
-                        if ui.checkbox(&mut b, "").changed() {
-                            if let Ok (handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
-                                if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
-                                    search_context.results.lock().as_mut().unwrap().remove(i);
-                                    if b {
-                                        self.freeze_sender.send(Message {
-                                            msg: MessageCommand::Freeze,
-                                            addr: result.addr,
-                                            value: SearchValue(result.search_type, buf)
-                                        }).unwrap_or_default();
-                                    } else {
-                                        self.freeze_sender.send(Message::from_addr(MessageCommand::Unfreeze, result.addr)).unwrap_or_default();
-                                    }
-                                    search_context.results.lock().as_mut().unwrap().insert(i, SearchResult {
+                                search_context.results.lock().as_mut().unwrap().remove(row_index);
+                                if b {
+                                    self.freeze_sender.send(Message {
+                                        msg: MessageCommand::Freeze,
                                         addr: result.addr,
-                                        search_type: result.search_type,
-                                        freezed: b
-                                    });
+                                        value: SearchValue(result.search_type, buf)
+                                    }).unwrap_or_default();
+                                } else {
+                                    self.freeze_sender.send(Message::from_addr(MessageCommand::Unfreeze, result.addr)).unwrap_or_default();
                                 }
+                                search_context.results.lock().as_mut().unwrap().insert(row_index, SearchResult {
+                                    addr: result.addr,
+                                    search_type: result.search_type,
+                                    freezed: b
+                                });
                             }
                         }
-                    });
+                    }
                 });
-            }
+            });
         });
     }
 
