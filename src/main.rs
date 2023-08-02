@@ -55,5 +55,5 @@ fn main() {
         format!("{} {}", APP_NAME, VERSION).as_str(),
         native_options,
         Box::new(|cc| Box::new(game_cheetah::GameCheetahEngine::new(cc))),
-    );
+    ).unwrap();
 }
