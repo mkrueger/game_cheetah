@@ -1,4 +1,7 @@
-use std::{sync::{atomic::AtomicUsize, mpsc, Arc, Mutex}, collections::HashSet};
+use std::{
+    collections::HashSet,
+    sync::{atomic::AtomicUsize, mpsc, Arc, Mutex},
+};
 
 use crate::{GameCheetahEngine, Message, SearchResult, SearchType};
 

@@ -469,7 +469,10 @@ impl GameCheetahEngine {
                                             handle
                                                 .put_address(result.addr, &value.1)
                                                 .unwrap_or_default();
-                                            if search_context.freezed_addresses.contains(&result.addr) {
+                                            if search_context
+                                                .freezed_addresses
+                                                .contains(&result.addr)
+                                            {
                                                 self.freeze_sender
                                                     .send(Message {
                                                         msg: MessageCommand::Freeze,

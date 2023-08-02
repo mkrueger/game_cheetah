@@ -198,7 +198,10 @@ impl GameCheetahEngine {
 
     pub fn remove_freezes(&mut self, search_index: usize) {
         let search_context = self.searches.get_mut(search_index).unwrap();
-        GameCheetahEngine::remove_freezes_from(&self.freeze_sender, &mut search_context.freezed_addresses);
+        GameCheetahEngine::remove_freezes_from(
+            &self.freeze_sender,
+            &mut search_context.freezed_addresses,
+        );
     }
 
     pub fn remove_freezes_from(
