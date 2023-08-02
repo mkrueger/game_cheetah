@@ -7,13 +7,20 @@ use crate::{SearchContext, Message, MessageCommand, SearchValue, SearchResult, S
 use proc_maps::get_process_maps;
 use sysinfo::*;
 
+pub struct ProcessInfo {
+    pub pid: u32,
+    pub name: String,
+    pub cmd: String,
+    pub memory: usize
+}
+
 pub struct GameCheetahEngine {
     pub pid: i32,
     pub process_name: String,
     pub show_process_window: bool,
 
     pub process_filter: String,
-    pub processes: Vec<(u32, String, String)>,
+    pub processes: Vec<ProcessInfo>,
 
     pub current_search: usize,
     pub searches: Vec<Box<SearchContext>>,
@@ -175,7 +182,13 @@ impl GameCheetahEngine {
         let sys = System::new_all();
         self.processes.clear();
         for (pid, process) in sys.processes() {
-            self.processes.push((pid.as_u32(), process.name().to_string(), process.cmd().join(" ")));
+            if process.memory() == 0 { continue; }
+            self.processes.push(ProcessInfo {
+                pid: pid.as_u32(),
+                name: process.name().to_string(),
+                cmd: process.cmd().join(" "),
+                memory: process.memory() as usize
+            });
         }
     }
 

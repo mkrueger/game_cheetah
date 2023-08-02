@@ -43,6 +43,7 @@ impl GameCheetahEngine {
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(Column::initial(80.0).at_least(40.0))
             .column(Column::initial(200.0).at_least(40.0))
+            .column(Column::initial(80.0).at_least(40.0))
             .column(Column::remainder().at_least(60.0));
 
             table
@@ -54,35 +55,43 @@ impl GameCheetahEngine {
                     ui.heading("Name");
                 });
                 header.col(|ui| {
+                    ui.heading("Memory");
+                });
+                header.col(|ui| {
                     ui.heading("Command");
                 });
             })
             .body(|mut body| {
                 let filter = self.process_filter.to_ascii_uppercase();
 
-                for (pid, process_name, cmd) in &self.processes {
+                for process in &self.processes {
                     if filter.len() > 0 && (
-                        !process_name.to_ascii_uppercase().contains(filter.as_str()) && 
-                        !cmd.to_ascii_uppercase().contains(filter.as_str()) && 
-                        !pid.to_string().contains(filter.as_str())) {
+                        !process.name.to_ascii_uppercase().contains(filter.as_str()) && 
+                        !process.cmd.to_ascii_uppercase().contains(filter.as_str()) && 
+                        !process.pid.to_string().contains(filter.as_str())) {
                         continue;
                     }
                     let row_height = 17.0;
                     body.row(row_height, |mut row| {
                         row.col(|ui| {
-                            if ui.selectable_label(false, pid.to_string()).clicked() {
-                                self.pid = *pid as i32;
-                                self.freeze_sender.send(Message::from_addr(MessageCommand::Pid, *pid as usize)).unwrap_or_default();
-                                self.process_name = process_name.clone();
+                            if ui.selectable_label(false, process.pid.to_string()).clicked() {
+                                self.pid = process.pid as i32;
+                                self.freeze_sender.send(Message::from_addr(MessageCommand::Pid, process.pid as usize)).unwrap_or_default();
+                                self.process_name = process.name.clone();
                                 self.show_process_window = false;
                             }
                         });
 
                         row.col(|ui| {
-                            ui.label(process_name);
+                            ui.label(&process.name);
                         });
                         row.col(|ui| {
-                            ui.label(cmd);
+                            let bb = gabi::BytesConfig::default();
+                            let memory = bb.bytes(process.memory as u64);
+                            ui.label(memory.to_string());
+                        });
+                        row.col(|ui| {
+                            ui.label(&process.cmd);
                         });
                     });
                 }
