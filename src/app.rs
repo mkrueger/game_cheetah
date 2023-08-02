@@ -549,7 +549,7 @@ impl GameCheetahEngine {
     }
 
     fn render_search_bar(&mut self, ui: &mut egui::Ui, search_index: usize) {
-        let mut search_context = self.searches.get_mut(search_index).unwrap();
+        let search_context = self.searches.get_mut(search_index).unwrap();
         let current_bytes = search_context.current_bytes.load(Ordering::Acquire);
         let progress_bar = egui::widgets::ProgressBar::new(
             current_bytes as f32 / search_context.total_bytes as f32,
