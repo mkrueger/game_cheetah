@@ -1,3 +1,5 @@
+use i18n_embed_fl::fl;
+
 use crate::SearchValue;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -10,15 +12,16 @@ pub enum SearchType {
     Double,
 }
 
+
 impl SearchType {
-    pub fn get_description_text(&self) -> &str {
+    pub fn get_description_text(&self) -> String {
         match self {
-            SearchType::Guess => "guess value (2-8 bytes)",
-            SearchType::Short => "short (2 bytes)",
-            SearchType::Int => "int (4 bytes)",
-            SearchType::Int64 => "int64 (4 bytes)",
-            SearchType::Float => "float (4 bytes)",
-            SearchType::Double => "double (8 bytes)",
+            SearchType::Guess => fl!(crate::LANGUAGE_LOADER, "guess-value-item"),
+            SearchType::Short => fl!(crate::LANGUAGE_LOADER, "short-value-item"),
+            SearchType::Int => fl!(crate::LANGUAGE_LOADER, "int-value-item"),
+            SearchType::Int64 => fl!(crate::LANGUAGE_LOADER, "int64-value-item"),
+            SearchType::Float => fl!(crate::LANGUAGE_LOADER, "float-value-item"),
+            SearchType::Double => fl!(crate::LANGUAGE_LOADER, "double-value-item"),
         }
     }
 
@@ -33,45 +36,45 @@ impl SearchType {
         }
     }
 
-    pub fn get_short_description_text(&self) -> &str {
+    pub fn get_short_description_text(&self) -> String {
         match self {
-            SearchType::Guess => "Guess",
-            SearchType::Short => "short",
-            SearchType::Int => "int",
-            SearchType::Int64 => "int64",
-            SearchType::Float => "float",
-            SearchType::Double => "double",
+            SearchType::Guess => fl!(crate::LANGUAGE_LOADER, "guess-descr"),
+            SearchType::Short => fl!(crate::LANGUAGE_LOADER, "short-descr"),
+            SearchType::Int => fl!(crate::LANGUAGE_LOADER, "int-descr"),
+            SearchType::Int64 => fl!(crate::LANGUAGE_LOADER, "int64-descr"),
+            SearchType::Float => fl!(crate::LANGUAGE_LOADER, "float-descr"),
+            SearchType::Double => fl!(crate::LANGUAGE_LOADER, "double-descr")
         }
     }
 
-    pub fn from_string(&self, txt: &str) -> Result<SearchValue, &str> {
+    pub fn from_string(&self, txt: &str) -> Result<SearchValue, String> {
         match self {
             SearchType::Short => {
                 let parsed = txt.parse::<i16>();
                 match parsed {
                     Ok(f) => Ok(SearchValue(SearchType::Short, i16::to_le_bytes(f).to_vec())),
-                    Err(_) => Err("Invalid input"),
+                    Err(_) => Err(fl!(crate::LANGUAGE_LOADER, "invalid-input-error")),
                 }
             }
             SearchType::Int => {
                 let parsed = txt.parse::<i32>();
                 match parsed {
                     Ok(f) => Ok(SearchValue(SearchType::Int, i32::to_le_bytes(f).to_vec())),
-                    Err(_) => Err("Invalid input"),
+                    Err(_) => Err(fl!(crate::LANGUAGE_LOADER, "invalid-input-error")),
                 }
             }
             SearchType::Int64 => {
                 let parsed = txt.parse::<i64>();
                 match parsed {
                     Ok(f) => Ok(SearchValue(SearchType::Int64, i64::to_le_bytes(f).to_vec())),
-                    Err(_) => Err("Invalid input"),
+                    Err(_) => Err(fl!(crate::LANGUAGE_LOADER, "invalid-input-error")),
                 }
             }
             SearchType::Float => {
                 let parsed = txt.parse::<f32>();
                 match parsed {
                     Ok(f) => Ok(SearchValue(SearchType::Float, f32::to_le_bytes(f).to_vec())),
-                    Err(_) => Err("Invalid input"),
+                    Err(_) => Err(fl!(crate::LANGUAGE_LOADER, "invalid-input-error")),
                 }
             }
             SearchType::Double => {
@@ -81,7 +84,7 @@ impl SearchType {
                         SearchType::Double,
                         f64::to_le_bytes(f).to_vec(),
                     )),
-                    Err(_) => Err("Invalid input"),
+                    Err(_) => Err(fl!(crate::LANGUAGE_LOADER, "invalid-input-error")),
                 }
             }
             SearchType::Guess => {
