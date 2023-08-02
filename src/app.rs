@@ -1,5 +1,5 @@
 
-use std::{sync::{Arc, atomic::{Ordering}, Mutex}, time::Duration};
+use std::{sync::{Arc, atomic::Ordering, Mutex}, time::Duration};
 use egui::{RichText, Color32};
 use egui_extras::{TableBuilder, Column};
 use process_memory::*;
@@ -33,7 +33,6 @@ impl GameCheetahEngine {
 
             if ui.button("Close").clicked() {
                 self.show_process_window = false;
-                return;
             }
         });
         ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
@@ -65,7 +64,7 @@ impl GameCheetahEngine {
                 let filter = self.process_filter.to_ascii_uppercase();
 
                 for process in &self.processes {
-                    if filter.len() > 0 && (
+                    if !filter.is_empty() && (
                         !process.name.to_ascii_uppercase().contains(filter.as_str()) && 
                         !process.cmd.to_ascii_uppercase().contains(filter.as_str()) && 
                         !process.pid.to_string().contains(filter.as_str())) {
@@ -157,7 +156,6 @@ impl eframe::App for GameCheetahEngine {
                         }
                         if ui.button("+").clicked() {
                             self.new_search();
-                            return;
                         }
                     });
                     ui.separator();
@@ -165,7 +163,7 @@ impl eframe::App for GameCheetahEngine {
 
                     ui.add_space(8.0);
                 }
-                if self.error_text.len() > 0 {
+                if !self.error_text.is_empty() {
                     ui.label(self.error_text.clone());
                 }
 
@@ -196,7 +194,7 @@ impl GameCheetahEngine {
                     .interactive(matches!(search_context.searching, SearchMode::None))
                 );
 
-                let old_value = search_context.search_type.clone();
+                let old_value = search_context.search_type;
                 egui::ComboBox::from_id_source(1)
                 .selected_text(search_context.search_type.get_description_text())
                 .show_ui(ui, |ui| {
@@ -213,7 +211,7 @@ impl GameCheetahEngine {
                 }
 
 
-                if ui.add_enabled(search_context.old_results.len() > 0, egui::Button::new("Undo")).clicked() {
+                if ui.add_enabled(!search_context.old_results.is_empty(), egui::Button::new("Undo")).clicked() {
                     if let Some(old) = search_context.old_results.pop() {
                         search_context.search_results = old.len() as i64;
                         search_context.results = Arc::new(Mutex::new(old));
@@ -228,23 +226,18 @@ impl GameCheetahEngine {
                     } else {
                         self.filter_searches(search_index);
                     }
-                } else {
-                    if ui.memory(|m| m.focus().is_none()) {
-                        ui.memory_mut(|m| m.request_focus(re.id));
-                    }
+                } else if ui.memory(|m| m.focus().is_none()) {
+                    ui.memory_mut(|m| m.request_focus(re.id));
                 }
 
-                if self.searches.len() <= 1 {
-                    if ui.button("+").clicked() {
-                        self.new_search();
-                        return;
-                    }
+                if self.searches.len() <= 1 && ui.button("+").clicked() {
+                    self.new_search();
                 }
             }
         });
 
         let search_context = self.searches.get(search_index).unwrap();
-        if search_context.search_value_text.len() > 0 && search_context.search_type.from_string(&search_context.search_value_text).is_err() {
+        if !search_context.search_value_text.is_empty() && search_context.search_type.from_string(&search_context.search_value_text).is_err() {
             ui.label(RichText::new("Invalid number").color(Color32::from_rgb(200, 0, 0)));
         }
 
@@ -254,7 +247,7 @@ impl GameCheetahEngine {
             return;
         }
 
-        if i32::from_str_radix(self.searches.get(search_index).unwrap().search_value_text.as_str(), 10).is_ok()  {
+        if self.searches.get(search_index).unwrap().search_value_text.as_str().parse::<i32>().is_ok()  {
             let len = self.searches.get(search_index).unwrap().search_results;
             if len <= 0 { 
                 if ui.button("Initial search").clicked() {
@@ -294,9 +287,9 @@ impl GameCheetahEngine {
                     }
 
                     if len == 1 {
-                        ui.label(format!("found {} result.", len));
+                        ui.label(format!("found {len} result."));
                     } else {
-                        ui.label(format!("found {} results.", len));
+                        ui.label(format!("found {len} results."));
                     }
                 });
         
@@ -328,7 +321,7 @@ impl GameCheetahEngine {
                  ui.heading("Freezed");
             });
         })
-        .body(|mut body| {
+        .body(|body| {
             let row_height = 17.0;
             let results = search_context.results.lock().unwrap();
             let num_rows = results.len();
@@ -410,7 +403,7 @@ impl GameCheetahEngine {
                 let bb = gabi::BytesConfig::default();
                 let current_bytes_out = bb.bytes(current_bytes as u64);
                 let total_bytes_out = bb.bytes(search_context.total_bytes as u64);
-                ui.label(format!("Search {}/{}", current_bytes_out, total_bytes_out));
+                ui.label(format!("Search {current_bytes_out}/{total_bytes_out}"));
             }
         }
 

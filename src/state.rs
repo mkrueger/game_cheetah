@@ -1,4 +1,4 @@
-use std::{thread, sync::{mpsc, atomic::Ordering, Arc, Mutex}, collections::HashMap, time::Duration, cmp::{max, min}, mem};
+use std::{thread, sync::{mpsc, atomic::Ordering, Arc, Mutex}, collections::HashMap, time::Duration, cmp::min, mem};
 
 use needle::BoyerMoore;
 use process_memory::{TryIntoProcessHandle, PutAddress, copy_address};
@@ -96,7 +96,7 @@ impl GameCheetahEngine {
         
         self.searches.get_mut(search_index).unwrap().searching = SearchMode::Memory;
 
-        match get_process_maps(self.pid.try_into().unwrap()) {
+        match get_process_maps(self.pid) {
             Ok(maps) => {
                 self.searches.get_mut(search_index).unwrap().total_bytes = 0;
                 self.searches.get_mut(search_index).unwrap().current_bytes.swap(0, Ordering::SeqCst);
@@ -110,7 +110,7 @@ impl GameCheetahEngine {
                     } else if cfg!(target_os = "linux") {
                     
                     } else {
-                        if !map.is_write() || map.is_exec() || map.filename().is_none() || map.size() < 1 * 1024 * 1024 {
+                        if !map.is_write() || map.is_exec() || map.filename().is_none() || map.size() < 1024 * 1024 {
                             continue;
                         }
                         if let Some(file_name)  = map.filename() {
@@ -210,7 +210,7 @@ impl GameCheetahEngine {
                     old_results[from..to].to_vec()
                 },
                 Err(err) => {
-                    eprintln!("{}", err);
+                    eprintln!("{err}");
                     return;
                 }
             };
@@ -238,21 +238,21 @@ impl GameCheetahEngine {
                         if let Ok(search_value) = SearchType::Int.from_string(&val) {
                             let search_data =&search_value.1[..];
                             let r = search_memory(&memory_data, search_data, SearchType::Int, start);
-                            if r.len() > 0 {
+                            if !r.is_empty() {
                                 results.lock().unwrap().extend_from_slice(&r);
                             }
                         }
                         if let Ok(search_value) = SearchType::Float.from_string(&val) {
                             let search_data =&search_value.1[..];
                             let r = search_memory(&memory_data, search_data, SearchType::Float, start);
-                            if r.len() > 0 {
+                            if !r.is_empty() {
                                 results.lock().unwrap().extend_from_slice(&r);
                             }
                         }
                         if let Ok(search_value) = SearchType::Double.from_string(&val) {
                             let search_data =&search_value.1[..];
                             let r = search_memory(&memory_data, search_data, SearchType::Double, start);
-                            if r.len() > 0 {
+                            if !r.is_empty() {
                                 results.lock().unwrap().extend_from_slice(&r);
                             }
                         }
@@ -260,7 +260,7 @@ impl GameCheetahEngine {
                     _ => {
                         let search_data =&search_value.1[..];
                         let r = search_memory(&memory_data, search_data, search_value.0, start);
-                        if r.len() > 0 {
+                        if !r.is_empty() {
                             results.lock().unwrap().extend_from_slice(&r);
                         }
                     }
@@ -271,10 +271,10 @@ impl GameCheetahEngine {
     }
 }
 
-fn update_results(old_results: &[SearchResult], value_text: &String, handle: &(i32, process_memory::Architecture)) -> Vec<SearchResult> {
+fn update_results(old_results: &[SearchResult], value_text: &str, handle: &(i32, process_memory::Architecture)) -> Vec<SearchResult> {
     let mut results = Vec::new();
     for result in old_results{
-        match result.search_type.from_string(&value_text) {
+        match result.search_type.from_string(value_text) {
             Ok(my_int) => {
                 if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), handle) {
                     let val = SearchValue(result.search_type, buf);
@@ -287,7 +287,7 @@ fn update_results(old_results: &[SearchResult], value_text: &String, handle: &(i
                                 value: val
                             }).unwrap_or_default();*/
                         }
-                        results.push(result.clone());
+                        results.push(*result);
                     }
                 }
             }
@@ -304,7 +304,7 @@ fn update_results(old_results: &[SearchResult], value_text: &String, handle: &(i
 fn search_memory(memory_data: &Vec<u8>, search_data: &[u8], search_type: SearchType, start: usize) -> Vec<SearchResult> {
     let mut result = Vec::new();
     let search_bytes = BoyerMoore::new(search_data);
-    for i in search_bytes.find_in(&memory_data) {
+    for i in search_bytes.find_in(memory_data) {
         result.push(SearchResult::new(i + start, search_type));
     }
     result
