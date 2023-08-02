@@ -29,9 +29,8 @@ jobs:
         command: test
         args: --all-features
 
-    - name: Build
-      uses: actions-rs/cargo@v1
-      with:
-        command: build
-        args: --release
-
+#    - name: Build
+#      uses: actions-rs/cargo@v1
+#      with:
+#        command: build
+#        args: --release
