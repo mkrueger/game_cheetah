@@ -196,22 +196,21 @@ impl GameCheetahEngine {
         }
     }
 
-    pub fn remove_freezes(&self, search_index: usize) {
-        let search_context = self.searches.get(search_index).unwrap();
-        GameCheetahEngine::remove_freezes_from(&self.freeze_sender, &search_context.results);
+    pub fn remove_freezes(&mut self, search_index: usize) {
+        let search_context = self.searches.get_mut(search_index).unwrap();
+        GameCheetahEngine::remove_freezes_from(&self.freeze_sender, &mut search_context.freezed_addresses);
     }
 
     pub fn remove_freezes_from(
         freeze_sender: &mpsc::Sender<Message>,
-        v: &Arc<Mutex<Vec<SearchResult>>>,
+        freezes: &mut std::collections::HashSet<usize>,
     ) {
-        for result in v.lock().unwrap().iter() {
-            if result.freezed {
-                freeze_sender
-                    .send(Message::from_addr(MessageCommand::Unfreeze, result.addr))
-                    .unwrap_or_default();
-            }
+        for result in freezes.iter() {
+            freeze_sender
+                .send(Message::from_addr(MessageCommand::Unfreeze, *result))
+                .unwrap_or_default();
         }
+        freezes.clear();
     }
 
     pub fn show_process_window(&mut self) {
@@ -340,14 +339,6 @@ fn update_results(
                 {
                     let val = SearchValue(result.search_type, buf);
                     if val.1 == my_int.1 {
-                        if result.freezed {
-                            /*      TODO: freeze
-                            self.freeze_sender.send(Message {
-                                msg: MessageCommand::Freeze,
-                                addr: result.addr,
-                                value: val
-                            }).unwrap_or_default();*/
-                        }
                         results.push(*result);
                     }
                 }

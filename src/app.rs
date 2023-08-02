@@ -469,7 +469,7 @@ impl GameCheetahEngine {
                                             handle
                                                 .put_address(result.addr, &value.1)
                                                 .unwrap_or_default();
-                                            if result.freezed {
+                                            if search_context.freezed_addresses.contains(&result.addr) {
                                                 self.freeze_sender
                                                     .send(Message {
                                                         msg: MessageCommand::Freeze,
@@ -500,7 +500,7 @@ impl GameCheetahEngine {
                         }
                     });
                     row.col(|ui| {
-                        let mut b = result.freezed;
+                        let mut b = search_context.freezed_addresses.contains(&result.addr);
                         if ui.checkbox(&mut b, "").changed() {
                             if let Ok(handle) =
                                 (self.pid as process_memory::Pid).try_into_process_handle()
@@ -510,13 +510,8 @@ impl GameCheetahEngine {
                                     result.search_type.get_byte_length(),
                                     &handle,
                                 ) {
-                                    search_context
-                                        .results
-                                        .lock()
-                                        .as_mut()
-                                        .unwrap()
-                                        .remove(row_index);
                                     if b {
+                                        search_context.freezed_addresses.insert(result.addr);
                                         self.freeze_sender
                                             .send(Message {
                                                 msg: MessageCommand::Freeze,
@@ -525,6 +520,7 @@ impl GameCheetahEngine {
                                             })
                                             .unwrap_or_default();
                                     } else {
+                                        search_context.freezed_addresses.remove(&(result.addr));
                                         self.freeze_sender
                                             .send(Message::from_addr(
                                                 MessageCommand::Unfreeze,
@@ -532,14 +528,6 @@ impl GameCheetahEngine {
                                             ))
                                             .unwrap_or_default();
                                     }
-                                    search_context.results.lock().as_mut().unwrap().insert(
-                                        row_index,
-                                        SearchResult {
-                                            addr: result.addr,
-                                            search_type: result.search_type,
-                                            freezed: b,
-                                        },
-                                    );
                                 }
                             }
                         }
