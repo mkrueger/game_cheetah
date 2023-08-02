@@ -12,7 +12,6 @@ pub enum SearchType {
     Double,
 }
 
-
 impl SearchType {
     pub fn get_description_text(&self) -> String {
         match self {
@@ -43,7 +42,7 @@ impl SearchType {
             SearchType::Int => fl!(crate::LANGUAGE_LOADER, "int-descr"),
             SearchType::Int64 => fl!(crate::LANGUAGE_LOADER, "int64-descr"),
             SearchType::Float => fl!(crate::LANGUAGE_LOADER, "float-descr"),
-            SearchType::Double => fl!(crate::LANGUAGE_LOADER, "double-descr")
+            SearchType::Double => fl!(crate::LANGUAGE_LOADER, "double-descr"),
         }
     }
 
