@@ -37,7 +37,6 @@ impl Message {
     }
 }
 
-
 use rust_embed::RustEmbed;
 #[derive(RustEmbed)]
 #[folder = "i18n"] // path to the compiled localization resources

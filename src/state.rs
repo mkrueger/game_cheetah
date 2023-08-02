@@ -10,7 +10,7 @@ use std::{
 use crate::{
     Message, MessageCommand, SearchContext, SearchMode, SearchResult, SearchType, SearchValue,
 };
-use needle::BoyerMoore;
+use boyer_moore_magiclen::BMByte;
 use proc_maps::get_process_maps;
 use process_memory::{copy_address, PutAddress, TryIntoProcessHandle};
 use sysinfo::*;
@@ -175,7 +175,7 @@ impl GameCheetahEngine {
 
     pub fn filter_searches(&mut self, search_index: usize) {
         self.remove_freezes(search_index);
-        let mut search_context = self.searches.get_mut(search_index).unwrap();
+        let search_context = self.searches.get_mut(search_index).unwrap();
         search_context.searching = SearchMode::Percent;
         let old_results_arc: Arc<Mutex<Vec<SearchResult>>> = mem::replace(
             &mut search_context.results,
@@ -288,7 +288,7 @@ impl GameCheetahEngine {
                         let val = String::from_utf8(search_value.1).unwrap();
 
                         if let Ok(search_value) = SearchType::Int.from_string(&val) {
-                            let search_data = &search_value.1[..];
+                            let search_data = &search_value.1;
                             let r =
                                 search_memory(&memory_data, search_data, SearchType::Int, start);
                             if !r.is_empty() {
@@ -296,7 +296,7 @@ impl GameCheetahEngine {
                             }
                         }
                         if let Ok(search_value) = SearchType::Float.from_string(&val) {
-                            let search_data = &search_value.1[..];
+                            let search_data = &search_value.1;
                             let r =
                                 search_memory(&memory_data, search_data, SearchType::Float, start);
                             if !r.is_empty() {
@@ -304,7 +304,7 @@ impl GameCheetahEngine {
                             }
                         }
                         if let Ok(search_value) = SearchType::Double.from_string(&val) {
-                            let search_data = &search_value.1[..];
+                            let search_data = &search_value.1;
                             let r =
                                 search_memory(&memory_data, search_data, SearchType::Double, start);
                             if !r.is_empty() {
@@ -313,7 +313,7 @@ impl GameCheetahEngine {
                         }
                     }
                     _ => {
-                        let search_data = &search_value.1[..];
+                        let search_data = &search_value.1;
                         let r = search_memory(&memory_data, search_data, search_value.0, start);
                         if !r.is_empty() {
                             results.lock().unwrap().extend_from_slice(&r);
@@ -363,13 +363,14 @@ fn update_results(
 
 fn search_memory(
     memory_data: &Vec<u8>,
-    search_data: &[u8],
+    search_data: &Vec<u8>,
     search_type: SearchType,
     start: usize,
 ) -> Vec<SearchResult> {
     let mut result = Vec::new();
-    let search_bytes = BoyerMoore::new(search_data);
-    for i in search_bytes.find_in(memory_data) {
+    let search_bytes = BMByte::from(search_data).unwrap();
+
+    for i in search_bytes.find_all_in(memory_data) {
         result.push(SearchResult::new(i + start, search_type));
     }
     result
