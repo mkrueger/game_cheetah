@@ -182,13 +182,12 @@ impl eframe::App for GameCheetahEngine {
                                 self.current_search = i;
                             }
                         }
-                        if ui.button("-").clicked() {
+                        if self.current_search < self.searches.len() && ui.button("-").clicked() {
                             self.remove_freezes(self.current_search);
                             self.searches.remove(self.current_search);
-                            if self.current_search >= self.searches.len() - 1 {
-                                self.current_search = max(0, self.current_search - 1);
+                            if self.current_search > 0 {
+                                self.current_search -= 1;
                             }
-                            return;
                         }
                         if ui.button("+").clicked() {
                             self.new_search();
