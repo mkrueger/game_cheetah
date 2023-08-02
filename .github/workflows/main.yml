@@ -1,4 +1,4 @@
-name: Rust
+name: Main
 
 on:
   push:
@@ -11,9 +11,7 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v3
     
@@ -22,15 +20,8 @@ jobs:
       with:
         command: fmt
         args: --all -- --check
-
     - name: Run tests
       uses: actions-rs/cargo@v1
       with:
         command: test
         args: --all-features
-
-#    - name: Build
-#      uses: actions-rs/cargo@v1
-#      with:
-#        command: build
-#        args: --release

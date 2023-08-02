@@ -1,0 +1,29 @@
+name: Linux Build
+
+on:
+  push:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Install cargo bundle
+      uses: actions-rs/cargo@v1
+      with:
+        command: install
+        args: cargo-bundle
+    - name: Build bundle
+      uses: actions-rs/cargo@v1
+      with:
+        command: bundle
+        args: --release
+    - name: 'Upload Artifact'
+      uses: actions/upload-artifact@v3
+      with:
+        name: game_cheetah_linux
+        path: target/release/bundle/deb/game_cheetah_*.deb
