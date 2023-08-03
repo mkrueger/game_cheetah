@@ -1,0 +1,57 @@
+name: Build
+on:
+  push:
+    branches: [ "main" ]
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  build1:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Install cargo bundle
+      uses: actions-rs/cargo@v1
+      with:
+        command: install
+        args: cargo-bundle
+    - name: Build bundle
+      uses: actions-rs/cargo@v1
+      with:
+        command: bundle
+        args: --release
+    - name: 'Upload Artifact'
+      uses: actions/upload-artifact@v3
+      with:
+        name: game_cheetah_linux
+        path: target/release/bundle/deb/game_cheetah_*.deb
+
+  build2:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build bundle
+      uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --release
+    - name: 'Upload Artifact'
+      uses: actions/upload-artifact@v3
+      with:
+        name: game_cheetah_osx
+        path: target/release/game_cheetah
+
+  build3:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build bundle
+      uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --release
+    - name: 'Upload Artifact'
+      uses: actions/upload-artifact@v3
+      with:
+        name: game_cheetah_windows
+        path: target/release/game_cheetah.exe
+      
