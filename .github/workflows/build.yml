@@ -5,7 +5,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
 jobs:
-  build1:
+  build_linux:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
@@ -25,7 +25,7 @@ jobs:
         name: game_cheetah_linux
         path: target/release/bundle/deb/game_cheetah_*.deb
 
-  build2:
+  build_osx:
     runs-on: macos-latest
     steps:
     - uses: actions/checkout@v3
@@ -40,7 +40,7 @@ jobs:
         name: game_cheetah_osx
         path: target/release/game_cheetah
 
-  build3:
+  build_windows:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v3

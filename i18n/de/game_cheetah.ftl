@@ -1,7 +1,8 @@
-process-label = Prozesse:
+process-label = Prozess:
 no-processes-label = <Prozess nicht gesetzt>
 filter-processes-hint = Prozesse filtern
-default-label = Standard
+first-search-label = Erste Suche
+search-label = Suche { $search }
 name-label = Name:
 value-label = Wert:
 search-description-label = Suchbeschreibung
@@ -19,6 +20,7 @@ clear-button = Löschen
 close-button = Schließen
 hide-results-button = Ergebnisse verstecken
 show-results-button = Ergebnisse zeigen
+rename-button = Umbenennen
 
 generic-error-label = <Fehler>
 invalid-input-error = Eingabe ungültig
@@ -50,3 +52,7 @@ command-heading = Kommando
 
 update-numbers-progress = Aktualisiere { $current }/{ $total }…
 search-memory-progress = Suche { $current }/{ $total }…
+
+tab-hover-text=Doppelklick zum Umbenennen
+close-tab-hover-text=Schließe aktive Suche
+open-tab-hover-text=Neue Suche
