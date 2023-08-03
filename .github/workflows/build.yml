@@ -27,19 +27,6 @@ jobs:
       with:
         name: game_cheetah_linux
         path: target/release/bundle/deb/game_cheetah_*.deb
-    - uses: actions/download-artifact@v3
-      with:
-        name: game_cheetah_linux
-        path: distfiles
-    - name: Copy file to server
-      uses: appleboy/scp-action@v0.1.4
-      with:
-        host: ${{ secrets.HOST }}
-        username: ${{ secrets.USERNAME }}
-        password: ${{ secrets.PASSWORD }}
-        port: ${{ secrets.PORT }}
-        source: distfiles/*
-        target: game_cheetah        
   build_osx:
     runs-on: macos-latest
     steps:
@@ -54,19 +41,6 @@ jobs:
       with:
         name: game_cheetah_osx
         path: target/release/game_cheetah
-    - uses: actions/download-artifact@v3
-      with:
-        name: game_cheetah_osx
-        path: distfiles
-    - name: Copy file to server
-      uses: appleboy/scp-action@v0.1.4
-      with:
-        host: ${{ secrets.HOST }}
-        username: ${{ secrets.USERNAME }}
-        password: ${{ secrets.PASSWORD }}
-        port: ${{ secrets.PORT }}
-        source: distfiles/*
-        target: game_cheetah        
   
   build_windows:
     runs-on: windows-latest
@@ -82,17 +56,3 @@ jobs:
       with:
         name: game_cheetah_windows
         path: target/release/game_cheetah.exe
-    - uses: actions/download-artifact@v3
-      with:
-        name: game_cheetah_windows
-        path: distfiles
-    - name: Copy file to server
-      uses: appleboy/scp-action@v0.1.4
-      with:
-        host: ${{ secrets.HOST }}
-        username: ${{ secrets.USERNAME }}
-        password: ${{ secrets.PASSWORD }}
-        port: ${{ secrets.PORT }}
-        source: distfiles/*
-        target: game_cheetah        
-        
