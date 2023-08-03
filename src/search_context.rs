@@ -13,6 +13,7 @@ pub enum SearchMode {
 
 pub struct SearchContext {
     pub description: String,
+    pub rename_mode: bool,
 
     pub search_value_text: String,
     pub search_type: SearchType,
@@ -31,6 +32,7 @@ impl SearchContext {
     pub fn new(description: String) -> Self {
         Self {
             description,
+            rename_mode: false,
             search_value_text: "".to_owned(),
             searching: SearchMode::None,
             results: Arc::new(Mutex::new(Vec::new())),

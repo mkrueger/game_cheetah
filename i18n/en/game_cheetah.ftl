@@ -1,7 +1,8 @@
-process-label = Processes:
+process-label = Process:
 no-processes-label = <no process set>
 filter-processes-hint = Filter processes
-default-label = default
+first-search-label = First search
+search-label = Search { $search }
 name-label = Name:
 value-label = Value:
 search-description-label = Search description
@@ -19,6 +20,7 @@ clear-button = Clear
 close-button = Close
 hide-results-button = Hide Results
 show-results-button = Show Results
+rename-button = Rename
 
 generic-error-label = <error>
 invalid-input-error = Invalid input
@@ -50,3 +52,7 @@ command-heading = Command
 
 update-numbers-progress = Update { $current }/{ $total }…
 search-memory-progress = Search { $current }/{ $total }…
+
+tab-hover-text=Double click for rename
+close-tab-hover-text=Close active search
+open-tab-hover-text=Open new search

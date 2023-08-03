@@ -11,6 +11,7 @@ use crate::{
     Message, MessageCommand, SearchContext, SearchMode, SearchResult, SearchType, SearchValue,
 };
 use boyer_moore_magiclen::BMByte;
+use i18n_embed_fl::fl;
 use proc_maps::get_process_maps;
 use process_memory::{copy_address, PutAddress, TryIntoProcessHandle};
 use sysinfo::*;
@@ -82,7 +83,10 @@ impl Default for GameCheetahEngine {
             process_filter: "".to_owned(),
             processes: Vec::new(),
             current_search: 0,
-            searches: vec![Box::new(SearchContext::new("Search 1".to_string()))],
+            searches: vec![Box::new(SearchContext::new(fl!(
+                crate::LANGUAGE_LOADER,
+                "first-search-label"
+            )))],
             search_threads: ThreadPool::new(16),
             freeze_sender: tx,
             show_results: false,
@@ -92,7 +96,11 @@ impl Default for GameCheetahEngine {
 
 impl GameCheetahEngine {
     pub fn new_search(&mut self) {
-        let ctx = SearchContext::new(format!("Search {}", 1 + self.searches.len()));
+        let ctx = SearchContext::new(fl!(
+            crate::LANGUAGE_LOADER,
+            "search-label",
+            search = (1 + self.searches.len()).to_string()
+        ));
         self.current_search = self.searches.len();
         self.searches.push(Box::new(ctx));
     }
