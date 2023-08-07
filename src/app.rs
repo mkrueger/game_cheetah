@@ -443,14 +443,18 @@ impl GameCheetahEngine {
 
     fn render_result_table(&mut self, ui: &mut egui::Ui, search_index: usize) {
         let search_context = self.searches.get_mut(search_index).unwrap();
+        let show_search_types = matches!(search_context.search_type, SearchType::Guess);
 
-        let table = TableBuilder::new(ui)
+        let mut table = TableBuilder::new(ui)
             .striped(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(Column::initial(120.0).at_least(40.0))
-            .column(Column::initial(120.0).at_least(40.0))
-            .column(Column::initial(120.0).at_least(40.0))
-            .column(Column::remainder().at_least(60.0));
+            .column(Column::initial(120.0).at_least(40.0));
+
+            if show_search_types {
+                table = table.column(Column::initial(120.0).at_least(40.0))
+        }
+        table = table.column(Column::remainder().at_least(60.0));
         table
             .header(20.0, |mut header| {
                 header.col(|ui| {
@@ -459,9 +463,11 @@ impl GameCheetahEngine {
                 header.col(|ui| {
                     ui.heading(fl!(crate::LANGUAGE_LOADER, "value-heading"));
                 });
+                if show_search_types {
                 header.col(|ui| {
                     ui.heading(fl!(crate::LANGUAGE_LOADER, "datatype-heading"));
                 });
+            }
                 header.col(|ui| {
                     ui.heading(fl!(crate::LANGUAGE_LOADER, "freezed-heading"));
                 });
@@ -529,9 +535,11 @@ impl GameCheetahEngine {
                             }
                         }
                     });
-                    row.col(|ui: &mut egui::Ui| {
-                        ui.label(result.search_type.get_description_text());
-                    });
+                    if show_search_types {
+                        row.col(|ui: &mut egui::Ui| {
+                            ui.label(result.search_type.get_description_text());
+                        });
+                    }
                     row.col(|ui| {
                         let mut b = search_context.freezed_addresses.contains(&result.addr);
                         if ui.checkbox(&mut b, "").changed() {
