@@ -1,4 +1,4 @@
-use egui::{Color32, RichText};
+use egui::{Color32, RichText, Layout};
 use egui_extras::{Column, TableBuilder};
 use i18n_embed_fl::fl;
 use process_memory::*;
@@ -157,6 +157,19 @@ impl eframe::App for GameCheetahEngine {
                     ))));
                     self.process_filter.clear();
                 }
+                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.menu_button("…", |ui| {
+                        if ui.button(fl!(crate::LANGUAGE_LOADER, "menu-item-discuss")).clicked() {
+                            let _ = open::that("https://github.com/mkrueger/game_cheetah/discussions");
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button(fl!(crate::LANGUAGE_LOADER, "menu-item-report-bug")).clicked() {
+                            let _ = open::that("https://github.com/mkrueger/game_cheetah/issues/new");
+                            ui.close_menu();
+                        }
+                    });
+                });
             });
 
             if self.pid > 0 {
