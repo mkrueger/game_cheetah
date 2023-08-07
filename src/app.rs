@@ -449,6 +449,7 @@ impl GameCheetahEngine {
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(Column::initial(120.0).at_least(40.0))
             .column(Column::initial(120.0).at_least(40.0))
+            .column(Column::initial(120.0).at_least(40.0))
             .column(Column::remainder().at_least(60.0));
         table
             .header(20.0, |mut header| {
@@ -457,6 +458,9 @@ impl GameCheetahEngine {
                 });
                 header.col(|ui| {
                     ui.heading(fl!(crate::LANGUAGE_LOADER, "value-heading"));
+                });
+                header.col(|ui| {
+                    ui.heading(fl!(crate::LANGUAGE_LOADER, "datatype-heading"));
                 });
                 header.col(|ui| {
                     ui.heading(fl!(crate::LANGUAGE_LOADER, "freezed-heading"));
@@ -524,6 +528,9 @@ impl GameCheetahEngine {
                                 ui.label(fl!(crate::LANGUAGE_LOADER, "generic-error-label"));
                             }
                         }
+                    });
+                    row.col(|ui: &mut egui::Ui| {
+                        ui.label(result.search_type.get_description_text());
                     });
                     row.col(|ui| {
                         let mut b = search_context.freezed_addresses.contains(&result.addr);

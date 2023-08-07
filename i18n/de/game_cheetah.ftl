@@ -44,6 +44,7 @@ double-descr = Double
 address-heading = Addresse
 value-heading = Wert
 freezed-heading = Eingefroren
+datatype-heading = Datentyp
 
 pid-heading = Pid
 name-heading = Name
