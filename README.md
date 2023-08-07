@@ -1,8 +1,27 @@
-# game_cheetah
-![Screenshot](/assets/cheetah.png)
-Game memory editor for altering variables in computer games (resources, lifes, etc.)
+# ![Logo](/build/linux/128x128.png) game_cheetah
+Game cheetah is an utility to modifiy the state of a game process.
 
-![Screenshot](/assets/Screenshot.png)
+Make yourself more memory, better stats or more lifes.
+
+Single player games store the game state in memory where multi player games
+don't. So, this utility is not useful for multiplayer games.
+
+Features:
+ * Easy to use UI
+ * Supports multiple searches
+ * Guesses the data type of the searched value
+ * Game Cheetah runs natively on Linux, Mac and Windows computers.
+
+Keep in mind that altering a game memory contents may lead to game and/or computer crashes. Use at your own risk.
+
+# Game Cheetah in action
+
+[![Watch the video](https://img.youtube.com/vi/ng_1LBaUS48/maxresdefault.jpg)](https://youtu.be/ng_1LBaUS48)
+
+# Get binaries
+
+Get the latest release here:
+https://github.com/mkrueger/game_cheetah/releases/latest
 
 # Build
 
