@@ -5,6 +5,8 @@ authors = ["Mike Krüger <mkrueger@posteo.de>"]
 edition = "2021"
 rust-version = "1.60"
 description = "An in memory trainer for games."
+license = "Apache-2.0"
+repository = "https://github.com/mkrueger/game_cheetah"
 
 [package.metadata.bundle]
 name = "GameCheetah"
