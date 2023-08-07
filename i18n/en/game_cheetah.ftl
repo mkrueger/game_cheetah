@@ -57,3 +57,6 @@ search-memory-progress = Search { $current }/{ $total }…
 tab-hover-text=Double click for rename
 close-tab-hover-text=Close active search
 open-tab-hover-text=Open new search
+
+menu-item-discuss=Discuss
+menu-item-report-bug=Report a bug
