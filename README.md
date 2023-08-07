@@ -1,4 +1,4 @@
-# ![Logo](/build/linux/128x128.png) game_cheetah
+# ![Logo](/build/linux/128x128.png) Game Cheetah
 Game cheetah is an utility to modifiy the state of a game process.
 
 Make yourself more memory, better stats or more lifes.
