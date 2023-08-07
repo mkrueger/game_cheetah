@@ -59,4 +59,21 @@ close-tab-hover-text=Close active search
 open-tab-hover-text=Open new search
 
 menu-item-discuss=Discuss
+menu-item-about=About Game Cheetah…
 menu-item-report-bug=Report a bug
+
+about-dialog-title=About Game Cheetah
+about-dialog-heading = Game Cheetah
+about-dialog-description = 
+    Game cheetah is an utility to modifiy the state of a game process.
+
+    Make yourself more memory, better stats or more lifes.
+
+    Single player games store the game state in memory where multi player games
+    don't. So, this utility is not useful for multiplayer games.
+    
+    Game Cheetah runs natively on Linux, Mac and Windows computers.
+    
+    Keep in mind that altering a game memory contents may lead to game and/or computer crashes. Use at your own risk.
+about-dialog-ok=OK
+about-dialog-created_by = Created by { $authors }

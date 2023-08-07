@@ -28,6 +28,7 @@ pub struct GameCheetahEngine {
     pub pid: process_memory::Pid,
     pub process_name: String,
     pub show_process_window: bool,
+    pub show_about_dialog: bool,
 
     pub process_filter: String,
     pub processes: Vec<ProcessInfo>,
@@ -90,6 +91,7 @@ impl Default for GameCheetahEngine {
             search_threads: ThreadPool::new(16),
             freeze_sender: tx,
             show_results: false,
+            show_about_dialog: false,
         }
     }
 }

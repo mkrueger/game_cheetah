@@ -1,4 +1,5 @@
 # game_cheetah
+![Screenshot](/assets/cheetah.png)
 Game memory editor for altering variables in computer games (resources, lifes, etc.)
 
 ![Screenshot](/assets/Screenshot.png)

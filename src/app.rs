@@ -1,4 +1,4 @@
-use egui::{Color32, RichText, Layout};
+use egui::{Color32, Layout, RichText};
 use egui_extras::{Column, TableBuilder};
 use i18n_embed_fl::fl;
 use process_memory::*;
@@ -123,6 +123,9 @@ impl eframe::App for GameCheetahEngine {
                 self.render_process_window(ui, ctx);
                 return;
             }
+            if self.show_about_dialog {
+                ui.set_enabled(false);
+            }
 
             ui.spacing_mut().item_spacing = egui::Vec2::splat(12.0);
             ui.horizontal(|ui| {
@@ -159,13 +162,26 @@ impl eframe::App for GameCheetahEngine {
                 }
                 ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.menu_button("…", |ui| {
-                        if ui.button(fl!(crate::LANGUAGE_LOADER, "menu-item-discuss")).clicked() {
-                            let _ = open::that("https://github.com/mkrueger/game_cheetah/discussions");
+                        let r = ui.hyperlink_to(
+                            fl!(crate::LANGUAGE_LOADER, "menu-item-discuss"),
+                            "https://github.com/mkrueger/game_cheetah/discussions",
+                        );
+                        if r.clicked() {
+                            ui.close_menu();
+                        }
+                        let r = ui.hyperlink_to(
+                            fl!(crate::LANGUAGE_LOADER, "menu-item-report-bug"),
+                            "https://github.com/mkrueger/game_cheetah/issues/new",
+                        );
+                        if r.clicked() {
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button(fl!(crate::LANGUAGE_LOADER, "menu-item-report-bug")).clicked() {
-                            let _ = open::that("https://github.com/mkrueger/game_cheetah/issues/new");
+                        if ui
+                            .button(fl!(crate::LANGUAGE_LOADER, "menu-item-about"))
+                            .clicked()
+                        {
+                            self.show_about_dialog = true;
                             ui.close_menu();
                         }
                     });
@@ -228,6 +244,10 @@ impl eframe::App for GameCheetahEngine {
                 self.render_content(ui, ctx, self.current_search);
             }
         });
+
+        if self.show_about_dialog {
+            self.show_about_dialog(ctx);
+        }
     }
 }
 
@@ -464,8 +484,8 @@ impl GameCheetahEngine {
             .column(Column::initial(120.0).at_least(40.0))
             .column(Column::initial(120.0).at_least(40.0));
 
-            if show_search_types {
-                table = table.column(Column::initial(120.0).at_least(40.0))
+        if show_search_types {
+            table = table.column(Column::initial(120.0).at_least(40.0))
         }
         table = table.column(Column::remainder().at_least(60.0));
         table
@@ -477,10 +497,10 @@ impl GameCheetahEngine {
                     ui.heading(fl!(crate::LANGUAGE_LOADER, "value-heading"));
                 });
                 if show_search_types {
-                header.col(|ui| {
-                    ui.heading(fl!(crate::LANGUAGE_LOADER, "datatype-heading"));
-                });
-            }
+                    header.col(|ui| {
+                        ui.heading(fl!(crate::LANGUAGE_LOADER, "datatype-heading"));
+                    });
+                }
                 header.col(|ui| {
                     ui.heading(fl!(crate::LANGUAGE_LOADER, "freezed-heading"));
                 });

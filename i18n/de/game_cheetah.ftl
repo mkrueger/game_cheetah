@@ -60,3 +60,21 @@ open-tab-hover-text=Neue Suche
 
 menu-item-discuss=Diskutieren
 menu-item-report-bug=Bug melden
+menu-item-about=Über Game Cheetah…
+
+about-dialog-title=Über Game Cheetah
+about-dialog-heading = Game Cheetah
+about-dialog-description = 
+    Game Cheetah ist ein Tool zur Statusänderung von Computerspielen.
+
+    Ändere den Geldbetrag, bessere Attribute oder Extraleben.
+
+    Einzelspieler-Spiele speichern ihren Status im Hauptspeicher.
+    Multplayer-Spiele tun das nicht. Daher ist dieses Tool nur nützlich für
+    Einzelspieler.
+    
+    Game Cheetah unterstützt Linux, Mac und Windows.
+    
+    Speicheränderungen können zu Spiel oder Computerabstürzen führen. Verwendung auf eigenes Risiko.
+about-dialog-ok=OK
+about-dialog-created_by = Programmiert von { $authors }
