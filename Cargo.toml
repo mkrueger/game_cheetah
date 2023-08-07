@@ -49,6 +49,9 @@ tracing-subscriber = "0.3"
 console_error_panic_hook = "0.1.6"
 tracing-wasm = "0.2"
 
+[build-dependencies]
+winres = "0.1"
+
 [profile.release]
 strip = "symbols"
 
