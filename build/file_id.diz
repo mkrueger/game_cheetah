@@ -1,0 +1,10 @@
+         -* GAME CHEETAH #VERSION *-
+
+A simple multi platform cheat engine clone.
+
+- Written in pure rust - fast & secure
+- Multi platform Windows, OSX, Linux
+- Supports multiple searches
+
+Development
+GitHub https://github.com/mkrueger/game_cheetah

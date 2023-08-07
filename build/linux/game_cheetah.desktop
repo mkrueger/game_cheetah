@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Game Cheetah
+Comment=An in memory trainer for games.
+Categories=Utility;
+Icon=game_cheetah
+Exec=/usr/bin/game_cheetah
+StartupWMClass=game_cheetah
+Terminal=false
