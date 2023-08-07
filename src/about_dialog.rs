@@ -1,4 +1,4 @@
-use egui::{Layout, Vec2};
+use egui::Vec2;
 use i18n_embed_fl::fl;
 
 use crate::GameCheetahEngine;
