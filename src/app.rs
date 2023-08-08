@@ -184,6 +184,7 @@ impl eframe::App for GameCheetahEngine {
                         crate::LANGUAGE_LOADER,
                         "first-search-label"
                     ))));
+                    self.current_search = 0;
                     self.process_filter.clear();
                 }
                 ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {

@@ -160,7 +160,6 @@ impl GameCheetahEngine {
                     self.searches.get_mut(search_index).unwrap().total_bytes += size;
 
                     let max_block = 10 * 1024 * 1024;
-
                     let current_search = self.searches.get(search_index).unwrap();
                     let search_for_value = current_search
                         .search_type
@@ -356,7 +355,7 @@ impl GameCheetahEngine {
         });
     }
 
-    pub(crate) fn select_process(&mut self, process: &ProcessInfo)  {
+    pub(crate) fn select_process(&mut self, process: &ProcessInfo) {
         self.pid = process.pid;
         self.freeze_sender
             .send(Message::from_addr(
