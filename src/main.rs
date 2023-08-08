@@ -8,7 +8,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 fn main() {
     use std::process::Command;
 
-    if !cfg!(target_os= "linux") && sudo::check() != sudo::RunningAs::Root {
+    if !cfg!(target_os = "linux") && sudo::check() != sudo::RunningAs::Root {
         Command::new("pkexec")
             .args([
                 "env",
