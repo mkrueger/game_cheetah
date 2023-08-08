@@ -87,7 +87,7 @@ impl GameCheetahEngine {
                 let filter = self.process_filter.to_ascii_uppercase();
                 let row_height = 17.0;
 
-                let results: Vec<&crate::ProcessInfo> = self
+                let results: Vec<crate::ProcessInfo> = self
                     .processes
                     .iter()
                     .filter(|process| {
@@ -95,41 +95,47 @@ impl GameCheetahEngine {
                             || process.cmd.to_ascii_uppercase().contains(filter.as_str())
                             || process.pid.to_string().contains(filter.as_str())
                     })
+                    .cloned()
                     .collect();
 
                 let num_rows: usize = results.len();
 
                 body.rows(row_height, num_rows, |row_index, mut row| {
-                    let process = results[row_index];
+                    let process = &results[row_index];
 
                     row.col(|ui| {
                         let r = ui.selectable_label(false, process.pid.to_string());
                         if r.clicked() {
-                            self.pid = process.pid;
-                            self.freeze_sender
-                                .send(Message::from_addr(
-                                    MessageCommand::Pid,
-                                    process.pid as usize,
-                                ))
-                                .unwrap_or_default();
-                            self.process_name = process.name.clone();
-                            self.show_process_window = false;
+                            self.select_process(process);
                         }
                     });
 
                     row.col(|ui| {
-                        ui.label(&process.name);
+                        let r = ui.selectable_label(false, &process.name);
+                        if r.clicked() {
+                            self.select_process(process);
+                        }
                     });
                     row.col(|ui| {
                         let bb = gabi::BytesConfig::default();
                         let memory = bb.bytes(process.memory as u64);
-                        ui.label(memory.to_string());
+
+                        let r = ui.selectable_label(false, memory.to_string());
+                        if r.clicked() {
+                            self.select_process(process);
+                        }
                     });
                     row.col(|ui| {
-                        ui.label(&process.user);
+                        let r = ui.selectable_label(false, &process.user);
+                        if r.clicked() {
+                            self.select_process(process);
+                        }
                     });
                     row.col(|ui| {
-                        ui.label(&process.cmd);
+                        let r = ui.selectable_label(false, &process.cmd);
+                        if r.clicked() {
+                            self.select_process(process);
+                        }
                     });
                 });
             });

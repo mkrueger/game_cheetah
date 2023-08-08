@@ -17,6 +17,7 @@ use process_memory::{copy_address, PutAddress, TryIntoProcessHandle};
 use sysinfo::*;
 use threadpool::ThreadPool;
 
+#[derive(Debug, Clone)]
 pub struct ProcessInfo {
     pub pid: process_memory::Pid,
     pub name: String,
@@ -353,6 +354,18 @@ impl GameCheetahEngine {
             }
             current_bytes.fetch_add(size, Ordering::SeqCst);
         });
+    }
+
+    pub(crate) fn select_process(&mut self, process: &ProcessInfo)  {
+        self.pid = process.pid;
+        self.freeze_sender
+            .send(Message::from_addr(
+                MessageCommand::Pid,
+                process.pid as usize,
+            ))
+            .unwrap_or_default();
+        self.process_name = process.name.clone();
+        self.show_process_window = false;
     }
 }
 
