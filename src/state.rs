@@ -137,6 +137,9 @@ impl GameCheetahEngine {
                             }
                         }
                     } else if cfg!(target_os = "linux") {
+                        if !map.is_write() || map.is_exec() {
+                            continue;
+                        }
                     } else {
                         if !map.is_write()
                             || map.is_exec()
