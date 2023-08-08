@@ -4,7 +4,7 @@ use std::{
     mem,
     sync::{atomic::Ordering, mpsc, Arc, Mutex},
     thread,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use crate::{
@@ -21,6 +21,7 @@ pub struct ProcessInfo {
     pub pid: process_memory::Pid,
     pub name: String,
     pub cmd: String,
+    pub user: String,
     pub memory: usize,
 }
 
@@ -31,6 +32,7 @@ pub struct GameCheetahEngine {
     pub show_about_dialog: bool,
 
     pub process_filter: String,
+    pub last_process_update: SystemTime,
     pub processes: Vec<ProcessInfo>,
 
     pub current_search: usize,
@@ -83,6 +85,7 @@ impl Default for GameCheetahEngine {
             show_process_window: false,
             process_filter: "".to_owned(),
             processes: Vec::new(),
+            last_process_update: SystemTime::now(),
             current_search: 0,
             searches: vec![Box::new(SearchContext::new(fl!(
                 crate::LANGUAGE_LOADER,
@@ -226,21 +229,34 @@ impl GameCheetahEngine {
         freezes.clear();
     }
 
-    pub fn show_process_window(&mut self) {
+    pub fn update_process_data(&mut self) {
         let sys = System::new_all();
+        self.last_process_update = SystemTime::now();
         self.processes.clear();
         for (pid2, process) in sys.processes() {
             if process.memory() == 0 {
                 continue;
             }
             let pid = pid2.as_u32();
+            let user = match process.user_id() {
+                Some(user) => sys.get_user_by_id(user).unwrap().name().to_string(),
+                None => "".to_string(),
+            };
             self.processes.push(ProcessInfo {
                 pid: pid.try_into().unwrap(),
                 name: process.name().to_string(),
                 cmd: process.cmd().join(" "),
+                user,
                 memory: process.memory() as usize,
             });
         }
+        self.processes.sort_by(|a, b| {
+            let cmp = a.name.cmp(&b.name);
+            if cmp == std::cmp::Ordering::Equal {
+                return a.pid.cmp(&b.pid);
+            }
+            cmp
+        });
     }
 
     fn spawn_update_thread(

@@ -4,7 +4,7 @@ use i18n_embed_fl::fl;
 use process_memory::*;
 use std::{
     sync::{atomic::Ordering, Arc, Mutex},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use crate::{
@@ -17,6 +17,14 @@ impl GameCheetahEngine {
     }
 
     fn render_process_window(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        if SystemTime::now()
+            .duration_since(self.last_process_update)
+            .unwrap()
+            .as_millis()
+            > 500
+        {
+            self.update_process_data();
+        }
         if ctx.input(|i| i.key_down(egui::Key::Escape)) {
             self.show_process_window = false;
             return;
@@ -54,6 +62,7 @@ impl GameCheetahEngine {
             .column(Column::initial(80.0).at_least(40.0))
             .column(Column::initial(200.0).at_least(40.0))
             .column(Column::initial(80.0).at_least(40.0))
+            .column(Column::initial(80.0).at_least(40.0))
             .column(Column::remainder().at_least(60.0));
 
         table
@@ -68,50 +77,61 @@ impl GameCheetahEngine {
                     ui.heading(fl!(crate::LANGUAGE_LOADER, "memory-heading"));
                 });
                 header.col(|ui| {
+                    ui.heading(fl!(crate::LANGUAGE_LOADER, "user-heading"));
+                });
+                header.col(|ui| {
                     ui.heading(fl!(crate::LANGUAGE_LOADER, "command-heading"));
                 });
             })
-            .body(|mut body| {
+            .body(|body| {
                 let filter = self.process_filter.to_ascii_uppercase();
+                let row_height = 17.0;
 
-                for process in &self.processes {
-                    if !filter.is_empty()
-                        && (!process.name.to_ascii_uppercase().contains(filter.as_str())
-                            && !process.cmd.to_ascii_uppercase().contains(filter.as_str())
-                            && !process.pid.to_string().contains(filter.as_str()))
-                    {
-                        continue;
-                    }
-                    let row_height = 17.0;
-                    body.row(row_height, |mut row| {
-                        row.col(|ui| {
-                            let r = ui.selectable_label(false, process.pid.to_string());
-                            if r.clicked() {
-                                self.pid = process.pid;
-                                self.freeze_sender
-                                    .send(Message::from_addr(
-                                        MessageCommand::Pid,
-                                        process.pid as usize,
-                                    ))
-                                    .unwrap_or_default();
-                                self.process_name = process.name.clone();
-                                self.show_process_window = false;
-                            }
-                        });
+                let results: Vec<&crate::ProcessInfo> = self
+                    .processes
+                    .iter()
+                    .filter(|process| {
+                        process.name.to_ascii_uppercase().contains(filter.as_str())
+                            || process.cmd.to_ascii_uppercase().contains(filter.as_str())
+                            || process.pid.to_string().contains(filter.as_str())
+                    })
+                    .collect();
 
-                        row.col(|ui| {
-                            ui.label(&process.name);
-                        });
-                        row.col(|ui| {
-                            let bb = gabi::BytesConfig::default();
-                            let memory = bb.bytes(process.memory as u64);
-                            ui.label(memory.to_string());
-                        });
-                        row.col(|ui| {
-                            ui.label(&process.cmd);
-                        });
+                let num_rows: usize = results.len();
+
+                body.rows(row_height, num_rows, |row_index, mut row| {
+                    let process = results[row_index];
+
+                    row.col(|ui| {
+                        let r = ui.selectable_label(false, process.pid.to_string());
+                        if r.clicked() {
+                            self.pid = process.pid;
+                            self.freeze_sender
+                                .send(Message::from_addr(
+                                    MessageCommand::Pid,
+                                    process.pid as usize,
+                                ))
+                                .unwrap_or_default();
+                            self.process_name = process.name.clone();
+                            self.show_process_window = false;
+                        }
                     });
-                }
+
+                    row.col(|ui| {
+                        ui.label(&process.name);
+                    });
+                    row.col(|ui| {
+                        let bb = gabi::BytesConfig::default();
+                        let memory = bb.bytes(process.memory as u64);
+                        ui.label(memory.to_string());
+                    });
+                    row.col(|ui| {
+                        ui.label(&process.user);
+                    });
+                    row.col(|ui| {
+                        ui.label(&process.cmd);
+                    });
+                });
             });
     }
 }
@@ -143,7 +163,7 @@ impl eframe::App for GameCheetahEngine {
                     self.show_process_window = !self.show_process_window;
 
                     if self.show_process_window {
-                        self.show_process_window();
+                        self.update_process_data();
                         return;
                     }
                 }
@@ -508,7 +528,7 @@ impl GameCheetahEngine {
             .body(|body| {
                 let row_height = 17.0;
                 let results = search_context.results.lock().unwrap();
-                let num_rows = results.len();
+                let num_rows: usize = results.len();
 
                 body.rows(row_height, num_rows, |row_index, mut row| {
                     let result = &results[row_index];

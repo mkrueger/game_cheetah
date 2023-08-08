@@ -27,14 +27,14 @@ invalid-input-error = Invalid input
 invalid-number-error = Invalid number
 conversion-error = Error converting { $valuetype }: { $message }
 
-guess-value-item = guess value (2-8 bytes)
+guess-value-item = number (2-8 bytes)
 short-value-item = short (2 bytes)
 int-value-item = int (4 bytes)
 int64-value-item = int64 (8 bytes)
 float-value-item = float (4 bytes)
 double-value-item = double (8 bytes)
 
-guess-descr = Guess
+guess-descr = Number
 short-descr = short
 int-descr = int
 int64-descr = int64
@@ -49,6 +49,7 @@ datatype-heading = Data type
 pid-heading = Pid
 name-heading = Name
 memory-heading = Memory
+user-heading = User
 command-heading = Command
 
 update-numbers-progress = Update { $current }/{ $total }…
