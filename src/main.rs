@@ -24,10 +24,14 @@ fn main() {
     // Log to stdout (if you run with `RUST_LOG=debug`).
     tracing_subscriber::fmt::init();
 
-    let native_options = eframe::NativeOptions::default();
+    let options = eframe::NativeOptions {
+        multisampling: 0,
+        icon_data: Some(eframe::IconData::try_from_png_bytes(&include_bytes!("../build/linux/256x256.png")[..]).unwrap()),
+        ..Default::default()
+    };
     eframe::run_native(
         format!("{APP_NAME} {VERSION}").as_str(),
-        native_options,
+        options,
         Box::new(|cc| Box::new(game_cheetah::GameCheetahEngine::new(cc))),
     )
     .unwrap();

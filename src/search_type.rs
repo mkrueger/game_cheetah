@@ -79,10 +79,7 @@ impl SearchType {
             SearchType::Double => {
                 let parsed = txt.parse::<f64>();
                 match parsed {
-                    Ok(f) => Ok(SearchValue(
-                        SearchType::Double,
-                        f64::to_le_bytes(f).to_vec(),
-                    )),
+                    Ok(f) => Ok(SearchValue(SearchType::Double, f64::to_le_bytes(f).to_vec())),
                     Err(_) => Err(fl!(crate::LANGUAGE_LOADER, "invalid-input-error")),
                 }
             }

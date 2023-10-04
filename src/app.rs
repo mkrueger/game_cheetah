@@ -7,9 +7,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use crate::{
-    GameCheetahEngine, Message, MessageCommand, SearchContext, SearchMode, SearchType, SearchValue,
-};
+use crate::{GameCheetahEngine, Message, MessageCommand, SearchContext, SearchMode, SearchType, SearchValue};
 
 impl GameCheetahEngine {
     pub fn new(_: &eframe::CreationContext<'_>) -> Self {
@@ -17,14 +15,10 @@ impl GameCheetahEngine {
     }
 
     fn render_process_window(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        if SystemTime::now()
-            .duration_since(self.last_process_update)
-            .unwrap()
-            .as_millis()
-            > 500
-        {
+        if SystemTime::now().duration_since(self.last_process_update).unwrap().as_millis() > 500 {
             self.update_process_data();
         }
+
         if ctx.input(|i| i.key_down(egui::Key::Escape)) {
             self.show_process_window = false;
             return;
@@ -33,10 +27,7 @@ impl GameCheetahEngine {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
 
-            let i = ui.add(
-                egui::TextEdit::singleline(&mut self.process_filter)
-                    .hint_text(fl!(crate::LANGUAGE_LOADER, "filter-processes-hint")),
-            );
+            let i = ui.add(egui::TextEdit::singleline(&mut self.process_filter).hint_text(fl!(crate::LANGUAGE_LOADER, "filter-processes-hint")));
             if ui.memory(|m| m.focus().is_none()) {
                 ui.memory_mut(|m| m.request_focus(i.id));
             }
@@ -47,10 +38,7 @@ impl GameCheetahEngine {
                 self.process_filter.clear();
             }
 
-            if ui
-                .button(fl!(crate::LANGUAGE_LOADER, "close-button"))
-                .clicked()
-            {
+            if ui.button(fl!(crate::LANGUAGE_LOADER, "close-button")).clicked() {
                 self.show_process_window = false;
             }
         });
@@ -176,14 +164,10 @@ impl eframe::App for GameCheetahEngine {
 
                 if ui.button("ｘ").clicked() {
                     self.pid = 0;
-                    self.freeze_sender
-                        .send(Message::from_addr(MessageCommand::Pid, 0))
-                        .unwrap_or_default();
+                    self.freeze_sender.send(Message::from_addr(MessageCommand::Pid, 0)).unwrap_or_default();
                     self.searches.clear();
-                    self.searches.push(Box::new(SearchContext::new(fl!(
-                        crate::LANGUAGE_LOADER,
-                        "first-search-label"
-                    ))));
+                    self.searches
+                        .push(Box::new(SearchContext::new(fl!(crate::LANGUAGE_LOADER, "first-search-label"))));
                     self.current_search = 0;
                     self.process_filter.clear();
                 }
@@ -204,10 +188,7 @@ impl eframe::App for GameCheetahEngine {
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui
-                            .button(fl!(crate::LANGUAGE_LOADER, "menu-item-about"))
-                            .clicked()
-                        {
+                        if ui.button(fl!(crate::LANGUAGE_LOADER, "menu-item-about")).clicked() {
                             self.show_about_dialog = true;
                             ui.close_menu();
                         }
@@ -225,10 +206,7 @@ impl eframe::App for GameCheetahEngine {
 
                         for i in 0..self.searches.len() {
                             let r = ui
-                                .selectable_label(
-                                    self.current_search == i,
-                                    self.searches[i].description.clone(),
-                                )
+                                .selectable_label(self.current_search == i, self.searches[i].description.clone())
                                 .on_hover_text(fl!(crate::LANGUAGE_LOADER, "tab-hover-text"));
 
                             if r.clicked() {
@@ -240,10 +218,7 @@ impl eframe::App for GameCheetahEngine {
                             }
                         }
                         if self.current_search < self.searches.len()
-                            && ui
-                                .button("-")
-                                .on_hover_text(fl!(crate::LANGUAGE_LOADER, "close-tab-hover-text"))
-                                .clicked()
+                            && ui.button("-").on_hover_text(fl!(crate::LANGUAGE_LOADER, "close-tab-hover-text")).clicked()
                         {
                             self.remove_freezes(self.current_search);
                             self.searches.remove(self.current_search);
@@ -251,11 +226,7 @@ impl eframe::App for GameCheetahEngine {
                                 self.current_search -= 1;
                             }
                         }
-                        if ui
-                            .button("+")
-                            .on_hover_text(fl!(crate::LANGUAGE_LOADER, "open-tab-hover-text"))
-                            .clicked()
-                        {
+                        if ui.button("+").on_hover_text(fl!(crate::LANGUAGE_LOADER, "open-tab-hover-text")).clicked() {
                             self.new_search();
                         }
                     });
@@ -292,10 +263,7 @@ impl GameCheetahEngine {
                                 .interactive(matches!(search_context.searching, SearchMode::None)),
                         );
 
-                        if ui
-                            .button(fl!(crate::LANGUAGE_LOADER, "rename-button"))
-                            .clicked()
-                        {
+                        if ui.button(fl!(crate::LANGUAGE_LOADER, "rename-button")).clicked() {
                             search_context.rename_mode = false;
                         }
                     });
@@ -331,11 +299,7 @@ impl GameCheetahEngine {
                             SearchType::Short,
                             SearchType::Short.get_short_description_text(),
                         );
-                        ui.selectable_value(
-                            &mut search_context.search_type,
-                            SearchType::Int,
-                            SearchType::Int.get_short_description_text(),
-                        );
+                        ui.selectable_value(&mut search_context.search_type, SearchType::Int, SearchType::Int.get_short_description_text());
                         ui.selectable_value(
                             &mut search_context.search_type,
                             SearchType::Int64,
@@ -372,14 +336,7 @@ impl GameCheetahEngine {
                 }
 
                 if re.lost_focus() && re.ctx.input(|i| i.key_down(egui::Key::Enter)) {
-                    let len = self
-                        .searches
-                        .get(search_index)
-                        .unwrap()
-                        .results
-                        .lock()
-                        .unwrap()
-                        .len();
+                    let len = self.searches.get(search_index).unwrap().results.lock().unwrap().len();
                     if len == 0 {
                         self.initial_search(search_index);
                     } else {
@@ -389,54 +346,27 @@ impl GameCheetahEngine {
                     ui.memory_mut(|m| m.request_focus(re.id));
                 }
 
-                if self.searches.len() <= 1
-                    && ui
-                        .button("+")
-                        .on_hover_text(fl!(crate::LANGUAGE_LOADER, "open-tab-hover-text"))
-                        .clicked()
-                {
+                if self.searches.len() <= 1 && ui.button("+").on_hover_text(fl!(crate::LANGUAGE_LOADER, "open-tab-hover-text")).clicked() {
                     self.new_search();
                 }
             }
         });
 
         let search_context = self.searches.get(search_index).unwrap();
-        if !search_context.search_value_text.is_empty()
-            && search_context
-                .search_type
-                .from_string(&search_context.search_value_text)
-                .is_err()
-        {
-            ui.label(
-                RichText::new(fl!(crate::LANGUAGE_LOADER, "invalid-number-error"))
-                    .color(Color32::from_rgb(200, 0, 0)),
-            );
+        if !search_context.search_value_text.is_empty() && search_context.search_type.from_string(&search_context.search_value_text).is_err() {
+            ui.label(RichText::new(fl!(crate::LANGUAGE_LOADER, "invalid-number-error")).color(Color32::from_rgb(200, 0, 0)));
         }
 
-        if !matches!(
-            self.searches.get(search_index).unwrap().searching,
-            SearchMode::None
-        ) {
+        if !matches!(self.searches.get(search_index).unwrap().searching, SearchMode::None) {
             self.render_search_bar(ui, search_index);
             ctx.request_repaint_after(Duration::from_millis(200));
             return;
         }
 
-        if self
-            .searches
-            .get(search_index)
-            .unwrap()
-            .search_value_text
-            .as_str()
-            .parse::<i32>()
-            .is_ok()
-        {
+        if self.searches.get(search_index).unwrap().search_value_text.as_str().parse::<i32>().is_ok() {
             let len = self.searches.get(search_index).unwrap().search_results;
             if len <= 0 {
-                if ui
-                    .button(fl!(crate::LANGUAGE_LOADER, "initial-search-button"))
-                    .clicked()
-                {
+                if ui.button(fl!(crate::LANGUAGE_LOADER, "initial-search-button")).clicked() {
                     self.initial_search(search_index);
                     return;
                 }
@@ -451,33 +381,21 @@ impl GameCheetahEngine {
 
                     ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
 
-                    if ui
-                        .button(fl!(crate::LANGUAGE_LOADER, "update-button"))
-                        .clicked()
-                    {
+                    if ui.button(fl!(crate::LANGUAGE_LOADER, "update-button")).clicked() {
                         self.filter_searches(search_index);
                         return;
                     }
-                    if ui
-                        .button(fl!(crate::LANGUAGE_LOADER, "clear-button"))
-                        .clicked()
-                    {
+                    if ui.button(fl!(crate::LANGUAGE_LOADER, "clear-button")).clicked() {
                         search_context.clear_results(&self.freeze_sender);
                         return;
                     }
                     if len >= auto_show_treshold {
                         if self.show_results {
-                            if ui
-                                .button(fl!(crate::LANGUAGE_LOADER, "hide-results-button"))
-                                .clicked()
-                            {
+                            if ui.button(fl!(crate::LANGUAGE_LOADER, "hide-results-button")).clicked() {
                                 self.show_results = false;
                                 return;
                             }
-                        } else if ui
-                            .button(fl!(crate::LANGUAGE_LOADER, "show-results-button"))
-                            .clicked()
-                        {
+                        } else if ui.button(fl!(crate::LANGUAGE_LOADER, "show-results-button")).clicked() {
                             self.show_results = true;
                             return;
                         }
@@ -486,11 +404,7 @@ impl GameCheetahEngine {
                     if len == 1 {
                         ui.label(fl!(crate::LANGUAGE_LOADER, "found-one-result-label"));
                     } else {
-                        ui.label(fl!(
-                            crate::LANGUAGE_LOADER,
-                            "found-results-label",
-                            results = len
-                        ));
+                        ui.label(fl!(crate::LANGUAGE_LOADER, "found-results-label", results = len));
                     }
                 });
 
@@ -543,14 +457,8 @@ impl GameCheetahEngine {
                         ui.label(format!("0x{:X}", result.addr));
                     });
                     row.col(|ui| {
-                        if let Ok(handle) =
-                            (self.pid as process_memory::Pid).try_into_process_handle()
-                        {
-                            if let Ok(buf) = copy_address(
-                                result.addr,
-                                result.search_type.get_byte_length(),
-                                &handle,
-                            ) {
+                        if let Ok(handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
+                            if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
                                 let val = SearchValue(result.search_type, buf);
                                 let mut value_text = val.to_string();
                                 let old_text = value_text.clone();
@@ -559,13 +467,8 @@ impl GameCheetahEngine {
                                     let val = result.search_type.from_string(&value_text);
                                     match val {
                                         Ok(value) => {
-                                            handle
-                                                .put_address(result.addr, &value.1)
-                                                .unwrap_or_default();
-                                            if search_context
-                                                .freezed_addresses
-                                                .contains(&result.addr)
-                                            {
+                                            handle.put_address(result.addr, &value.1).unwrap_or_default();
+                                            if search_context.freezed_addresses.contains(&result.addr) {
                                                 self.freeze_sender
                                                     .send(Message {
                                                         msg: MessageCommand::Freeze,
@@ -576,15 +479,11 @@ impl GameCheetahEngine {
                                             }
                                         }
                                         Err(err) => {
-                                            eprintln!(
-                                                "Error converting {:?}: {}",
-                                                result.search_type, err
-                                            );
+                                            eprintln!("Error converting {:?}: {}", result.search_type, err);
                                             self.error_text = fl!(
                                                 crate::LANGUAGE_LOADER,
                                                 "conversion-error",
-                                                valuetype =
-                                                    result.search_type.get_short_description_text(),
+                                                valuetype = result.search_type.get_short_description_text(),
                                                 message = err
                                             );
                                         }
@@ -603,14 +502,8 @@ impl GameCheetahEngine {
                     row.col(|ui| {
                         let mut b = search_context.freezed_addresses.contains(&result.addr);
                         if ui.checkbox(&mut b, "").changed() {
-                            if let Ok(handle) =
-                                (self.pid as process_memory::Pid).try_into_process_handle()
-                            {
-                                if let Ok(buf) = copy_address(
-                                    result.addr,
-                                    result.search_type.get_byte_length(),
-                                    &handle,
-                                ) {
+                            if let Ok(handle) = (self.pid as process_memory::Pid).try_into_process_handle() {
+                                if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
                                     if b {
                                         search_context.freezed_addresses.insert(result.addr);
                                         self.freeze_sender
@@ -623,10 +516,7 @@ impl GameCheetahEngine {
                                     } else {
                                         search_context.freezed_addresses.remove(&(result.addr));
                                         self.freeze_sender
-                                            .send(Message::from_addr(
-                                                MessageCommand::Unfreeze,
-                                                result.addr,
-                                            ))
+                                            .send(Message::from_addr(MessageCommand::Unfreeze, result.addr))
                                             .unwrap_or_default();
                                     }
                                 }
@@ -640,10 +530,7 @@ impl GameCheetahEngine {
     fn render_search_bar(&mut self, ui: &mut egui::Ui, search_index: usize) {
         let search_context = self.searches.get_mut(search_index).unwrap();
         let current_bytes = search_context.current_bytes.load(Ordering::Acquire);
-        let progress_bar = egui::widgets::ProgressBar::new(
-            current_bytes as f32 / search_context.total_bytes as f32,
-        )
-        .show_percentage();
+        let progress_bar = egui::widgets::ProgressBar::new(current_bytes as f32 / search_context.total_bytes as f32).show_percentage();
         match search_context.searching {
             SearchMode::None => {}
             SearchMode::Percent => {

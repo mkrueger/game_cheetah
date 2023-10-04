@@ -7,9 +7,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use crate::{
-    Message, MessageCommand, SearchContext, SearchMode, SearchResult, SearchType, SearchValue,
-};
+use crate::{Message, MessageCommand, SearchContext, SearchMode, SearchResult, SearchType, SearchValue};
 use boyer_moore_magiclen::BMByte;
 use i18n_embed_fl::fl;
 use proc_maps::get_process_maps;
@@ -88,10 +86,7 @@ impl Default for GameCheetahEngine {
             processes: Vec::new(),
             last_process_update: SystemTime::now(),
             current_search: 0,
-            searches: vec![Box::new(SearchContext::new(fl!(
-                crate::LANGUAGE_LOADER,
-                "first-search-label"
-            )))],
+            searches: vec![Box::new(SearchContext::new(fl!(crate::LANGUAGE_LOADER, "first-search-label")))],
             search_threads: ThreadPool::new(16),
             freeze_sender: tx,
             show_results: false,
@@ -102,20 +97,13 @@ impl Default for GameCheetahEngine {
 
 impl GameCheetahEngine {
     pub fn new_search(&mut self) {
-        let ctx = SearchContext::new(fl!(
-            crate::LANGUAGE_LOADER,
-            "search-label",
-            search = (1 + self.searches.len()).to_string()
-        ));
+        let ctx = SearchContext::new(fl!(crate::LANGUAGE_LOADER, "search-label", search = (1 + self.searches.len()).to_string()));
         self.current_search = self.searches.len();
         self.searches.push(Box::new(ctx));
     }
 
     pub fn initial_search(&mut self, search_index: usize) {
-        if !matches!(
-            self.searches.get_mut(search_index).unwrap().searching,
-            SearchMode::None
-        ) {
+        if !matches!(self.searches.get_mut(search_index).unwrap().searching, SearchMode::None) {
             return;
         }
         self.remove_freezes(search_index);
@@ -125,11 +113,7 @@ impl GameCheetahEngine {
         match get_process_maps(self.pid) {
             Ok(maps) => {
                 self.searches.get_mut(search_index).unwrap().total_bytes = 0;
-                self.searches
-                    .get_mut(search_index)
-                    .unwrap()
-                    .current_bytes
-                    .swap(0, Ordering::SeqCst);
+                self.searches.get_mut(search_index).unwrap().current_bytes.swap(0, Ordering::SeqCst);
                 for map in maps {
                     if cfg!(target_os = "windows") {
                         if let Some(file_name) = map.filename() {
@@ -142,11 +126,7 @@ impl GameCheetahEngine {
                             continue;
                         }
                     } else {
-                        if !map.is_write()
-                            || map.is_exec()
-                            || map.filename().is_none()
-                            || map.size() < 1024 * 1024
-                        {
+                        if !map.is_write() || map.is_exec() || map.filename().is_none() || map.size() < 1024 * 1024 {
                             continue;
                         }
                         if let Some(file_name) = map.filename() {
@@ -161,19 +141,11 @@ impl GameCheetahEngine {
 
                     let max_block = 10 * 1024 * 1024;
                     let current_search = self.searches.get(search_index).unwrap();
-                    let search_for_value = current_search
-                        .search_type
-                        .from_string(&current_search.search_value_text)
-                        .unwrap();
+                    let search_for_value = current_search.search_type.from_string(&current_search.search_value_text).unwrap();
                     self.error_text.clear();
 
                     while size > max_block + 3 {
-                        self.spawn_first_search_thread(
-                            search_for_value.clone(),
-                            start,
-                            max_block + 3,
-                            search_index,
-                        );
+                        self.spawn_first_search_thread(search_for_value.clone(), start, max_block + 3, search_index);
 
                         start += max_block;
                         size -= max_block;
@@ -183,8 +155,7 @@ impl GameCheetahEngine {
             }
             Err(err) => {
                 eprintln!("error getting process maps for pid {}: {}", self.pid, err);
-                self.error_text =
-                    format!("error getting process maps for pid {}: {}", self.pid, err);
+                self.error_text = format!("error getting process maps for pid {}: {}", self.pid, err);
             }
         }
     }
@@ -193,10 +164,7 @@ impl GameCheetahEngine {
         self.remove_freezes(search_index);
         let search_context = self.searches.get_mut(search_index).unwrap();
         search_context.searching = SearchMode::Percent;
-        let old_results_arc: Arc<Mutex<Vec<SearchResult>>> = mem::replace(
-            &mut search_context.results,
-            Arc::new(Mutex::new(Vec::new())),
-        );
+        let old_results_arc: Arc<Mutex<Vec<SearchResult>>> = mem::replace(&mut search_context.results, Arc::new(Mutex::new(Vec::new())));
         let old_results = old_results_arc.lock().unwrap();
         search_context.total_bytes = old_results.len();
         search_context.current_bytes.swap(0, Ordering::SeqCst);
@@ -214,20 +182,12 @@ impl GameCheetahEngine {
 
     pub fn remove_freezes(&mut self, search_index: usize) {
         let search_context = self.searches.get_mut(search_index).unwrap();
-        GameCheetahEngine::remove_freezes_from(
-            &self.freeze_sender,
-            &mut search_context.freezed_addresses,
-        );
+        GameCheetahEngine::remove_freezes_from(&self.freeze_sender, &mut search_context.freezed_addresses);
     }
 
-    pub fn remove_freezes_from(
-        freeze_sender: &mpsc::Sender<Message>,
-        freezes: &mut std::collections::HashSet<usize>,
-    ) {
+    pub fn remove_freezes_from(freeze_sender: &mpsc::Sender<Message>, freezes: &mut std::collections::HashSet<usize>) {
         for result in freezes.iter() {
-            freeze_sender
-                .send(Message::from_addr(MessageCommand::Unfreeze, *result))
-                .unwrap_or_default();
+            freeze_sender.send(Message::from_addr(MessageCommand::Unfreeze, *result)).unwrap_or_default();
         }
         freezes.clear();
     }
@@ -262,13 +222,7 @@ impl GameCheetahEngine {
         });
     }
 
-    fn spawn_update_thread(
-        &mut self,
-        search_index: usize,
-        old_results_arc: Arc<Mutex<Vec<SearchResult>>>,
-        from: usize,
-        to: usize,
-    ) {
+    fn spawn_update_thread(&mut self, search_index: usize, old_results_arc: Arc<Mutex<Vec<SearchResult>>>, from: usize, to: usize) {
         if from >= to {
             return;
         }
@@ -297,21 +251,13 @@ impl GameCheetahEngine {
         });
     }
 
-    fn spawn_first_search_thread(
-        &mut self,
-        search_value: SearchValue,
-        start: usize,
-        size: usize,
-        search_index: usize,
-    ) {
+    fn spawn_first_search_thread(&mut self, search_value: SearchValue, start: usize, size: usize, search_index: usize) {
         let search_context = self.searches.get(search_index).unwrap();
         let pid = self.pid;
         let current_bytes = search_context.current_bytes.clone();
         let results: Arc<Mutex<Vec<SearchResult>>> = search_context.results.clone();
         self.search_threads.execute(move || {
-            let handle = (pid as process_memory::Pid)
-                .try_into_process_handle()
-                .unwrap();
+            let handle = (pid as process_memory::Pid).try_into_process_handle().unwrap();
             if let Ok(memory_data) = copy_address(start, size, &handle) {
                 match search_value.0 {
                     SearchType::Guess => {
@@ -319,24 +265,21 @@ impl GameCheetahEngine {
 
                         if let Ok(search_value) = SearchType::Int.from_string(&val) {
                             let search_data = &search_value.1;
-                            let r =
-                                search_memory(&memory_data, search_data, SearchType::Int, start);
+                            let r = search_memory(&memory_data, search_data, SearchType::Int, start);
                             if !r.is_empty() {
                                 results.lock().unwrap().extend_from_slice(&r);
                             }
                         }
                         if let Ok(search_value) = SearchType::Float.from_string(&val) {
                             let search_data = &search_value.1;
-                            let r =
-                                search_memory(&memory_data, search_data, SearchType::Float, start);
+                            let r = search_memory(&memory_data, search_data, SearchType::Float, start);
                             if !r.is_empty() {
                                 results.lock().unwrap().extend_from_slice(&r);
                             }
                         }
                         if let Ok(search_value) = SearchType::Double.from_string(&val) {
                             let search_data = &search_value.1;
-                            let r =
-                                search_memory(&memory_data, search_data, SearchType::Double, start);
+                            let r = search_memory(&memory_data, search_data, SearchType::Double, start);
                             if !r.is_empty() {
                                 results.lock().unwrap().extend_from_slice(&r);
                             }
@@ -358,21 +301,14 @@ impl GameCheetahEngine {
     pub(crate) fn select_process(&mut self, process: &ProcessInfo) {
         self.pid = process.pid;
         self.freeze_sender
-            .send(Message::from_addr(
-                MessageCommand::Pid,
-                process.pid as usize,
-            ))
+            .send(Message::from_addr(MessageCommand::Pid, process.pid as usize))
             .unwrap_or_default();
         self.process_name = process.name.clone();
         self.show_process_window = false;
     }
 }
 
-fn update_results<T>(
-    old_results: &[SearchResult],
-    value_text: &str,
-    handle: &T,
-) -> Vec<SearchResult>
+fn update_results<T>(old_results: &[SearchResult], value_text: &str, handle: &T) -> Vec<SearchResult>
 where
     T: process_memory::CopyAddress,
 {
@@ -380,9 +316,7 @@ where
     for result in old_results {
         match result.search_type.from_string(value_text) {
             Ok(my_int) => {
-                if let Ok(buf) =
-                    copy_address(result.addr, result.search_type.get_byte_length(), handle)
-                {
+                if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), handle) {
                     let val = SearchValue(result.search_type, buf);
                     if val.1 == my_int.1 {
                         results.push(*result);
@@ -398,12 +332,7 @@ where
     results
 }
 
-fn search_memory(
-    memory_data: &Vec<u8>,
-    search_data: &Vec<u8>,
-    search_type: SearchType,
-    start: usize,
-) -> Vec<SearchResult> {
+fn search_memory(memory_data: &Vec<u8>, search_data: &Vec<u8>, search_type: SearchType, start: usize) -> Vec<SearchResult> {
     let mut result = Vec::new();
     let search_bytes = BMByte::from(search_data).unwrap();
 

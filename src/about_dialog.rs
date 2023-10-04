@@ -28,11 +28,7 @@ impl GameCheetahEngine {
 
             ui.label(fl!(crate::LANGUAGE_LOADER, "about-dialog-description"));
             ui.add_space(12.0); // ui.separator();
-            ui.label(fl!(
-                crate::LANGUAGE_LOADER,
-                "about-dialog-created_by",
-                authors = env!("CARGO_PKG_AUTHORS")
-            ));
+            ui.label(fl!(crate::LANGUAGE_LOADER, "about-dialog-created_by", authors = env!("CARGO_PKG_AUTHORS")));
 
             ui.add_space(8.0); // ui.separator();
         });
@@ -43,9 +39,7 @@ impl GameCheetahEngine {
             .show_inside(ui, |ui| {
                 ui.add_space(8.0); // ui.separator();
                 ui.vertical_centered(|ui| {
-                    let button: egui::Button =
-                        egui::Button::new(fl!(crate::LANGUAGE_LOADER, "about-dialog-ok"))
-                            .min_size(Vec2::new(100.0, 24.0));
+                    let button: egui::Button = egui::Button::new(fl!(crate::LANGUAGE_LOADER, "about-dialog-ok")).min_size(Vec2::new(100.0, 24.0));
                     if ui.add(button).clicked() {
                         self.show_about_dialog = false;
                     }
