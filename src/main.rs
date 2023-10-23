@@ -26,6 +26,8 @@ fn main() {
 
     let options = eframe::NativeOptions {
         multisampling: 0,
+        renderer: eframe::Renderer::Wgpu,
+        hardware_acceleration: eframe::HardwareAcceleration::Preferred,
         icon_data: Some(eframe::IconData::try_from_png_bytes(&include_bytes!("../build/linux/256x256.png")[..]).unwrap()),
         ..Default::default()
     };
@@ -42,10 +44,16 @@ fn main() {
     // Log to stdout (if you run with `RUST_LOG=debug`).
     tracing_subscriber::fmt::init();
 
-    let native_options = eframe::NativeOptions::default();
+    let options = eframe::NativeOptions {
+        multisampling: 0,
+        renderer: eframe::Renderer::Wgpu,
+        hardware_acceleration: eframe::HardwareAcceleration::Preferred,
+        icon_data: Some(eframe::IconData::try_from_png_bytes(&include_bytes!("../build/linux/256x256.png")[..]).unwrap()),
+        ..Default::default()
+    };
     eframe::run_native(
         format!("{} {}", APP_NAME, VERSION).as_str(),
-        native_options,
+        options,
         Box::new(|cc| Box::new(game_cheetah::GameCheetahEngine::new(cc))),
     );
 }
@@ -55,10 +63,16 @@ fn main() {
     // Log to stdout (if you run with `RUST_LOG=debug`).
     tracing_subscriber::fmt::init();
 
-    let native_options = eframe::NativeOptions::default();
+    let options = eframe::NativeOptions {
+        multisampling: 0,
+        renderer: eframe::Renderer::Wgpu,
+        hardware_acceleration: eframe::HardwareAcceleration::Preferred,
+        icon_data: Some(eframe::IconData::try_from_png_bytes(&include_bytes!("../build/linux/256x256.png")[..]).unwrap()),
+        ..Default::default()
+    };
     eframe::run_native(
         format!("{} {}", APP_NAME, VERSION).as_str(),
-        native_options,
+        options,
         Box::new(|cc| Box::new(game_cheetah::GameCheetahEngine::new(cc))),
     )
     .unwrap();
