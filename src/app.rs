@@ -296,6 +296,11 @@ impl GameCheetahEngine {
                         );
                         ui.selectable_value(
                             &mut search_context.search_type,
+                            SearchType::Byte,
+                            SearchType::Byte.get_short_description_text(),
+                        );
+                        ui.selectable_value(
+                            &mut search_context.search_type,
                             SearchType::Short,
                             SearchType::Short.get_short_description_text(),
                         );

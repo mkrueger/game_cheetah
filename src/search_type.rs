@@ -5,6 +5,7 @@ use crate::SearchValue;
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum SearchType {
     Guess,
+    Byte,
     Short,
     Int,
     Int64,
@@ -16,6 +17,7 @@ impl SearchType {
     pub fn get_description_text(&self) -> String {
         match self {
             SearchType::Guess => fl!(crate::LANGUAGE_LOADER, "guess-value-item"),
+            SearchType::Byte => fl!(crate::LANGUAGE_LOADER, "byte-value-item"),
             SearchType::Short => fl!(crate::LANGUAGE_LOADER, "short-value-item"),
             SearchType::Int => fl!(crate::LANGUAGE_LOADER, "int-value-item"),
             SearchType::Int64 => fl!(crate::LANGUAGE_LOADER, "int64-value-item"),
@@ -27,6 +29,7 @@ impl SearchType {
     pub fn get_byte_length(&self) -> usize {
         match self {
             SearchType::Guess => panic!("guess has no length"),
+            SearchType::Byte => 1,
             SearchType::Short => 2,
             SearchType::Int => 4,
             SearchType::Int64 => 4,
@@ -38,6 +41,7 @@ impl SearchType {
     pub fn get_short_description_text(&self) -> String {
         match self {
             SearchType::Guess => fl!(crate::LANGUAGE_LOADER, "guess-descr"),
+            SearchType::Byte => fl!(crate::LANGUAGE_LOADER, "byte-descr"),
             SearchType::Short => fl!(crate::LANGUAGE_LOADER, "short-descr"),
             SearchType::Int => fl!(crate::LANGUAGE_LOADER, "int-descr"),
             SearchType::Int64 => fl!(crate::LANGUAGE_LOADER, "int64-descr"),
@@ -48,6 +52,13 @@ impl SearchType {
 
     pub fn from_string(&self, txt: &str) -> Result<SearchValue, String> {
         match self {
+            SearchType::Byte => {
+                let parsed = txt.parse::<u8>();
+                match parsed {
+                    Ok(f) => Ok(SearchValue(SearchType::Byte, vec![f])),
+                    Err(_) => Err(fl!(crate::LANGUAGE_LOADER, "invalid-input-error")),
+                }
+            }
             SearchType::Short => {
                 let parsed = txt.parse::<i16>();
                 match parsed {

@@ -28,6 +28,7 @@ invalid-number-error = Invalid number
 conversion-error = Error converting { $valuetype }: { $message }
 
 guess-value-item = number (2-8 bytes)
+byte-value-item = byte (1 byte)
 short-value-item = short (2 bytes)
 int-value-item = int (4 bytes)
 int64-value-item = int64 (8 bytes)
@@ -35,6 +36,7 @@ float-value-item = float (4 bytes)
 double-value-item = double (8 bytes)
 
 guess-descr = Number
+byte-descr = byte
 short-descr = short
 int-descr = int
 int64-descr = int64
