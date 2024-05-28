@@ -202,7 +202,7 @@ impl GameCheetahEngine {
             }
             let pid = pid2.as_u32();
             let user = match process.user_id() {
-                Some(user) => sys.get_user_by_id(user).unwrap().name().to_string(),
+                Some(user) => user.to_string(),
                 None => "".to_string(),
             };
             self.processes.push(ProcessInfo {

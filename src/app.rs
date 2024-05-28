@@ -28,7 +28,7 @@ impl GameCheetahEngine {
             ui.spacing_mut().item_spacing = egui::Vec2::splat(5.0);
 
             let i = ui.add(egui::TextEdit::singleline(&mut self.process_filter).hint_text(fl!(crate::LANGUAGE_LOADER, "filter-processes-hint")));
-            if ui.memory(|m| m.focus().is_none()) {
+            if !ui.memory(|m| m.has_focus(i.id)) {
                 ui.memory_mut(|m| m.request_focus(i.id));
             }
 
@@ -88,8 +88,8 @@ impl GameCheetahEngine {
 
                 let num_rows: usize = results.len();
 
-                body.rows(row_height, num_rows, |row_index, mut row| {
-                    let process = &results[row_index];
+                body.rows(row_height, num_rows, |mut row| {
+                    let process = &results[row.index()];
 
                     row.col(|ui| {
                         let r = ui.selectable_label(false, process.pid.to_string());
@@ -294,11 +294,7 @@ impl GameCheetahEngine {
                             SearchType::Guess,
                             SearchType::Guess.get_short_description_text(),
                         );
-                        ui.selectable_value(
-                            &mut search_context.search_type,
-                            SearchType::Byte,
-                            SearchType::Byte.get_short_description_text(),
-                        );
+                        ui.selectable_value(&mut search_context.search_type, SearchType::Byte, SearchType::Byte.get_short_description_text());
                         ui.selectable_value(
                             &mut search_context.search_type,
                             SearchType::Short,
@@ -347,7 +343,7 @@ impl GameCheetahEngine {
                     } else {
                         self.filter_searches(search_index);
                     }
-                } else if ui.memory(|m| m.focus().is_none()) {
+                } else if !ui.memory(|m| m.has_focus(re.id)) {
                     ui.memory_mut(|m| m.request_focus(re.id));
                 }
 
@@ -456,8 +452,8 @@ impl GameCheetahEngine {
                 let results = search_context.results.lock().unwrap();
                 let num_rows: usize = results.len();
 
-                body.rows(row_height, num_rows, |row_index, mut row| {
-                    let result = &results[row_index];
+                body.rows(row_height, num_rows, |mut row| {
+                    let result = &results[row.index()];
                     row.col(|ui| {
                         ui.label(format!("0x{:X}", result.addr));
                     });
