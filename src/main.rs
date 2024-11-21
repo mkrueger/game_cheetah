@@ -23,17 +23,21 @@ fn main() {
     // Log to stdout (if you run with `RUST_LOG=debug`).
     tracing_subscriber::fmt::init();
 
-    let options = eframe::NativeOptions {
+    let mut options = eframe::NativeOptions {
         multisampling: 0,
-        //        renderer: eframe::Renderer::,
         hardware_acceleration: eframe::HardwareAcceleration::Preferred,
-        //        icon_data: Some(eframe::IconData::try_from_png_bytes(&include_bytes!("../build/linux/256x256.png")[..]).unwrap()),
+        centered: true,
         ..Default::default()
     };
+    let icon_data = eframe::icon_data::from_png_bytes(&include_bytes!("../build/linux/256x256.png")[..]).unwrap();
+    options.viewport = options.viewport.with_icon(icon_data);
+    
     eframe::run_native(
         format!("{APP_NAME} {VERSION}").as_str(),
         options,
-        Box::new(|cc| Ok(Box::new(game_cheetah::GameCheetahEngine::new(cc)))),
+        Box::new(|cc| {
+            Ok(Box::new(game_cheetah::GameCheetahEngine::new(cc)))
+        }),
     )
     .unwrap();
 }
