@@ -138,7 +138,7 @@ impl eframe::App for GameCheetahEngine {
                 return;
             }
             if self.show_about_dialog {
-                ui.set_enabled(false);
+                ui.disable();
             }
 
             ui.spacing_mut().item_spacing = egui::Vec2::splat(12.0);
@@ -286,7 +286,7 @@ impl GameCheetahEngine {
                 );
 
                 let old_value = search_context.search_type;
-                egui::ComboBox::from_id_source(1)
+                egui::ComboBox::from_id_salt(1)
                     .selected_text(search_context.search_type.get_description_text())
                     .show_ui(ui, |ui| {
                         ui.selectable_value(
