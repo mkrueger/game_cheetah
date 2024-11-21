@@ -155,7 +155,7 @@ impl eframe::App for GameCheetahEngine {
                     .clicked()
                 {
                     self.show_process_window = !self.show_process_window;
-
+                    self.set_focus = true;
                     if self.show_process_window {
                         self.update_process_data();
                         return;
@@ -343,7 +343,8 @@ impl GameCheetahEngine {
                     } else {
                         self.filter_searches(search_index);
                     }
-                } else if !ui.memory(|m| m.has_focus(re.id)) {
+                } else if self.set_focus && !ui.memory(|m| m.has_focus(re.id)) {
+                    self.set_focus = false;
                     ui.memory_mut(|m| m.request_focus(re.id));
                 }
 

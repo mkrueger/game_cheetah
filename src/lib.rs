@@ -14,7 +14,6 @@ mod app;
 mod state;
 pub use state::*;
 mod about_dialog;
-pub use about_dialog::*;
 
 pub enum MessageCommand {
     // Quit,

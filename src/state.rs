@@ -41,6 +41,7 @@ pub struct GameCheetahEngine {
     pub freeze_sender: mpsc::Sender<Message>,
     pub error_text: String,
     pub show_results: bool,
+    pub set_focus: bool,
 }
 
 impl Default for GameCheetahEngine {
@@ -91,6 +92,7 @@ impl Default for GameCheetahEngine {
             freeze_sender: tx,
             show_results: false,
             show_about_dialog: false,
+            set_focus: true,
         }
     }
 }
