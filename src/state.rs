@@ -207,8 +207,8 @@ impl GameCheetahEngine {
             };
             self.processes.push(ProcessInfo {
                 pid: pid.try_into().unwrap(),
-                name: process.name().to_string(),
-                cmd: process.cmd().join(" "),
+                name: process.name().to_string_lossy().to_string(),
+                cmd: format!("{:?} ", process.cmd()),
                 user,
                 memory: process.memory() as usize,
             });

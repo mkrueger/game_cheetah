@@ -34,7 +34,7 @@ fn main() {
     eframe::run_native(
         format!("{APP_NAME} {VERSION}").as_str(),
         options,
-        Box::new(|cc| Box::new(game_cheetah::GameCheetahEngine::new(cc))),
+        Box::new(|cc| Ok(Box::new(game_cheetah::GameCheetahEngine::new(cc)))),
     )
     .unwrap();
 }
