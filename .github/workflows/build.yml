@@ -40,6 +40,7 @@ jobs:
    - name: Build AppImage
      id: build-appimage
      run: |
+       cargo build --release  # Add this - need to build first!
        wget https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
        chmod +x appimagetool-x86_64.AppImage
        mkdir -p ${{ env.APP_NAME }}-appimage/usr/bin
@@ -57,8 +58,9 @@ jobs:
    - name: 'Upload AppImage'
      uses: actions/upload-artifact@v4
      with:
-      name: ${{ env.APP_IMG }}
+      name: ${{ env.APP_NAME }}_appimage_${{ env.VERSION }}  # Better naming
       path: ${{ env.APP_IMG }}
+      
   build_windows:
     runs-on: windows-latest
     steps:
@@ -80,11 +82,6 @@ jobs:
         echo "Version: $VERSION"
         Add-Content -Path $env:GITHUB_ENV -Value "VERSION=$VERSION"
         get-content .\build\file_id.diz | %{$_ -replace "#VERSION","$VERSION"} >file_id.diz        
-#    - name: Build MSI installer.
-#      run: |
-#        echo "Building ${{ env.VERSION }} installer…"
-#        wix extension add WixToolset.UI.wixext WixToolset.Util.wixext
-#        wix build -arch "x64" -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext -d "PATH=./cert.pfx" -d "VERSION=${{ env.VERSION }}"  -out "./${{ env.APP_NAME }}-${{ env.VERSION }}-installer.msi" "build/windows/installer.wxs"
     - name: Delete PFX certificate
       run: del "./cert.pfx"
     - name: 'Upload Artifact'
@@ -92,13 +89,11 @@ jobs:
       with:
         name: ${{ env.APP_NAME }}_${{ env.VERSION }}_windows
         path: |
-          ${{ env.APP_NAME }}.exe
+          target/release/${{ env.APP_NAME }}.exe  # Fixed path
+          file_id.diz
           
   build_mac:
-    strategy:
-      matrix:
-        target: [aarch64-apple-darwin, x86_64-apple-darwin]
-    runs-on: macos-latest
+    runs-on: macos-latest  # Removed matrix strategy
     steps:
       - uses: actions/checkout@v4
       - name: Install cargo bundle & get
@@ -128,7 +123,7 @@ jobs:
           sips -z 16 16 build/mac/128x128@2x.png --out AppIcon.iconset/icon_16x16.png
           sips -z 32 32 build/mac/128x128@2x.png --out AppIcon.iconset/icon_16x16@2x.png
           sips -z 32 32 build/mac/128x128@2x.png --out AppIcon.iconset/icon_32x32.png
-          sips -z 64 64 build/mac/128x128@2x.png --out AppIcon.iconset/icon_32x32@2.png
+          sips -z 64 64 build/mac/128x128@2x.png --out AppIcon.iconset/icon_32x32@2x.png  # Fixed typo
           sips -z 128 128 build/mac/128x128@2x.png --out AppIcon.iconset/icon_128x128.png
           cp build/mac/128x128@2x.png AppIcon.iconset/icon_128x128@2x.png
           iconutil -c icns AppIcon.iconset
@@ -159,7 +154,7 @@ jobs:
       - name: 'Upload dmg'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}_osx_${{ env.VERSION }}${{ matrix.target }}
+          name: ${{ env.APP_NAME }}_osx_${{ env.VERSION }}_universal  # Better naming
           path: |
             ${{ env.APP_NAME }}-${{ env.VERSION }}-universal.dmg
             file_id.diz
