@@ -12,7 +12,7 @@ jobs:
   build_linux:
    runs-on: ubuntu-latest
    steps:
-   - uses: actions/checkout@v3
+   - uses: actions/checkout@v4
    - name: Install gtk
      run: |
        sudo apt-get update
@@ -31,7 +31,7 @@ jobs:
        mv $DEB ${{ env.APP_NAME }}_${VERSION}_amd64.deb
        sed "s/#VERSION/$VERSION/g" <build/file_id.diz  >file_id.diz
    - name: 'Upload Artifact'
-     uses: actions/upload-artifact@v3
+     uses: actions/upload-artifact@v4
      with:
        name: ${{ env.APP_NAME }}_linux_${{ env.VERSION }}
        path: |
@@ -41,7 +41,7 @@ jobs:
   build_windows:
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@4
     - name: Build exe
       run: |
         cargo build --release
@@ -67,7 +67,7 @@ jobs:
     - name: Delete PFX certificate
       run: del "./cert.pfx"
     - name: 'Upload Artifact'
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ env.APP_NAME }}_${{ env.VERSION }}_windows
         path: |
@@ -80,7 +80,7 @@ jobs:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Install cargo bundle & get
         run: |
           rustup target add ${{ matrix.target }}
@@ -142,7 +142,7 @@ jobs:
           security delete-keychain $RUNNER_TEMP/app-signing.keychain-db
           # rm ~/Library/MobileDevice/Provisioning\ Profiles/build_pp.mobileprovision       
       - name: 'Upload Artifact'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ env.APP_NAME }}_osx_${{ env.VERSION }}_${{ matrix.target }}
           path: |
