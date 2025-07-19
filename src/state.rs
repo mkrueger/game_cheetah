@@ -2,18 +2,14 @@ use std::{
     cmp::min,
     collections::{HashMap, HashSet},
     mem,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
-        mpsc,
-    },
+    sync::{Arc, Mutex, atomic::Ordering, mpsc},
     thread,
     time::{Duration, SystemTime},
 };
 
 use crate::{FreezeMessage, MessageCommand, SearchContext, SearchMode, SearchResult, SearchType, SearchValue};
-use boyer_moore_magiclen::BMByte;
 use i18n_embed_fl::fl;
+use memchr::memmem;
 use proc_maps::get_process_maps;
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 use rayon::prelude::*;
@@ -432,12 +428,328 @@ where
     results
 }
 
-fn search_memory(memory_data: &Vec<u8>, search_data: &Vec<u8>, search_type: SearchType, start: usize) -> Vec<SearchResult> {
+fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: SearchType, start: usize) -> Vec<SearchResult> {
     let mut result = Vec::new();
-    let search_bytes = BMByte::from(search_data).unwrap();
 
-    for i in search_bytes.find_all_in(memory_data) {
-        result.push(SearchResult::new(i + start, search_type));
+    match search_type {
+        // For single byte searches, use memchr which is SIMD optimized
+        SearchType::Byte => {
+            if search_data.len() == 1 {
+                let positions = memchr::memchr_iter(search_data[0], memory_data);
+                for pos in positions {
+                    result.push(SearchResult::new(pos + start, search_type));
+                }
+            }
+        }
+        // For aligned integer types, use optimized searching
+        SearchType::Short | SearchType::Int | SearchType::Int64 => {
+            // Use SIMD-optimized pattern matching for aligned data
+            result = search_aligned_integers(memory_data, search_data, search_type, start);
+        }
+        // For floats and doubles, fall back to boyer-moore or memmem
+        SearchType::Float | SearchType::Double | SearchType::Guess => {
+            // Use memmem for better performance than boyer-moore
+            let finder = memmem::Finder::new(search_data);
+            for pos in finder.find_iter(memory_data) {
+                result.push(SearchResult::new(pos + start, search_type));
+            }
+        } /*
+          _ => {
+              // Fallback to boyer-moore for other types
+              let search_bytes = BMByte::from(search_data.to_vec()).unwrap();
+              for i in search_bytes.find_all_in(memory_data.to_vec()) {
+                  result.push(SearchResult::new(i + start, search_type));
+              }
+          }*/
     }
+
     result
+}
+
+// Optimized search for aligned integers using SIMD
+fn search_aligned_integers(memory_data: &[u8], search_data: &[u8], search_type: SearchType, start: usize) -> Vec<SearchResult> {
+    let mut results = Vec::new();
+
+    match search_type {
+        SearchType::Short => {
+            if search_data.len() != 2 {
+                return results;
+            }
+            let search_value = u16::from_le_bytes([search_data[0], search_data[1]]);
+
+            // Search aligned positions first (much faster)
+            let aligned_data = &memory_data[..memory_data.len() & !1];
+            for (i, chunk) in aligned_data.chunks_exact(2).enumerate() {
+                let value = u16::from_le_bytes([chunk[0], chunk[1]]);
+                if value == search_value {
+                    results.push(SearchResult::new(start + i * 2, SearchType::Short));
+                }
+            }
+
+            // Check unaligned positions (slower, but necessary for completeness)
+            if memory_data.len() > 2 {
+                for i in 1..memory_data.len() - 1 {
+                    if memory_data[i] == search_data[0] && memory_data[i + 1] == search_data[1] {
+                        results.push(SearchResult::new(start + i, SearchType::Short));
+                    }
+                }
+            }
+        }
+        SearchType::Int => {
+            if search_data.len() != 4 {
+                return results;
+            }
+            let search_value = u32::from_le_bytes([search_data[0], search_data[1], search_data[2], search_data[3]]);
+
+            // Use SIMD on x86_64 if available
+            #[cfg(target_arch = "x86_64")]
+            {
+                results.extend(search_u32_simd(memory_data, search_value, start));
+            }
+
+            // Fallback for non-x86_64 or if SIMD didn't find everything
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                // Search aligned positions first
+                let aligned_data = &memory_data[..memory_data.len() & !3];
+                for (i, chunk) in aligned_data.chunks_exact(4).enumerate() {
+                    let value = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                    if value == search_value {
+                        results.push(SearchResult::new(start + i * 4, SearchType::Int));
+                    }
+                }
+
+                // For unaligned search, use memmem which is SIMD optimized
+                let finder = memmem::Finder::new(search_data);
+                for pos in finder.find_iter(memory_data) {
+                    // Skip aligned positions we already found
+                    if pos % 4 != 0 {
+                        results.push(SearchResult::new(start + pos, SearchType::Int));
+                    }
+                }
+            }
+        }
+        SearchType::Int64 => {
+            if search_data.len() != 8 {
+                return results;
+            }
+            let search_value = u64::from_le_bytes([
+                search_data[0],
+                search_data[1],
+                search_data[2],
+                search_data[3],
+                search_data[4],
+                search_data[5],
+                search_data[6],
+                search_data[7],
+            ]);
+
+            // Use SIMD on x86_64 if available
+            #[cfg(target_arch = "x86_64")]
+            {
+                results.extend(search_u64_simd(memory_data, search_value, start));
+            }
+
+            // Fallback for non-x86_64
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                // Search aligned positions first
+                let aligned_data = &memory_data[..memory_data.len() & !7];
+                for (i, chunk) in aligned_data.chunks_exact(8).enumerate() {
+                    let value = u64::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7]]);
+                    if value == search_value {
+                        results.push(SearchResult::new(start + i * 8, SearchType::Int64));
+                    }
+                }
+
+                // For unaligned search, use memmem
+                let finder = memmem::Finder::new(search_data);
+                for pos in finder.find_iter(memory_data) {
+                    if pos % 8 != 0 {
+                        results.push(SearchResult::new(start + pos, SearchType::Int64));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    results
+}
+
+// For even better performance with explicit SIMD, you can use the `packed_simd` or `std::simd` features
+#[cfg(target_arch = "x86_64")]
+fn search_u32_simd(memory_data: &[u8], search_value: u32, start: usize) -> Vec<SearchResult> {
+    use std::arch::x86_64::*;
+
+    let mut results = Vec::new();
+
+    unsafe {
+        // Ensure we have SSE2 support
+        if is_x86_feature_detected!("sse2") {
+            let search_vec = _mm_set1_epi32(search_value as i32);
+
+            // Process 16 bytes (4 u32s) at a time
+            let chunks = memory_data.chunks_exact(16);
+            let remainder = chunks.remainder();
+
+            for (chunk_idx, chunk) in chunks.enumerate() {
+                let data = _mm_loadu_si128(chunk.as_ptr() as *const __m128i);
+                let cmp = _mm_cmpeq_epi32(data, search_vec);
+                let mask = _mm_movemask_epi8(cmp);
+
+                if mask != 0 {
+                    // Check each u32 in the chunk
+                    for i in 0..4 {
+                        if (mask >> (i * 4)) & 0xF == 0xF {
+                            results.push(SearchResult::new(start + chunk_idx * 16 + i * 4, SearchType::Int));
+                        }
+                    }
+                }
+            }
+
+            // Handle remainder with regular search
+            if remainder.len() >= 4 {
+                for i in 0..=(remainder.len() - 4) {
+                    let value = u32::from_le_bytes([remainder[i], remainder[i + 1], remainder[i + 2], remainder[i + 3]]);
+                    if value == search_value {
+                        let base_offset = memory_data.len() - remainder.len();
+                        results.push(SearchResult::new(start + base_offset + i, SearchType::Int));
+                    }
+                }
+            }
+        }
+    }
+
+    results
+}
+
+#[cfg(target_arch = "x86_64")]
+fn search_u64_simd(memory_data: &[u8], search_value: u64, start: usize) -> Vec<SearchResult> {
+    use std::arch::x86_64::*;
+
+    let mut results = Vec::new();
+
+    unsafe {
+        // For u64, we can use different strategies depending on available features
+        if is_x86_feature_detected!("avx2") {
+            // AVX2 path - process 32 bytes (4 u64s) at a time
+            let search_vec = _mm256_set1_epi64x(search_value as i64);
+
+            let chunks = memory_data.chunks_exact(32);
+            let remainder = chunks.remainder();
+
+            for (chunk_idx, chunk) in chunks.enumerate() {
+                let data = _mm256_loadu_si256(chunk.as_ptr() as *const __m256i);
+                let cmp = _mm256_cmpeq_epi64(data, search_vec);
+                let mask = _mm256_movemask_epi8(cmp);
+
+                if mask != 0 {
+                    // Check each u64 in the chunk
+                    for i in 0..4 {
+                        if (mask >> (i * 8)) & 0xFF == 0xFF {
+                            results.push(SearchResult::new(start + chunk_idx * 32 + i * 8, SearchType::Int64));
+                        }
+                    }
+                }
+            }
+
+            // Handle remainder
+            if remainder.len() >= 8 {
+                for i in 0..=(remainder.len() - 8) {
+                    let value = u64::from_le_bytes([
+                        remainder[i],
+                        remainder[i + 1],
+                        remainder[i + 2],
+                        remainder[i + 3],
+                        remainder[i + 4],
+                        remainder[i + 5],
+                        remainder[i + 6],
+                        remainder[i + 7],
+                    ]);
+                    if value == search_value {
+                        let base_offset = memory_data.len() - remainder.len();
+                        results.push(SearchResult::new(start + base_offset + i, SearchType::Int64));
+                    }
+                }
+            }
+        } else if is_x86_feature_detected!("sse2") {
+            // SSE2 path - process 16 bytes (2 u64s) at a time
+            let search_low = _mm_set1_epi32((search_value & 0xFFFFFFFF) as i32);
+            let search_high = _mm_set1_epi32((search_value >> 32) as i32);
+
+            let chunks = memory_data.chunks_exact(16);
+            let remainder = chunks.remainder();
+
+            for (chunk_idx, chunk) in chunks.enumerate() {
+                let data = _mm_loadu_si128(chunk.as_ptr() as *const __m128i);
+
+                // Compare both u64 values in the chunk
+                // First u64 (bytes 0-7)
+                let data_low = _mm_shuffle_epi32(data, 0b01000100); // Get low 32 bits of both u64s
+                let data_high = _mm_shuffle_epi32(data, 0b11101110); // Get high 32 bits of both u64s
+
+                let cmp_low = _mm_cmpeq_epi32(data_low, search_low);
+                let cmp_high = _mm_cmpeq_epi32(data_high, search_high);
+                let cmp_combined = _mm_and_si128(cmp_low, cmp_high);
+
+                let mask = _mm_movemask_epi8(cmp_combined);
+
+                // Check first u64
+                if (mask & 0x00FF) == 0x00FF {
+                    let value = u64::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7]]);
+                    if value == search_value {
+                        results.push(SearchResult::new(start + chunk_idx * 16, SearchType::Int64));
+                    }
+                }
+
+                // Check second u64
+                if (mask & 0xFF00) == 0xFF00 {
+                    let value = u64::from_le_bytes([chunk[8], chunk[9], chunk[10], chunk[11], chunk[12], chunk[13], chunk[14], chunk[15]]);
+                    if value == search_value {
+                        results.push(SearchResult::new(start + chunk_idx * 16 + 8, SearchType::Int64));
+                    }
+                }
+            }
+
+            // Handle remainder
+            if remainder.len() >= 8 {
+                for i in 0..=(remainder.len() - 8) {
+                    let value = u64::from_le_bytes([
+                        remainder[i],
+                        remainder[i + 1],
+                        remainder[i + 2],
+                        remainder[i + 3],
+                        remainder[i + 4],
+                        remainder[i + 5],
+                        remainder[i + 6],
+                        remainder[i + 7],
+                    ]);
+                    if value == search_value {
+                        let base_offset = memory_data.len() - remainder.len();
+                        results.push(SearchResult::new(start + base_offset + i, SearchType::Int64));
+                    }
+                }
+            }
+        } else {
+            // Fallback to non-SIMD implementation
+            for i in 0..=(memory_data.len().saturating_sub(8)) {
+                let value = u64::from_le_bytes([
+                    memory_data[i],
+                    memory_data[i + 1],
+                    memory_data[i + 2],
+                    memory_data[i + 3],
+                    memory_data[i + 4],
+                    memory_data[i + 5],
+                    memory_data[i + 6],
+                    memory_data[i + 7],
+                ]);
+                if value == search_value {
+                    results.push(SearchResult::new(start + i, SearchType::Int64));
+                }
+            }
+        }
+    }
+
+    results
 }
