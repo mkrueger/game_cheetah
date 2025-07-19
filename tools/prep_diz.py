@@ -6,7 +6,7 @@ if len(sys.argv) != 3:
     sys.exit(1)
 
 version=""
-cargo = open(os.path.join("crates", sys.argv[1], "Cargo.toml"), "r")
+cargo = open(os.path.join("Cargo.toml"), "r")
 for line in cargo.readlines():
     if line.startswith("version"):
         m = line.index('"')
@@ -14,7 +14,7 @@ for line in cargo.readlines():
         break
 cargo.close()
 
-file_id = open(os.path.join("crates", sys.argv[1], "build", "file_id.diz"), "r")
+file_id = open(os.path.join("build", "file_id.diz"), "r")
 lines = file_id.readlines()
 file_id.close()
 new_lines = list(map(lambda line: line.replace("#VERSION", version), lines))
