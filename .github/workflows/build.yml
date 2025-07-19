@@ -122,7 +122,7 @@ jobs:
           echo "Creating dir '$app.app/Contents/Resources'"
           mkdir -p "$app.app/Contents/Resources"
 
-          cp ${{ env.APP_NAME }}/build/mac/Info.plist "${app}.app/Contents/Info.plist"
+          cp build/mac/Info.plist "${app}.app/Contents/Info.plist"
 
           mkdir -p AppIcon.iconset
           sips -z 16 16 ${{ env.APP_NAME }}/build/mac/128x128@2x.png --out AppIcon.iconset/icon_16x16.png

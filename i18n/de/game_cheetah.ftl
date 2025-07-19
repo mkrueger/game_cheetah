@@ -6,7 +6,7 @@ quit-button = Beenden
 
 process-label = Prozess:
 filter-processes-hint = Prozesse filtern
-first-search-label = Erste 
+first-search-label = Erste Suche 
 searches-heading = Laufende Suchen
 
 search-label = Suche { $search }
@@ -31,6 +31,10 @@ close-button = Schließen
 hide-results-button = Ergebnisse verstecken
 show-results-button = Ergebnisse zeigen
 rename-button = Umbenennen
+
+add-search-button = Neu
+remove-search-button = Löschen
+rename-search-button = Umbenennen
 
 generic-error-label = <Fehler>
 invalid-input-error = Eingabe ungültig

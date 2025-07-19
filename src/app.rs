@@ -26,7 +26,7 @@ pub enum Message {
     MainMenu,
     Discuss,
     ReportBug,
-    OpenGitHub,  // Add this
+    OpenGitHub, // Add this
     Exit,
     FilterChanged(String),
     SelectProcess(ProcessInfo),
@@ -35,6 +35,10 @@ pub enum Message {
     SearchValueChanged(String),
     AddSearch,
     RemoveSearch,
+    RenameSearch,
+    RenameSearchTextChanged(String),
+    ConfirmRenameSearch,
+    CancelRenameSearch,
 
     SwitchSearchType(SearchType),
     Search,
@@ -73,6 +77,9 @@ pub enum AppState {
 pub struct App {
     app_state: AppState,
     state: GameCheetahEngine,
+
+    renaming_search_index: Option<usize>,
+    rename_search_text: String,
 
     memory_editor_address_text: String,
     memory_cursor_row: usize,
@@ -162,6 +169,35 @@ impl App {
                 }
                 Task::none()
             }
+
+            Message::RenameSearch => {
+                if let Some(search) = self.state.searches.get(self.state.current_search) {
+                    self.rename_search_text = search.description.clone();
+                    self.renaming_search_index = Some(self.state.current_search);
+                }
+                Task::none()
+            }
+            Message::RenameSearchTextChanged(text) => {
+                self.rename_search_text = text;
+                Task::none()
+            }
+            Message::ConfirmRenameSearch => {
+                if let Some(index) = self.renaming_search_index {
+                    if let Some(search) = self.state.searches.get_mut(index) {
+                        search.description = self.rename_search_text.clone();
+                    }
+                }
+                self.renaming_search_index = None;
+                self.rename_search_text.clear();
+                Task::none()
+            }
+
+            Message::CancelRenameSearch => {
+                self.renaming_search_index = None;
+                self.rename_search_text.clear();
+                Task::none()
+            }
+
             Message::SwitchSearch(index) => {
                 if index < self.state.searches.len() {
                     self.state.current_search = index;
@@ -490,75 +526,68 @@ impl App {
     }
 
     fn view_main_window(&self) -> Element<'_, Message> {
-    container(
-        column![
-            // Add title and version at the top
-            container(
-                column![
-                    text(APP_NAME).size(32),
-                    text(format!("v{} © Mike Krüger 2023-2025", VERSION)).size(16).style(|theme: &iced::Theme| {
-                        iced::widget::text::Style {
-                            color: Some(theme.extended_palette().secondary.base.color),
-                        }
-                    }),
-                    button(text("github.com/mkrueger/game_cheetah").size(14))
-                        .style(|theme: &iced::Theme, status: iced::widget::button::Status| {
-                            use iced::widget::button::Status;
-                            match status {
-                                Status::Hovered => button::Style {
-                                    background: Some(iced::Color::TRANSPARENT.into()),
-                                    border: iced::Border::default(),
-                                    text_color: theme.palette().primary,
-                                    ..Default::default()
-                                },
-                                _ => button::Style {
-                                    background: Some(iced::Color::TRANSPARENT.into()),
-                                    border: iced::Border::default(),
-                                    text_color: theme.extended_palette().secondary.base.color,
-                                    ..Default::default()
-                                },
-                            }
-                        })
-                        .on_press(Message::OpenGitHub)
-                        .padding(5),
-                ]
-                .spacing(5)
-                .width(Length::Fill)
-                .align_x(alignment::Alignment::Center)
-            )
-            .width(Length::Fill)
-            .padding(20),
-            
-            // Menu buttons
+        container(
             column![
-                button(text(fl!(crate::LANGUAGE_LOADER, "attach-button")).size(24))
-                    .on_press(Message::Attach)
-                    .padding(10),
-                button(text(fl!(crate::LANGUAGE_LOADER, "discuss-button")))
-                    .on_press(Message::Discuss)
-                    .padding(10),
-                button(text(fl!(crate::LANGUAGE_LOADER, "bug-button")))
-                    .on_press(Message::ReportBug)
-                    .padding(10),
-                button(text(fl!(crate::LANGUAGE_LOADER, "about-button")))
-                    .on_press(Message::About)
-                    .padding(10),
-                button(text(fl!(crate::LANGUAGE_LOADER, "quit-button")))
-                    .on_press(Message::Exit)
-                    .padding(10)
+                // Add title and version at the top
+                container(
+                    column![
+                        text(APP_NAME).size(32),
+                        text(format!("v{} © Mike Krüger 2023-2025", VERSION)).size(16).style(|theme: &iced::Theme| {
+                            iced::widget::text::Style {
+                                color: Some(theme.extended_palette().secondary.base.color),
+                            }
+                        }),
+                        button(text("github.com/mkrueger/game_cheetah").size(14))
+                            .style(|theme: &iced::Theme, status: iced::widget::button::Status| {
+                                use iced::widget::button::Status;
+                                match status {
+                                    Status::Hovered => button::Style {
+                                        background: Some(iced::Color::TRANSPARENT.into()),
+                                        border: iced::Border::default(),
+                                        text_color: theme.palette().primary,
+                                        ..Default::default()
+                                    },
+                                    _ => button::Style {
+                                        background: Some(iced::Color::TRANSPARENT.into()),
+                                        border: iced::Border::default(),
+                                        text_color: theme.extended_palette().secondary.base.color,
+                                        ..Default::default()
+                                    },
+                                }
+                            })
+                            .on_press(Message::OpenGitHub)
+                            .padding(5),
+                    ]
+                    .spacing(5)
+                    .width(Length::Fill)
+                    .align_x(alignment::Alignment::Center)
+                )
+                .width(Length::Fill)
+                .padding(20),
+                // Menu buttons
+                column![
+                    button(text(fl!(crate::LANGUAGE_LOADER, "attach-button")).size(24))
+                        .on_press(Message::Attach)
+                        .padding(10),
+                    button(text(fl!(crate::LANGUAGE_LOADER, "discuss-button")))
+                        .on_press(Message::Discuss)
+                        .padding(10),
+                    button(text(fl!(crate::LANGUAGE_LOADER, "bug-button"))).on_press(Message::ReportBug).padding(10),
+                    button(text(fl!(crate::LANGUAGE_LOADER, "about-button"))).on_press(Message::About).padding(10),
+                    button(text(fl!(crate::LANGUAGE_LOADER, "quit-button"))).on_press(Message::Exit).padding(10)
+                ]
+                .spacing(10)
+                .align_x(alignment::Alignment::Center),
             ]
-            .spacing(10)
+            .spacing(20)
             .align_x(alignment::Alignment::Center),
-        ]
-        .spacing(20)
-        .align_x(alignment::Alignment::Center),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .align_x(alignment::Alignment::Center)
-    .align_y(alignment::Alignment::Center)
-    .into()
-}
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(alignment::Alignment::Center)
+        .align_y(alignment::Alignment::Center)
+        .into()
+    }
 
     fn view_process_selection(&self) -> Element<'_, Message> {
         let filter = self.state.process_filter.to_ascii_uppercase();
@@ -692,7 +721,22 @@ impl App {
                 .is_err();
         let auto_show_treshold = 20;
 
+        // Get the current search name for the header
+        let current_search_name = current_search_context.description.clone();
+
         column![
+            container(
+                text(format!("{}", current_search_name))
+                    .size(18)
+                    .font(iced::Font {
+                        weight: iced::font::Weight::Bold,
+                        ..iced::Font::default()
+                    })
+                    .style(|theme: &iced::Theme| iced::widget::text::Style {
+                        color: Some(theme.palette().primary),
+                    })
+            ),
+            horizontal_rule(1),
             row![
                 text(fl!(crate::LANGUAGE_LOADER, "value-label")),
                 text_input(
@@ -899,46 +943,63 @@ impl App {
                     searches
                         .iter()
                         .enumerate()
-                        .map(|(i, search)| {
+                        .map(|(i, search)| -> Element<'_, Message> {
                             let is_selected = i == current_search;
-                            container(
-                                button(row![container(text(search.description.to_string()).size(14))
-                                    .width(Length::Fixed(120.0))
-                                    .padding(5),])
-                                .style(move |theme: &iced::Theme, status: iced::widget::button::Status| {
-                                    use iced::widget::button::Status;
-                                    match status {
-                                        Status::Hovered => button::Style {
-                                            background: Some(theme.palette().primary.into()), // highlight color
-                                            border: iced::Border::default(),
-                                            text_color: theme.palette().text,
-                                            ..Default::default()
-                                        },
-                                        _ => {
-                                            if is_selected {
-                                                button::Style {
-                                                    background: Some(theme.palette().primary.into()), // selected color
-                                                    border: iced::Border::default(),
-                                                    text_color: theme.palette().text,
-                                                    ..Default::default()
-                                                }
-                                            } else {
-                                                button::Style {
-                                                    background: Some(iced::Color::TRANSPARENT.into()),
-                                                    border: iced::Border::default(),
-                                                    text_color: theme.palette().text,
-                                                    ..Default::default()
+                            let is_renaming = self.renaming_search_index == Some(i);
+
+                            if is_renaming {
+                                container(
+                                    // Show text input for renaming
+                                    text_input("", &self.rename_search_text)
+                                        .on_input(Message::RenameSearchTextChanged)
+                                        .on_submit(Message::ConfirmRenameSearch)
+                                        .width(Length::Fixed(120.0))
+                                        .padding(5),
+                                )
+                                .style(move |_theme: &iced::Theme| container::Style::default())
+                                .into()
+                            } else {
+                                container(
+                                    // Show normal button
+                                    button(
+                                        row![container(text(search.description.to_string()).size(14)).width(Length::Fixed(120.0)).padding(5)]
+                                            as iced::widget::Row<'_, Message>,
+                                    )
+                                    .style(move |theme: &iced::Theme, status: iced::widget::button::Status| {
+                                        use iced::widget::button::Status;
+                                        match status {
+                                            Status::Hovered => button::Style {
+                                                background: Some(theme.palette().primary.into()),
+                                                border: iced::Border::default(),
+                                                text_color: theme.palette().text,
+                                                ..Default::default()
+                                            },
+                                            _ => {
+                                                if is_selected {
+                                                    button::Style {
+                                                        background: Some(theme.palette().primary.into()),
+                                                        border: iced::Border::default(),
+                                                        text_color: theme.palette().text,
+                                                        ..Default::default()
+                                                    }
+                                                } else {
+                                                    button::Style {
+                                                        background: Some(iced::Color::TRANSPARENT.into()),
+                                                        border: iced::Border::default(),
+                                                        text_color: theme.palette().text,
+                                                        ..Default::default()
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
-                                })
-                                .on_press(Message::SwitchSearch(i))
-                                .width(Length::Fixed(120.0))
-                                .padding(0),
-                            )
-                            .style(move |_theme: &iced::Theme| container::Style::default())
-                            .into()
+                                    })
+                                    .on_press(Message::SwitchSearch(i))
+                                    .width(Length::Fixed(120.0))
+                                    .padding(0),
+                                )
+                                .style(move |_theme: &iced::Theme| container::Style::default())
+                                .into()
+                            }
                         })
                         .collect::<Vec<Element<'_, Message>>>()
                 )
@@ -948,9 +1009,15 @@ impl App {
         ]
         .spacing(5);
 
-        let add_button = button("+").on_press(Message::AddSearch).padding(5);
-
-        let remove_button: button::Button<'_, Message> = button("-").on_press(Message::RemoveSearch).padding(5);
+        let add_button = button(text(fl!(crate::LANGUAGE_LOADER, "add-search-button")))
+            .on_press(Message::AddSearch)
+            .padding(5);
+        let remove_button = button(text(fl!(crate::LANGUAGE_LOADER, "remove-search-button")))
+            .on_press(Message::RemoveSearch)
+            .padding(5);
+        let rename_button = button(text(fl!(crate::LANGUAGE_LOADER, "rename-search-button")))
+            .on_press(Message::RenameSearch)
+            .padding(5);
 
         // Process selection dialog
         container(column![
@@ -970,7 +1037,7 @@ impl App {
             .align_y(alignment::Alignment::Center),
             horizontal_rule(1),
             row![
-                column![search_table, row![add_button, remove_button].spacing(5).padding(10)].height(Length::Fill),
+                column![search_table, column![add_button, remove_button, rename_button].spacing(5).padding(10)].height(Length::Fill),
                 vertical_rule(1),
                 self.search_ui()
             ]
@@ -1288,42 +1355,42 @@ impl App {
     pub fn subscription(&self) -> iced::Subscription<Message> {
         // Only subscribe to keyboard events when in memory editor mode
         if matches!(self.app_state, AppState::MemoryEditor) {
-            keyboard::on_key_press(|key, modifiers| {
-                // Handle key presses
-                match key {
-                    // Navigation
-                    keyboard::Key::Named(keyboard::key::Named::ArrowUp) => Some(Message::MemoryEditorMoveCursor(-1, 0)),
-                    keyboard::Key::Named(keyboard::key::Named::ArrowDown) => Some(Message::MemoryEditorMoveCursor(1, 0)),
-                    keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => Some(Message::MemoryEditorMoveCursor(0, -1)),
-                    keyboard::Key::Named(keyboard::key::Named::ArrowRight) => Some(Message::MemoryEditorMoveCursor(0, 1)),
-                    keyboard::Key::Named(keyboard::key::Named::PageUp) => Some(Message::MemoryEditorPageUp),
-                    keyboard::Key::Named(keyboard::key::Named::PageDown) => Some(Message::MemoryEditorPageDown),
-                    keyboard::Key::Named(keyboard::key::Named::Tab) => Some(Message::MemoryEditorMoveCursor(0, 1)),
-                    keyboard::Key::Named(keyboard::key::Named::Enter) => Some(Message::MemoryEditorBeginEdit),
-                    keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::MemoryEditorEndEdit),
-
-                    // Hex digit input
-                    keyboard::Key::Character(c) => match c.as_str() {
-                        "0" => Some(Message::MemoryEditorEditHex(0)),
-                        "1" => Some(Message::MemoryEditorEditHex(1)),
-                        "2" => Some(Message::MemoryEditorEditHex(2)),
-                        "3" => Some(Message::MemoryEditorEditHex(3)),
-                        "4" => Some(Message::MemoryEditorEditHex(4)),
-                        "5" => Some(Message::MemoryEditorEditHex(5)),
-                        "6" => Some(Message::MemoryEditorEditHex(6)),
-                        "7" => Some(Message::MemoryEditorEditHex(7)),
-                        "8" => Some(Message::MemoryEditorEditHex(8)),
-                        "9" => Some(Message::MemoryEditorEditHex(9)),
-                        "a" | "A" => Some(Message::MemoryEditorEditHex(10)),
-                        "b" | "B" => Some(Message::MemoryEditorEditHex(11)),
-                        "c" | "C" => Some(Message::MemoryEditorEditHex(12)),
-                        "d" | "D" => Some(Message::MemoryEditorEditHex(13)),
-                        "e" | "E" => Some(Message::MemoryEditorEditHex(14)),
-                        "f" | "F" => Some(Message::MemoryEditorEditHex(15)),
-                        _ => None,
-                    },
+            keyboard::on_key_press(|key, _modifiers| match key {
+                keyboard::Key::Named(keyboard::key::Named::ArrowUp) => Some(Message::MemoryEditorMoveCursor(-1, 0)),
+                keyboard::Key::Named(keyboard::key::Named::ArrowDown) => Some(Message::MemoryEditorMoveCursor(1, 0)),
+                keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => Some(Message::MemoryEditorMoveCursor(0, -1)),
+                keyboard::Key::Named(keyboard::key::Named::ArrowRight) => Some(Message::MemoryEditorMoveCursor(0, 1)),
+                keyboard::Key::Named(keyboard::key::Named::PageUp) => Some(Message::MemoryEditorPageUp),
+                keyboard::Key::Named(keyboard::key::Named::PageDown) => Some(Message::MemoryEditorPageDown),
+                keyboard::Key::Named(keyboard::key::Named::Tab) => Some(Message::MemoryEditorMoveCursor(0, 1)),
+                keyboard::Key::Named(keyboard::key::Named::Enter) => Some(Message::MemoryEditorBeginEdit),
+                keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::MemoryEditorEndEdit),
+                keyboard::Key::Character(c) => match c.as_str() {
+                    "0" => Some(Message::MemoryEditorEditHex(0)),
+                    "1" => Some(Message::MemoryEditorEditHex(1)),
+                    "2" => Some(Message::MemoryEditorEditHex(2)),
+                    "3" => Some(Message::MemoryEditorEditHex(3)),
+                    "4" => Some(Message::MemoryEditorEditHex(4)),
+                    "5" => Some(Message::MemoryEditorEditHex(5)),
+                    "6" => Some(Message::MemoryEditorEditHex(6)),
+                    "7" => Some(Message::MemoryEditorEditHex(7)),
+                    "8" => Some(Message::MemoryEditorEditHex(8)),
+                    "9" => Some(Message::MemoryEditorEditHex(9)),
+                    "a" | "A" => Some(Message::MemoryEditorEditHex(10)),
+                    "b" | "B" => Some(Message::MemoryEditorEditHex(11)),
+                    "c" | "C" => Some(Message::MemoryEditorEditHex(12)),
+                    "d" | "D" => Some(Message::MemoryEditorEditHex(13)),
+                    "e" | "E" => Some(Message::MemoryEditorEditHex(14)),
+                    "f" | "F" => Some(Message::MemoryEditorEditHex(15)),
                     _ => None,
-                }
+                },
+                _ => None,
+            })
+        } else if self.renaming_search_index.is_some() {
+            // Only subscribe to ESC when renaming
+            keyboard::on_key_press(|key, _modifiers| match key {
+                keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::CancelRenameSearch),
+                _ => None,
             })
         } else {
             iced::Subscription::none()

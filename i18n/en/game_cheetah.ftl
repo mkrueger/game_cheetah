@@ -32,6 +32,10 @@ hide-results-button = Hide Results
 show-results-button = Show Results
 rename-button = Rename
 
+add-search-button = Add
+remove-search-button = Remove
+rename-search-button = Rename
+
 generic-error-label = <error>
 invalid-input-error = Invalid input
 invalid-number-error = Invalid number
