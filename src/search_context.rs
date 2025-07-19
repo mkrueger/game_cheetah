@@ -1,6 +1,10 @@
 use std::{
     collections::HashSet,
-    sync::{Arc, Mutex, atomic::AtomicUsize, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize},
+        mpsc,
+    },
 };
 
 use crate::{FreezeMessage, GameCheetahEngine, SearchResult, SearchType};
@@ -27,6 +31,7 @@ pub struct SearchContext {
 
     pub old_results: Vec<Vec<SearchResult>>,
     pub search_results: i64,
+    pub search_complete: Arc<AtomicBool>,
 }
 
 impl SearchContext {
@@ -43,6 +48,7 @@ impl SearchContext {
             search_results: -1,
             search_type: SearchType::Guess,
             old_results: Vec::new(),
+            search_complete: Arc::new(AtomicBool::new(false)),
         }
     }
 

@@ -243,8 +243,7 @@ impl App {
             Message::Tick => {
                 // If searching, keep scheduling ticks
                 let current_search_context = &mut self.state.searches[self.state.current_search];
-                let current_bytes = current_search_context.current_bytes.load(Ordering::Acquire);
-                if current_bytes >= current_search_context.total_bytes {
+                if current_search_context.search_complete.load(Ordering::SeqCst) {
                     current_search_context.search_results = current_search_context.results.lock().unwrap().len() as i64;
                     current_search_context.searching = SearchMode::None;
                 }

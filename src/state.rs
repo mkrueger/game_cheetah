@@ -2,7 +2,11 @@ use std::{
     cmp::min,
     collections::{HashMap, HashSet},
     mem,
-    sync::{Arc, Mutex, atomic::Ordering, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, SystemTime},
 };
@@ -12,8 +16,8 @@ use boyer_moore_magiclen::BMByte;
 use i18n_embed_fl::fl;
 use proc_maps::get_process_maps;
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
+use rayon::prelude::*;
 use sysinfo::*;
-use threadpool::ThreadPool;
 
 #[derive(Debug, Clone)]
 pub struct ProcessInfo {
@@ -36,8 +40,7 @@ pub struct GameCheetahEngine {
 
     pub current_search: usize,
     pub searches: Vec<Box<SearchContext>>,
-    pub search_threads: ThreadPool,
-
+    // Removed: pub search_threads: ThreadPool,
     pub freeze_sender: mpsc::Sender<FreezeMessage>,
     pub error_text: String,
     pub show_results: bool,
@@ -90,7 +93,7 @@ impl Default for GameCheetahEngine {
             last_process_update: SystemTime::now(),
             current_search: 0,
             searches: vec![Box::new(SearchContext::new(fl!(crate::LANGUAGE_LOADER, "first-search-label")))],
-            search_threads: ThreadPool::new(16),
+            // Removed: search_threads: ThreadPool::new(16),
             freeze_sender: tx,
             show_results: false,
             show_about_dialog: false,
@@ -122,46 +125,72 @@ impl GameCheetahEngine {
 
         match get_process_maps(self.pid) {
             Ok(maps) => {
+                let mut regions = Vec::new();
                 self.searches.get_mut(search_index).unwrap().total_bytes = 0;
                 self.searches.get_mut(search_index).unwrap().current_bytes.swap(0, Ordering::SeqCst);
+
                 for map in maps {
+                    // More aggressive filtering
                     if cfg!(target_os = "windows") {
                         if let Some(file_name) = map.filename() {
-                            if file_name.starts_with("C:\\WINDOWS\\SysWOW64") {
+                            if file_name.starts_with("C:\\WINDOWS\\") {
                                 continue;
                             }
                         }
                     } else if cfg!(target_os = "linux") {
+                        // Skip non-writable, executable, and system regions
                         if !map.is_write() || map.is_exec() {
                             continue;
                         }
+
+                        // Skip kernel and system libraries
+                        if let Some(file_name) = map.filename() {
+                            if file_name.starts_with("/usr/")
+                                || file_name.starts_with("/lib/")
+                                || file_name.starts_with("/lib64/")
+                                || file_name.starts_with("/dev/")
+                                || file_name.starts_with("/proc/")
+                                || file_name.starts_with("/sys/")
+                            {
+                                continue;
+                            }
+                        }
+                    /*
+                    // Skip special memory regions
+                    if map.p == "[vvar]" || map.pathname == "[vdso]" || map.pathname == "[vsyscall]" {
+                        continue;
+                    }*/
                     } else {
                         if !map.is_write() || map.is_exec() || map.filename().is_none() || map.size() < 1024 * 1024 {
                             continue;
                         }
                         if let Some(file_name) = map.filename() {
-                            if file_name.starts_with("/usr/lib") {
+                            if file_name.starts_with("/usr/lib") || file_name.starts_with("/System/") {
                                 continue;
                             }
                         }
                     }
+
                     let mut size = map.size();
                     let mut start = map.start();
                     self.searches.get_mut(search_index).unwrap().total_bytes += size;
 
-                    let max_block = 10 * 1024 * 1024;
-                    let current_search = self.searches.get(search_index).unwrap();
-                    let search_for_value = current_search.search_type.from_string(&current_search.search_value_text).unwrap();
-                    self.error_text.clear();
+                    const MAX_BLOCK: usize = 10 * 1024 * 1024;
 
-                    while size > max_block + 3 {
-                        self.spawn_first_search_thread(search_for_value.clone(), start, max_block + 3, search_index);
-
-                        start += max_block;
-                        size -= max_block;
+                    while size > MAX_BLOCK + 3 {
+                        regions.push((start, MAX_BLOCK + 3));
+                        start += MAX_BLOCK;
+                        size -= MAX_BLOCK;
                     }
-                    self.spawn_first_search_thread(search_for_value, start, size, search_index);
+                    regions.push((start, size));
                 }
+
+                let current_search = self.searches.get(search_index).unwrap();
+                let search_for_value = current_search.search_type.from_string(&current_search.search_value_text).unwrap();
+                self.error_text.clear();
+
+                // Use rayon to process regions in parallel
+                self.spawn_parallel_search(search_for_value, regions, search_index);
             }
             Err(err) => {
                 eprintln!("error getting process maps for pid {}: {}", self.pid, err);
@@ -175,19 +204,18 @@ impl GameCheetahEngine {
         let search_context = self.searches.get_mut(search_index).unwrap();
         search_context.searching = SearchMode::Percent;
         let old_results_arc: Arc<Mutex<Vec<SearchResult>>> = mem::replace(&mut search_context.results, Arc::new(Mutex::new(Vec::new())));
-        let old_results = old_results_arc.lock().unwrap();
+        let old_results = old_results_arc.lock().unwrap().clone();
         search_context.total_bytes = old_results.len();
         search_context.current_bytes.swap(0, Ordering::SeqCst);
         search_context.old_results.push(old_results.clone());
 
-        let mut i = 0;
-        let max_i: usize = old_results.len();
         let max_block = 200 * 1024;
-        while i < max_i {
-            let j = min(i + max_block, max_i);
-            self.spawn_update_thread(search_index, old_results_arc.clone(), i, j);
-            i = j;
-        }
+        let chunks: Vec<(usize, usize)> = (0..old_results.len())
+            .step_by(max_block)
+            .map(|i| (i, min(i + max_block, old_results.len())))
+            .collect();
+
+        self.spawn_update_search(search_index, old_results, chunks);
     }
 
     pub fn remove_freezes(&mut self, search_index: usize) {
@@ -247,80 +275,126 @@ impl GameCheetahEngine {
         });
     }
 
-    fn spawn_update_thread(&mut self, search_index: usize, old_results_arc: Arc<Mutex<Vec<SearchResult>>>, from: usize, to: usize) {
-        if from >= to {
-            return;
-        }
-
+    fn spawn_update_search(&mut self, search_index: usize, old_results: Vec<SearchResult>, chunks: Vec<(usize, usize)>) {
         let search_context = self.searches.get_mut(search_index).unwrap();
         let current_bytes = search_context.current_bytes.clone();
         let pid = self.pid;
         let value_text = search_context.search_value_text.clone();
-        let results: Arc<Mutex<Vec<SearchResult>>> = search_context.results.clone();
+        let results = search_context.results.clone();
+        let search_complete = search_context.search_complete.clone();
+        search_complete.store(false, Ordering::SeqCst);
 
-        self.search_threads.execute(move || {
-            let old_results = match old_results_arc.lock() {
-                Ok(old_results) => {
-                    // println!("{}-{} max:{}", from, to, old_results.len());
-                    old_results[from..to].to_vec()
-                }
-                Err(err) => {
-                    eprintln!("{err}");
-                    return;
-                }
-            };
-            let handle = pid.try_into_process_handle().unwrap();
-            let updated_results = update_results(&old_results, &value_text, &handle);
-            results.lock().unwrap().extend_from_slice(&updated_results);
-            current_bytes.fetch_add(to - from, Ordering::SeqCst);
+        // Spawn a separate thread to handle the parallel search
+        std::thread::spawn(move || {
+            // Process chunks in parallel using rayon
+            let chunk_results: Vec<Vec<SearchResult>> = chunks
+                .par_iter()
+                .map(|(from, to)| {
+                    let handle = match pid.try_into_process_handle() {
+                        Ok(h) => h,
+                        Err(e) => {
+                            eprintln!("Failed to get process handle: {}", e);
+                            current_bytes.fetch_add(to - from, Ordering::SeqCst); // Still update progress
+                            return Vec::new();
+                        }
+                    };
+
+                    let chunk = &old_results[*from..*to];
+                    let updated = update_results(chunk, &value_text, &handle);
+                    current_bytes.fetch_add(to - from, Ordering::SeqCst); // Update progress atomically
+                    updated
+                })
+                .collect();
+
+            // Merge all results
+            let mut all_results = Vec::new();
+            for chunk_result in chunk_results {
+                all_results.extend(chunk_result);
+            }
+
+            results.lock().unwrap().extend(all_results);
+
+            // Mark search as complete
+            search_complete.store(true, Ordering::SeqCst);
         });
     }
 
-    fn spawn_first_search_thread(&mut self, search_value: SearchValue, start: usize, size: usize, search_index: usize) {
+    fn spawn_parallel_search(&mut self, search_value: SearchValue, regions: Vec<(usize, usize)>, search_index: usize) {
         let search_context = self.searches.get(search_index).unwrap();
         let pid = self.pid;
         let current_bytes = search_context.current_bytes.clone();
-        let results: Arc<Mutex<Vec<SearchResult>>> = search_context.results.clone();
+        let results = search_context.results.clone();
+        let search_complete = search_context.search_complete.clone(); // Clone the completion flag
+        search_complete.store(false, Ordering::SeqCst);
 
-        self.search_threads.execute(move || {
-            let handle = (pid as process_memory::Pid).try_into_process_handle().unwrap();
-            if let Ok(memory_data) = copy_address(start, size, &handle) {
-                match search_value.0 {
-                    SearchType::Guess => {
-                        let val: String = String::from_utf8(search_value.1).unwrap();
+        // Spawn a separate thread to handle the parallel search
+        std::thread::spawn(move || {
+            // Process regions in parallel using rayon
+            let region_results: Vec<Vec<SearchResult>> = regions
+                .par_iter()
+                .map(|(start, size)| {
+                    let handle = match (pid as process_memory::Pid).try_into_process_handle() {
+                        Ok(h) => h,
+                        Err(_) => {
+                            current_bytes.fetch_add(*size, Ordering::SeqCst);
+                            return Vec::new();
+                        }
+                    };
 
-                        if let Ok(search_value) = SearchType::Int.from_string(&val) {
-                            let search_data = &search_value.1;
-                            let r = search_memory(&memory_data, search_data, SearchType::Int, start);
-                            if !r.is_empty() {
-                                results.lock().unwrap().extend_from_slice(&r);
+                    // Try to read memory, but don't log every failure
+                    match copy_address(*start, *size, &handle) {
+                        Ok(memory_data) => {
+                            let mut local_results = Vec::new();
+
+                            match search_value.0 {
+                                SearchType::Guess => {
+                                    let val: String = String::from_utf8(search_value.1.clone()).unwrap();
+
+                                    if let Ok(search_value) = SearchType::Int.from_string(&val) {
+                                        let search_data = &search_value.1;
+                                        let r = search_memory(&memory_data, search_data, SearchType::Int, *start);
+                                        local_results.extend(r);
+                                    }
+                                    if let Ok(search_value) = SearchType::Float.from_string(&val) {
+                                        let search_data = &search_value.1;
+                                        let r = search_memory(&memory_data, search_data, SearchType::Float, *start);
+                                        local_results.extend(r);
+                                    }
+                                    if let Ok(search_value) = SearchType::Double.from_string(&val) {
+                                        let search_data = &search_value.1;
+                                        let r = search_memory(&memory_data, search_data, SearchType::Double, *start);
+                                        local_results.extend(r);
+                                    }
+                                }
+                                _ => {
+                                    let search_data = &search_value.1;
+                                    let r = search_memory(&memory_data, search_data, search_value.0, *start);
+                                    local_results.extend(r);
+                                }
                             }
+                            current_bytes.fetch_add(*size, Ordering::SeqCst);
+                            local_results
                         }
-                        if let Ok(search_value) = SearchType::Float.from_string(&val) {
-                            let search_data = &search_value.1;
-                            let r: Vec<SearchResult> = search_memory(&memory_data, search_data, SearchType::Float, start);
-                            if !r.is_empty() {
-                                results.lock().unwrap().extend_from_slice(&r);
-                            }
-                        }
-                        if let Ok(search_value) = SearchType::Double.from_string(&val) {
-                            let search_data = &search_value.1;
-                            let r = search_memory(&memory_data, search_data, SearchType::Double, start);
-                            if !r.is_empty() {
-                                results.lock().unwrap().extend_from_slice(&r);
-                            }
+                        Err(_) => {
+                            // Silently skip inaccessible regions - this is normal
+                            current_bytes.fetch_add(*size, Ordering::SeqCst);
+                            Vec::new()
                         }
                     }
-                    _ => {
-                        let search_data = &search_value.1;
-                        let r = search_memory(&memory_data, search_data, search_value.0, start);
-                        if !r.is_empty() {
-                            results.lock().unwrap().extend_from_slice(&r);
-                        }
-                    }
-                }
+                })
+                .collect();
+
+            // Merge all results
+            let mut all_results = Vec::new();
+            for region_result in region_results {
+                all_results.extend(region_result);
             }
-            current_bytes.fetch_add(size, Ordering::SeqCst);
+
+            // Update results
+            results.lock().unwrap().extend(all_results);
+
+            // Mark search as complete
+            search_complete.store(true, Ordering::SeqCst);
         });
     }
 
