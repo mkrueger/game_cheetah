@@ -1,4 +1,4 @@
-attach-button = Attach
+attach-button = Start
 about-button = About
 discuss-button = Discuss
 bug-button = Bug/Feature request

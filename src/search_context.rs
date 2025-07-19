@@ -1,6 +1,6 @@
 use std::{
     collections::HashSet,
-    sync::{atomic::AtomicUsize, mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicUsize, mpsc},
 };
 
 use crate::{FreezeMessage, GameCheetahEngine, SearchResult, SearchType};

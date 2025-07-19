@@ -1,4 +1,4 @@
-attach-button = Anhängen
+attach-button = Start
 about-button = Über
 discuss-button = Diskutieren
 bug-button = Fehler melden

@@ -2,7 +2,7 @@ use std::{
     cmp::min,
     collections::{HashMap, HashSet},
     mem,
-    sync::{atomic::Ordering, mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::Ordering, mpsc},
     thread,
     time::{Duration, SystemTime},
 };
@@ -11,7 +11,7 @@ use crate::{FreezeMessage, MessageCommand, SearchContext, SearchMode, SearchResu
 use boyer_moore_magiclen::BMByte;
 use i18n_embed_fl::fl;
 use proc_maps::get_process_maps;
-use process_memory::{copy_address, PutAddress, TryIntoProcessHandle};
+use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 use sysinfo::*;
 use threadpool::ThreadPool;
 

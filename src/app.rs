@@ -1,18 +1,18 @@
 use std::{
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::Ordering},
     thread::sleep,
     time::{Duration, SystemTime},
 };
 
 use i18n_embed_fl::fl;
 use iced::{
-    alignment,
+    Element, Length, Task, Theme, alignment,
     border::Radius,
     keyboard,
     widget::{button, checkbox, column, container, horizontal_rule, pick_list, progress_bar, row, scrollable, text, text_input, vertical_rule},
-    window, Element, Length, Task, Theme,
+    window,
 };
-use process_memory::{copy_address, PutAddress, TryIntoProcessHandle};
+use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 
 use crate::{FreezeMessage, GameCheetahEngine, MessageCommand, ProcessInfo, SearchMode, SearchType, SearchValue};
 
@@ -336,7 +336,7 @@ impl App {
                         self.memory_editor_address_text = format!("{:X}", result.addr);
                         self.memory_editor_initial_address = result.addr; // Store initial address
                         self.memory_editor_initial_size = result.search_type.get_byte_length(); // Store size
-                                                                                                // Reset cursor to highlight the first byte
+                        // Reset cursor to highlight the first byte
                         self.memory_cursor_row = 0;
                         self.memory_cursor_col = 0;
                         self.memory_cursor_nibble = 0;
@@ -798,22 +798,14 @@ impl App {
                 if search_results < 0 {
                     row![{
                         let b = button(text(fl!(crate::LANGUAGE_LOADER, "initial-search-button")));
-                        if show_error {
-                            b
-                        } else {
-                            b.on_press(Message::Search)
-                        }
+                        if show_error { b } else { b.on_press(Message::Search) }
                     }]
                     .spacing(10.0)
                 } else {
                     row![
                         {
                             let b = button(text(fl!(crate::LANGUAGE_LOADER, "update-button")));
-                            if show_error {
-                                b
-                            } else {
-                                b.on_press(Message::Search)
-                            }
+                            if show_error { b } else { b.on_press(Message::Search) }
                         },
                         button(text(fl!(crate::LANGUAGE_LOADER, "clear-button"))).on_press(Message::ClearResults),
                         button(text(fl!(crate::LANGUAGE_LOADER, "undo-button"))).on_press(Message::Undo),
@@ -928,9 +920,11 @@ impl App {
 
         let search_table = column![
             // Table header
-            container(row![container(text(fl!(crate::LANGUAGE_LOADER, "searches-heading")).size(14))
-                .width(Length::Fixed(120.0))
-                .padding(5),])
+            container(row![
+                container(text(fl!(crate::LANGUAGE_LOADER, "searches-heading")).size(14))
+                    .width(Length::Fixed(120.0))
+                    .padding(5),
+            ])
             .style(|theme: &iced::Theme| {
                 container::Style {
                     background: Some(theme.extended_palette().background.weak.color.into()),
