@@ -1,13 +1,13 @@
 use std::{
     cmp::min,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     mem,
     sync::{atomic::Ordering, mpsc, Arc, Mutex},
     thread,
     time::{Duration, SystemTime},
 };
 
-use crate::{Message, MessageCommand, SearchContext, SearchMode, SearchResult, SearchType, SearchValue};
+use crate::{FreezeMessage, MessageCommand, SearchContext, SearchMode, SearchResult, SearchType, SearchValue};
 use boyer_moore_magiclen::BMByte;
 use i18n_embed_fl::fl;
 use proc_maps::get_process_maps;
@@ -38,7 +38,7 @@ pub struct GameCheetahEngine {
     pub searches: Vec<Box<SearchContext>>,
     pub search_threads: ThreadPool,
 
-    pub freeze_sender: mpsc::Sender<Message>,
+    pub freeze_sender: mpsc::Sender<FreezeMessage>,
     pub error_text: String,
     pub show_results: bool,
     pub set_focus: bool,
@@ -46,7 +46,7 @@ pub struct GameCheetahEngine {
 
 impl Default for GameCheetahEngine {
     fn default() -> Self {
-        let (tx, rx) = mpsc::channel::<Message>();
+        let (tx, rx) = mpsc::channel::<FreezeMessage>();
 
         thread::spawn(move || {
             let mut freezed_values = HashMap::new();
@@ -99,7 +99,12 @@ impl Default for GameCheetahEngine {
 
 impl GameCheetahEngine {
     pub fn new_search(&mut self) {
-        let ctx = SearchContext::new(fl!(crate::LANGUAGE_LOADER, "search-label", search = (1 + self.searches.len()).to_string()));
+        let ctx = SearchContext::new(
+            fl!(crate::LANGUAGE_LOADER, "search-label", search = (1 + self.searches.len()).to_string())
+                .chars()
+                .filter(|c| c.is_ascii())
+                .collect::<String>(),
+        );
         self.current_search = self.searches.len();
         self.searches.push(Box::new(ctx));
     }
@@ -187,9 +192,11 @@ impl GameCheetahEngine {
         GameCheetahEngine::remove_freezes_from(&self.freeze_sender, &mut search_context.freezed_addresses);
     }
 
-    pub fn remove_freezes_from(freeze_sender: &mpsc::Sender<Message>, freezes: &mut std::collections::HashSet<usize>) {
+    pub fn remove_freezes_from(freeze_sender: &mpsc::Sender<FreezeMessage>, freezes: &mut std::collections::HashSet<usize>) {
         for result in freezes.iter() {
-            freeze_sender.send(Message::from_addr(MessageCommand::Unfreeze, *result)).unwrap_or_default();
+            freeze_sender
+                .send(FreezeMessage::from_addr(MessageCommand::Unfreeze, *result))
+                .unwrap_or_default();
         }
         freezes.clear();
     }
@@ -198,10 +205,23 @@ impl GameCheetahEngine {
         let sys = System::new_all();
         self.last_process_update = SystemTime::now();
         self.processes.clear();
+
+        let Ok(current_pid) = get_current_pid() else {
+            return;
+        };
+        let mut parents = HashSet::new();
+        let cur_process = sys.process(current_pid).unwrap();
         for (pid2, process) in sys.processes() {
-            if process.memory() == 0 {
+            if process.memory() == 0 || process.user_id() != cur_process.user_id() {
                 continue;
             }
+            if let Some(parent) = process.parent() {
+                if parents.contains(&parent) {
+                    continue;
+                }
+                parents.insert(parent);
+            }
+
             let pid = pid2.as_u32();
             let user = match process.user_id() {
                 Some(user) => user.to_string(),
@@ -258,12 +278,13 @@ impl GameCheetahEngine {
         let pid = self.pid;
         let current_bytes = search_context.current_bytes.clone();
         let results: Arc<Mutex<Vec<SearchResult>>> = search_context.results.clone();
+
         self.search_threads.execute(move || {
             let handle = (pid as process_memory::Pid).try_into_process_handle().unwrap();
             if let Ok(memory_data) = copy_address(start, size, &handle) {
                 match search_value.0 {
                     SearchType::Guess => {
-                        let val = String::from_utf8(search_value.1).unwrap();
+                        let val: String = String::from_utf8(search_value.1).unwrap();
 
                         if let Ok(search_value) = SearchType::Int.from_string(&val) {
                             let search_data = &search_value.1;
@@ -274,7 +295,7 @@ impl GameCheetahEngine {
                         }
                         if let Ok(search_value) = SearchType::Float.from_string(&val) {
                             let search_data = &search_value.1;
-                            let r = search_memory(&memory_data, search_data, SearchType::Float, start);
+                            let r: Vec<SearchResult> = search_memory(&memory_data, search_data, SearchType::Float, start);
                             if !r.is_empty() {
                                 results.lock().unwrap().extend_from_slice(&r);
                             }
@@ -303,7 +324,7 @@ impl GameCheetahEngine {
     pub(crate) fn select_process(&mut self, process: &ProcessInfo) {
         self.pid = process.pid;
         self.freeze_sender
-            .send(Message::from_addr(MessageCommand::Pid, process.pid as usize))
+            .send(FreezeMessage::from_addr(MessageCommand::Pid, process.pid as usize))
             .unwrap_or_default();
         self.process_name = process.name.clone();
         self.show_process_window = false;

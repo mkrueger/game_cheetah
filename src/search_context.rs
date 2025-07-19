@@ -3,8 +3,9 @@ use std::{
     sync::{atomic::AtomicUsize, mpsc, Arc, Mutex},
 };
 
-use crate::{GameCheetahEngine, Message, SearchResult, SearchType};
+use crate::{FreezeMessage, GameCheetahEngine, SearchResult, SearchType};
 
+#[derive(PartialEq, Clone, Copy)]
 pub enum SearchMode {
     None,
     Percent,
@@ -45,7 +46,7 @@ impl SearchContext {
         }
     }
 
-    pub fn clear_results(&mut self, freeze_sender: &mpsc::Sender<Message>) {
+    pub fn clear_results(&mut self, freeze_sender: &mpsc::Sender<FreezeMessage>) {
         GameCheetahEngine::remove_freezes_from(freeze_sender, &mut self.freezed_addresses);
         self.results.lock().unwrap().clear();
         self.search_results = -1;

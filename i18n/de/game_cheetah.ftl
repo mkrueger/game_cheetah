@@ -1,15 +1,25 @@
+attach-button = Anhängen
+about-button = Über
+discuss-button = Diskutieren
+bug-button = Fehler melden
+quit-button = Beenden
+
 process-label = Prozess:
-no-processes-label = <Prozess nicht gesetzt>
 filter-processes-hint = Prozesse filtern
-first-search-label = Erste Suche
+first-search-label = Erste 
+searches-heading = Laufende Suchen
+
 search-label = Suche { $search }
 name-label = Name:
 value-label = Wert:
 search-description-label = Suchbeschreibung
 search-value-label = Suche nach { $valuetype }
 
-found-one-result-label = 1 Vorkommen gefunden
-found-results-label = { $results } Vorkommen gefunden
+found-results-label =
+    { $results ->
+        [1] 1 Vorkommen gefunden
+       *[other] { $results } Vorkommen gefunden
+    }
 
 no-results-label = Keine Vorkommen
 
@@ -61,9 +71,6 @@ tab-hover-text=Doppelklick zum Umbenennen
 close-tab-hover-text=Schließe aktive Suche
 open-tab-hover-text=Neue Suche
 
-menu-item-discuss=Diskutieren
-menu-item-report-bug=Bug melden
-menu-item-about=Über Game Cheetah…
 
 about-dialog-title=Über Game Cheetah
 about-dialog-heading = Game Cheetah

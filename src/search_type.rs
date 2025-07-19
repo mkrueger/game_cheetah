@@ -1,4 +1,5 @@
 use i18n_embed_fl::fl;
+use std::fmt;
 
 use crate::SearchValue;
 
@@ -95,9 +96,27 @@ impl SearchType {
                 }
             }
             SearchType::Guess => {
+                if txt.parse::<i64>().is_err() {
+                    return Err(fl!(crate::LANGUAGE_LOADER, "invalid-input-error"));
+                }
                 let parsed = txt.as_bytes().to_vec();
                 Ok(SearchValue(SearchType::Guess, parsed))
             }
         }
+    }
+}
+
+impl fmt::Display for SearchType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            SearchType::Guess => fl!(crate::LANGUAGE_LOADER, "guess-value-item"),
+            SearchType::Byte => fl!(crate::LANGUAGE_LOADER, "byte-value-item"),
+            SearchType::Short => fl!(crate::LANGUAGE_LOADER, "short-value-item"),
+            SearchType::Int => fl!(crate::LANGUAGE_LOADER, "int-value-item"),
+            SearchType::Int64 => fl!(crate::LANGUAGE_LOADER, "int64-value-item"),
+            SearchType::Float => fl!(crate::LANGUAGE_LOADER, "float-value-item"),
+            SearchType::Double => fl!(crate::LANGUAGE_LOADER, "double-value-item"),
+        };
+        write!(f, "{}", text)
     }
 }

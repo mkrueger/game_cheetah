@@ -9,7 +9,7 @@ pub use search_value::*;
 pub mod search_context;
 pub use search_context::*;
 
-mod app;
+pub mod app;
 
 mod state;
 pub use state::*;
@@ -22,15 +22,15 @@ pub enum MessageCommand {
     Pid,
 }
 
-pub struct Message {
+pub struct FreezeMessage {
     msg: MessageCommand,
     addr: usize,
     value: SearchValue,
 }
 
-impl Message {
+impl FreezeMessage {
     pub fn from_addr(cmd: MessageCommand, addr: usize) -> Self {
-        Message {
+        FreezeMessage {
             msg: cmd,
             addr,
             value: SearchValue(SearchType::Guess, Vec::new()),
