@@ -110,10 +110,8 @@ jobs:
           git submodule update --init
       - name: Build app
         run: |
-          cd ${{ env.APP_NAME }}
           cargo build --release --target aarch64-apple-darwin
           cargo build --release --target x86_64-apple-darwin
-          cd ../..
 
           export app=$(python3 tools/get_name.py "${{ env.APP_NAME }}")
           echo "Build bundle for: $app"

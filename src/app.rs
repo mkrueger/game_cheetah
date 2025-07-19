@@ -26,6 +26,7 @@ pub enum Message {
     MainMenu,
     Discuss,
     ReportBug,
+    OpenGitHub,  // Add this
     Exit,
     FilterChanged(String),
     SelectProcess(ProcessInfo),
@@ -115,6 +116,12 @@ impl App {
             Message::ReportBug => {
                 if let Err(err) = webbrowser::open("https://github.com/mkrueger/game_cheetah/issues/new") {
                     println!("Failed to open bug report page: {}", err);
+                }
+                Task::none()
+            }
+            Message::OpenGitHub => {
+                if let Err(err) = webbrowser::open("https://github.com/mkrueger/game_cheetah") {
+                    println!("Failed to open GitHub page: {}", err);
                 }
                 Task::none()
             }
@@ -483,23 +490,75 @@ impl App {
     }
 
     fn view_main_window(&self) -> Element<'_, Message> {
-        container(
+    container(
+        column![
+            // Add title and version at the top
+            container(
+                column![
+                    text(APP_NAME).size(32),
+                    text(format!("v{} © Mike Krüger 2023-2025", VERSION)).size(16).style(|theme: &iced::Theme| {
+                        iced::widget::text::Style {
+                            color: Some(theme.extended_palette().secondary.base.color),
+                        }
+                    }),
+                    button(text("github.com/mkrueger/game_cheetah").size(14))
+                        .style(|theme: &iced::Theme, status: iced::widget::button::Status| {
+                            use iced::widget::button::Status;
+                            match status {
+                                Status::Hovered => button::Style {
+                                    background: Some(iced::Color::TRANSPARENT.into()),
+                                    border: iced::Border::default(),
+                                    text_color: theme.palette().primary,
+                                    ..Default::default()
+                                },
+                                _ => button::Style {
+                                    background: Some(iced::Color::TRANSPARENT.into()),
+                                    border: iced::Border::default(),
+                                    text_color: theme.extended_palette().secondary.base.color,
+                                    ..Default::default()
+                                },
+                            }
+                        })
+                        .on_press(Message::OpenGitHub)
+                        .padding(5),
+                ]
+                .spacing(5)
+                .width(Length::Fill)
+                .align_x(alignment::Alignment::Center)
+            )
+            .width(Length::Fill)
+            .padding(20),
+            
+            // Menu buttons
             column![
-                button(text(fl!(crate::LANGUAGE_LOADER, "attach-button")).size(24)).on_press(Message::Attach),
-                button(text(fl!(crate::LANGUAGE_LOADER, "discuss-button"))).on_press(Message::Discuss),
-                button(text(fl!(crate::LANGUAGE_LOADER, "bug-button"))).on_press(Message::ReportBug),
-                button(text(fl!(crate::LANGUAGE_LOADER, "about-button"))).on_press(Message::About),
-                button(text(fl!(crate::LANGUAGE_LOADER, "quit-button"))).on_press(Message::Exit)
+                button(text(fl!(crate::LANGUAGE_LOADER, "attach-button")).size(24))
+                    .on_press(Message::Attach)
+                    .padding(10),
+                button(text(fl!(crate::LANGUAGE_LOADER, "discuss-button")))
+                    .on_press(Message::Discuss)
+                    .padding(10),
+                button(text(fl!(crate::LANGUAGE_LOADER, "bug-button")))
+                    .on_press(Message::ReportBug)
+                    .padding(10),
+                button(text(fl!(crate::LANGUAGE_LOADER, "about-button")))
+                    .on_press(Message::About)
+                    .padding(10),
+                button(text(fl!(crate::LANGUAGE_LOADER, "quit-button")))
+                    .on_press(Message::Exit)
+                    .padding(10)
             ]
             .spacing(10)
             .align_x(alignment::Alignment::Center),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(alignment::Alignment::Center)
-        .align_y(alignment::Alignment::Center)
-        .into()
-    }
+        ]
+        .spacing(20)
+        .align_x(alignment::Alignment::Center),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .align_x(alignment::Alignment::Center)
+    .align_y(alignment::Alignment::Center)
+    .into()
+}
 
     fn view_process_selection(&self) -> Element<'_, Message> {
         let filter = self.state.process_filter.to_ascii_uppercase();
@@ -659,7 +718,7 @@ impl App {
                 let current_bytes = current_search_context.current_bytes.load(Ordering::Acquire);
                 //let percentage = current_bytes as f32 / current_search_context.total_bytes as f32;
                 row![
-                    progress_bar(0.0..=current_search_context.total_bytes as f32, current_bytes as f32).width(Length::Fixed(280.0)),
+                    progress_bar(0.0..=current_search_context.total_bytes as f32, current_bytes as f32).width(Length::Fill),
                     if current_search_context.searching == SearchMode::Percent {
                         text(
                             fl!(
@@ -811,7 +870,7 @@ impl App {
                     ..Default::default()
                 }
             }),
-            scrollable(column(table_rows.collect::<Vec<Element<'_, Message>>>())).height(Length::FillPortion(1))
+            scrollable(column(table_rows.collect::<Vec<Element<'_, Message>>>()).spacing(5).padding(5)).height(Length::FillPortion(1))
         ]
         .spacing(0)
         .into()
