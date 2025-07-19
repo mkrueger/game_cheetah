@@ -101,7 +101,7 @@ jobs:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
     runs-on: macos-latest
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
       - name: Install cargo bundle & get
         run: |
           rustup target add aarch64-apple-darwin
