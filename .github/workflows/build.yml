@@ -89,7 +89,7 @@ jobs:
       with:
         name: ${{ env.APP_NAME }}_${{ env.VERSION }}_windows
         path: |
-          target/release/${{ env.APP_NAME }}.exe  # Fixed path
+          target/release/${{ env.APP_NAME }}.exe
           file_id.diz
           
   build_mac:
