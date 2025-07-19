@@ -50,6 +50,9 @@ winres = "0.1"
 
 [profile.release]
 strip = "symbols"
+lto = true
+codegen-units = 1
+opt-level = "z"
 
 [patch.crates-io]
 
