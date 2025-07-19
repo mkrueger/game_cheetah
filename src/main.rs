@@ -1,7 +1,6 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
-#[cfg(target_os = "linux")]
 fn main() {
     use game_cheetah::app::App;
 

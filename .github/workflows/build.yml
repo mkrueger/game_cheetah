@@ -43,8 +43,8 @@ jobs:
        wget https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
        chmod +x appimagetool-x86_64.AppImage
        mkdir -p ${{ env.APP_NAME }}-appimage/usr/bin
-       cp crates/${{ env.APP_NAME }}/build/linux/256x256.png ${{ env.APP_NAME }}-appimage/${{ env.APP_NAME }}.png
-       cp crates/${{ env.APP_NAME }}/build/linux/${{ env.APP_NAME }}.desktop ${{ env.APP_NAME }}-appimage/
+       cp build/linux/256x256.png ${{ env.APP_NAME }}-appimage/${{ env.APP_NAME }}.png
+       cp build/linux/${{ env.APP_NAME }}.desktop ${{ env.APP_NAME }}-appimage/
        cp target/release/${{ env.APP_NAME }} ${{ env.APP_NAME }}-appimage/usr/bin/
        echo "#!/bin/bash" > ${{ env.APP_NAME }}-appimage/AppRun
        echo "exec \"\$(dirname \"\$0\")/usr/bin/${{ env.APP_NAME }}\" \"\$@\"" >> ${{ env.APP_NAME }}-appimage/AppRun
@@ -62,7 +62,7 @@ jobs:
   build_windows:
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@4
+    - uses: actions/checkout@v4
     - name: Build exe
       run: |
         cargo build --release
