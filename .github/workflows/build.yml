@@ -37,7 +37,28 @@ jobs:
        path: |
          ${{ env.APP_NAME }}_${{ env.VERSION }}_amd64.deb
          file_id.diz
+   - name: Build AppImage
+     id: build-appimage
+     run: |
+       wget https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+       chmod +x appimagetool-x86_64.AppImage
+       mkdir -p ${{ env.APP_NAME }}-appimage/usr/bin
+       cp crates/${{ env.APP_NAME }}/build/linux/256x256.png ${{ env.APP_NAME }}-appimage/${{ env.APP_NAME }}.png
+       cp crates/${{ env.APP_NAME }}/build/linux/${{ env.APP_NAME }}.desktop ${{ env.APP_NAME }}-appimage/
+       cp target/release/${{ env.APP_NAME }} ${{ env.APP_NAME }}-appimage/usr/bin/
+       echo "#!/bin/bash" > ${{ env.APP_NAME }}-appimage/AppRun
+       echo "exec \"\$(dirname \"\$0\")/usr/bin/${{ env.APP_NAME }}\" \"\$@\"" >> ${{ env.APP_NAME }}-appimage/AppRun
+       chmod a+x ${{ env.APP_NAME }}-appimage/AppRun
 
+       export app_img=$(python3 tools/get_app_img.py "${{ env.APP_NAME }}" "${{ env.VERSION }}" x86_64)
+       echo "APP_IMG=$app_img" >> $GITHUB_ENV
+
+       ./appimagetool-x86_64.AppImage "${{ env.APP_NAME }}-appimage" "$app_img"
+   - name: 'Upload AppImage'
+     uses: actions/upload-artifact@v4
+     with:
+      name: ${{ env.APP_IMG }}
+      path: ${{ env.APP_IMG }}
   build_windows:
     runs-on: windows-latest
     steps:
