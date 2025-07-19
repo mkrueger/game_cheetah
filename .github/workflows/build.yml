@@ -80,11 +80,11 @@ jobs:
         echo "Version: $VERSION"
         Add-Content -Path $env:GITHUB_ENV -Value "VERSION=$VERSION"
         get-content .\build\file_id.diz | %{$_ -replace "#VERSION","$VERSION"} >file_id.diz        
-    - name: Build MSI installer.
-      run: |
-        echo "Building ${{ env.VERSION }} installer…"
-        wix extension add WixToolset.UI.wixext WixToolset.Util.wixext
-        wix build -arch "x64" -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext -d "PATH=./cert.pfx" -d "VERSION=${{ env.VERSION }}"  -out "./${{ env.APP_NAME }}-${{ env.VERSION }}-installer.msi" "build/windows/installer.wxs"
+#    - name: Build MSI installer.
+#      run: |
+#        echo "Building ${{ env.VERSION }} installer…"
+#        wix extension add WixToolset.UI.wixext WixToolset.Util.wixext
+#        wix build -arch "x64" -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext -d "PATH=./cert.pfx" -d "VERSION=${{ env.VERSION }}"  -out "./${{ env.APP_NAME }}-${{ env.VERSION }}-installer.msi" "build/windows/installer.wxs"
     - name: Delete PFX certificate
       run: del "./cert.pfx"
     - name: 'Upload Artifact'
@@ -92,9 +92,8 @@ jobs:
       with:
         name: ${{ env.APP_NAME }}_${{ env.VERSION }}_windows
         path: |
-          ${{ env.APP_NAME }}-${{ env.VERSION }}-installer.msi
-          file_id.diz
-  
+          ${{ env.APP_NAME }}.exe
+          
   build_mac:
     strategy:
       matrix:
@@ -111,7 +110,7 @@ jobs:
           git submodule update --init
       - name: Build app
         run: |
-          cd crates/${{ env.APP_NAME }}
+          cd ${{ env.APP_NAME }}
           cargo build --release --target aarch64-apple-darwin
           cargo build --release --target x86_64-apple-darwin
           cd ../..
@@ -125,15 +124,15 @@ jobs:
           echo "Creating dir '$app.app/Contents/Resources'"
           mkdir -p "$app.app/Contents/Resources"
 
-          cp crates/${{ env.APP_NAME }}/build/mac/Info.plist "${app}.app/Contents/Info.plist"
+          cp ${{ env.APP_NAME }}/build/mac/Info.plist "${app}.app/Contents/Info.plist"
 
           mkdir -p AppIcon.iconset
-          sips -z 16 16 crates/${{ env.APP_NAME }}/build/mac/128x128@2x.png --out AppIcon.iconset/icon_16x16.png
-          sips -z 32 32 crates/${{ env.APP_NAME }}/build/mac/128x128@2x.png --out AppIcon.iconset/icon_16x16@2x.png
-          sips -z 32 32 crates/${{ env.APP_NAME }}/build/mac/128x128@2x.png --out AppIcon.iconset/icon_32x32.png
-          sips -z 64 64 crates/${{ env.APP_NAME }}/build/mac/128x128@2x.png --out AppIcon.iconset/icon_32x32@2.png
-          sips -z 128 128 crates/${{ env.APP_NAME }}/build/mac/128x128@2x.png --out AppIcon.iconset/icon_128x128.png
-          cp crates/${{ env.APP_NAME }}/build/mac/128x128@2x.png AppIcon.iconset/icon_128x128@2x.png
+          sips -z 16 16 ${{ env.APP_NAME }}/build/mac/128x128@2x.png --out AppIcon.iconset/icon_16x16.png
+          sips -z 32 32 ${{ env.APP_NAME }}/build/mac/128x128@2x.png --out AppIcon.iconset/icon_16x16@2x.png
+          sips -z 32 32 ${{ env.APP_NAME }}/build/mac/128x128@2x.png --out AppIcon.iconset/icon_32x32.png
+          sips -z 64 64 ${{ env.APP_NAME }}/build/mac/128x128@2x.png --out AppIcon.iconset/icon_32x32@2.png
+          sips -z 128 128 ${{ env.APP_NAME }}/build/mac/128x128@2x.png --out AppIcon.iconset/icon_128x128.png
+          cp ${{ env.APP_NAME }}/build/mac/128x128@2x.png AppIcon.iconset/icon_128x128@2x.png
           iconutil -c icns AppIcon.iconset
           cp AppIcon.icns "$app.app/Contents/Resources"
           

@@ -6,6 +6,7 @@ fn main() {
 
     iced::application(App::title, App::update, App::view)
         .theme(App::theme)
+        .subscription(App::subscription) // Add this line
         .run()
         .expect("Failed to run application");
 }
