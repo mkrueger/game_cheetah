@@ -34,11 +34,10 @@ pub struct SearchContext {
     pub freezed_addresses: HashSet<usize>,
 
     pub old_results: Vec<Vec<SearchResult>>,
-    pub search_results: i64,
     pub search_complete: Arc<AtomicBool>,
 
     cached_results: Arc<RwLock<Option<Vec<SearchResult>>>>,
-    cache_valid: Arc<AtomicBool>,
+    pub cache_valid: Arc<AtomicBool>,
 }
 
 impl SearchContext {
@@ -55,7 +54,6 @@ impl SearchContext {
             total_bytes: 0,
             current_bytes: Arc::new(AtomicUsize::new(0)),
             freezed_addresses: HashSet::new(),
-            search_results: -1,
             search_type: SearchType::Guess,
             old_results: Vec::new(),
             search_complete: Arc::new(AtomicBool::new(false)),
@@ -65,9 +63,12 @@ impl SearchContext {
         }
     }
 
+    pub fn get_result_count(&self) -> usize {
+        self.result_count.load(Ordering::Relaxed)
+    }
+
     pub fn clear_results(&mut self, freeze_sender: &mpsc::Sender<FreezeMessage>) {
         GameCheetahEngine::remove_freezes_from(freeze_sender, &mut self.freezed_addresses);
-        self.search_results = -1;
     }
 
     pub fn collect_results(&self) -> Vec<SearchResult> {
@@ -86,7 +87,7 @@ impl SearchContext {
             all_results.extend(results);
         }
 
-        // Update cache
+        // Update cache but DON'T put results back in channel
         if let Ok(mut cache) = self.cached_results.write() {
             *cache = Some(all_results.clone());
             self.cache_valid.store(true, Ordering::Release);

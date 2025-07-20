@@ -199,11 +199,7 @@ impl GameCheetahEngine {
         let search_context = self.searches.get_mut(search_index).unwrap();
         search_context.searching = SearchMode::Percent;
 
-        // OLD CODE - Remove this:
-        // let old_results_arc: Arc<Mutex<Vec<SearchResult>>> = mem::replace(&mut search_context.results, Arc::new(Mutex::new(Vec::new())));
-        // let old_results = old_results_arc.lock().unwrap().clone();
-
-        // NEW CODE - Use this instead:
+        // Collect old results
         let old_results = search_context.collect_results();
 
         search_context.total_bytes = old_results.len();
@@ -215,6 +211,12 @@ impl GameCheetahEngine {
         search_context.results_sender = tx;
         search_context.results_receiver = rx;
         search_context.result_count.store(0, Ordering::SeqCst);
+
+        // REMOVE THESE LINES - they're causing the problem
+        // if !old_results.is_empty() {
+        //     let _ = search_context.results_sender.send(old_results.clone());
+        //     search_context.result_count.store(old_results.len(), Ordering::SeqCst);
+        // }
 
         let max_block = 200 * 1024;
         let chunks: Vec<(usize, usize)> = (0..old_results.len())
@@ -287,20 +289,14 @@ impl GameCheetahEngine {
         let current_bytes = search_context.current_bytes.clone();
         let pid = self.pid;
         let value_text = search_context.search_value_text.clone();
-
-        // OLD CODE - Remove this:
-        // let results = search_context.results.clone();
-
-        // NEW CODE - Use this instead:
         let results_sender = search_context.results_sender.clone();
         let result_count = search_context.result_count.clone();
-
         let search_complete = search_context.search_complete.clone();
+        let cache_valid = search_context.cache_valid.clone(); // Add this
+
         search_complete.store(false, Ordering::SeqCst);
 
-        // Spawn a separate thread to handle the parallel search
         std::thread::spawn(move || {
-            // Process chunks in parallel using rayon
             chunks.par_iter().for_each(|(from, to)| {
                 let handle = match pid.try_into_process_handle() {
                     Ok(h) => h,
@@ -314,20 +310,18 @@ impl GameCheetahEngine {
                 let chunk = &old_results[*from..*to];
                 let updated = update_results(chunk, &value_text, &handle);
 
-                // Send results if any found
                 if !updated.is_empty() {
                     let count = updated.len();
                     result_count.fetch_add(count, Ordering::SeqCst);
                     let _ = results_sender.send(updated);
+                    // DON'T invalidate cache here!
                 }
 
                 current_bytes.fetch_add(to - from, Ordering::SeqCst);
             });
 
-            // OLD CODE - Remove this:
-            // results.lock().unwrap().extend(all_results);
-
-            // Mark search as complete
+            // Invalidate cache only ONCE when search is complete
+            cache_valid.store(false, Ordering::Release);
             search_complete.store(true, Ordering::SeqCst);
         });
     }
@@ -339,6 +333,7 @@ impl GameCheetahEngine {
         let results_sender = search_context.results_sender.clone();
         let result_count = search_context.result_count.clone();
         let search_complete = search_context.search_complete.clone();
+        let cache_valid = search_context.cache_valid.clone();
 
         search_complete.store(false, Ordering::SeqCst);
 
@@ -359,7 +354,6 @@ impl GameCheetahEngine {
                                 let mut results = Vec::new();
                                 let val: String = String::from_utf8(search_value.1.clone()).unwrap();
 
-                                // Process all types in parallel
                                 let types = vec![SearchType::Int, SearchType::Float, SearchType::Double];
                                 for search_type in types {
                                     if let Ok(search_value) = search_type.from_string(&val) {
@@ -376,6 +370,7 @@ impl GameCheetahEngine {
                             let count = local_results.len();
                             result_count.fetch_add(count, Ordering::SeqCst);
                             let _ = results_sender.send(local_results);
+                            // DON'T invalidate cache here!
                         }
 
                         current_bytes.fetch_add(*size, Ordering::SeqCst);
@@ -386,6 +381,8 @@ impl GameCheetahEngine {
                 }
             });
 
+            // Invalidate cache only ONCE when search is complete
+            cache_valid.store(false, Ordering::Release);
             search_complete.store(true, Ordering::SeqCst);
         });
     }

@@ -144,14 +144,14 @@ impl App {
                 self.state.process_filter.clear();
                 iced::Task::perform(
                     async {
-                        sleep(Duration::from_millis(500));
+                        sleep(Duration::from_millis(2000));
                     },
                     |_| Message::TickProcess,
                 )
             }
             Message::TickProcess => iced::Task::perform(
                 async {
-                    sleep(Duration::from_millis(500));
+                    sleep(Duration::from_millis(2000));
                 },
                 |_| Message::TickProcess,
             ),
@@ -227,14 +227,12 @@ impl App {
                     let search_type = current_search.search_type;
                     match search_type.from_string(&current_search.search_value_text) {
                         Ok(_search_value) => {
-                            // Collect any pending results first
-                            let collected_results = current_search.collect_results();
+                            // Check the actual result count, not just search_results
+                            let has_results = current_search.result_count.load(Ordering::Relaxed) > 0 || current_search.get_result_count() > 0;
 
-                            if collected_results.is_empty() {
+                            if !has_results {
                                 self.state.initial_search(search_index);
                             } else {
-                                // Put results back before filtering
-                                let _ = current_search.results_sender.send(collected_results);
                                 self.state.filter_searches(search_index);
                             }
                         }
@@ -250,15 +248,15 @@ impl App {
                 let current_search_context = &mut self.state.searches[self.state.current_search];
 
                 if current_search_context.search_complete.load(Ordering::SeqCst) {
-                    // Collect final results
-                    let results = current_search_context.collect_results();
+                    // Collect any final results before marking as complete
+                    let final_results = current_search_context.collect_results();
 
-                    // Put them back if needed
-                    if !results.is_empty() {
-                        let _ = current_search_context.results_sender.send(results);
+                    // If we have results but they're not in the channel anymore, put them back
+                    if current_search_context.get_result_count() > 0 && final_results.is_empty() {
+                        // The results were already collected, so we need to ensure they stay available
+                        current_search_context.invalidate_cache();
                     }
 
-                    current_search_context.search_results = current_search_context.result_count.load(Ordering::SeqCst) as i64;
                     current_search_context.searching = SearchMode::None;
                 }
 
@@ -271,14 +269,13 @@ impl App {
             Message::Undo => {
                 if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
                     if let Some(old) = search_context.old_results.pop() {
-                        search_context.search_results = old.len() as i64;
-
                         // Clear current results and send old ones
                         let (tx, rx) = crossbeam_channel::unbounded();
                         search_context.results_sender = tx.clone();
                         search_context.results_receiver = rx;
                         let _ = tx.send(old);
-                        search_context.result_count.store(search_context.search_results as usize, Ordering::SeqCst);
+                        search_context.result_count.store(search_context.get_result_count() as usize, Ordering::SeqCst);
+                        search_context.invalidate_cache(); // Add this!
                     }
                 }
                 Task::none()
@@ -317,11 +314,6 @@ impl App {
                         } else {
                             println!("Invalid value for result at index {}: {}", index, value_text);
                         }
-
-                        // Put results back
-                        if !results.is_empty() {
-                            let _ = current_search.results_sender.send(results);
-                        }
                     }
                 }
                 Task::none()
@@ -356,11 +348,6 @@ impl App {
                                 .unwrap_or_default();
                         }
                     }
-
-                    // Put results back
-                    if !results.is_empty() {
-                        let _ = search_context.results_sender.send(results);
-                    }
                 }
                 Task::none()
             }
@@ -380,11 +367,6 @@ impl App {
                         self.memory_cursor_col = 0;
                         self.memory_cursor_nibble = 0;
                         self.app_state = AppState::MemoryEditor;
-                    }
-
-                    // Put results back
-                    if !results.is_empty() {
-                        let _ = search_context.results_sender.send(results);
                     }
                 }
                 Task::none()
@@ -757,7 +739,8 @@ impl App {
         let current_search_context = &self.state.searches[self.state.current_search];
         let selected_type = current_search_context.search_type;
         let value_text = &current_search_context.search_value_text;
-        let search_results = current_search_context.search_results;
+        let search_results = current_search_context.get_result_count();
+        let is_search_complete = current_search_context.search_complete.load(Ordering::SeqCst);
         let show_error = !current_search_context.search_value_text.is_empty()
             && current_search_context
                 .search_type
@@ -839,7 +822,7 @@ impl App {
                 .spacing(10.0)
                 .align_y(alignment::Alignment::Center)
             } else {
-                if search_results < 0 {
+                if !is_search_complete {
                     row![{
                         let b = button(text(fl!(crate::LANGUAGE_LOADER, "initial-search-button")));
                         if show_error { b } else { b.on_press(Message::Search) }
@@ -892,11 +875,6 @@ impl App {
         // Collect all results for display
         let results = current_search_context.collect_results();
         let show_search_types = matches!(current_search_context.search_type, SearchType::Guess);
-
-        // Keep results available by sending them back
-        if !results.is_empty() {
-            let _ = current_search_context.results_sender.send(results.clone());
-        }
 
         let table_header = row![
             container(text(fl!(crate::LANGUAGE_LOADER, "address-heading")).size(14))
