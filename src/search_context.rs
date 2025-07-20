@@ -2,13 +2,14 @@ use std::{
     collections::HashSet,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
 };
 
 use crate::{FreezeMessage, GameCheetahEngine, SearchResult, SearchType};
 use crossbeam_channel::{Receiver, Sender, unbounded};
+use std::sync::RwLock;
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum SearchMode {
@@ -35,6 +36,9 @@ pub struct SearchContext {
     pub old_results: Vec<Vec<SearchResult>>,
     pub search_results: i64,
     pub search_complete: Arc<AtomicBool>,
+
+    cached_results: Arc<RwLock<Option<Vec<SearchResult>>>>,
+    cache_valid: Arc<AtomicBool>,
 }
 
 impl SearchContext {
@@ -55,6 +59,9 @@ impl SearchContext {
             search_type: SearchType::Guess,
             old_results: Vec::new(),
             search_complete: Arc::new(AtomicBool::new(false)),
+
+            cached_results: Arc::new(RwLock::new(None)),
+            cache_valid: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -64,10 +71,31 @@ impl SearchContext {
     }
 
     pub fn collect_results(&self) -> Vec<SearchResult> {
+        // Check if cache is valid
+        if self.cache_valid.load(Ordering::Acquire) {
+            if let Ok(cache) = self.cached_results.read() {
+                if let Some(ref results) = *cache {
+                    return results.clone();
+                }
+            }
+        }
+
+        // Collect from channel
         let mut all_results = Vec::new();
         while let Ok(results) = self.results_receiver.try_recv() {
             all_results.extend(results);
         }
+
+        // Update cache
+        if let Ok(mut cache) = self.cached_results.write() {
+            *cache = Some(all_results.clone());
+            self.cache_valid.store(true, Ordering::Release);
+        }
+
         all_results
+    }
+
+    pub fn invalidate_cache(&self) {
+        self.cache_valid.store(false, Ordering::Release);
     }
 }
