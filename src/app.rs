@@ -1,5 +1,5 @@
 use std::{
-    sync::{Arc, Mutex, atomic::Ordering},
+    sync::atomic::Ordering,
     thread::sleep,
     time::{Duration, SystemTime},
 };
@@ -15,6 +15,7 @@ use iced::{
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 
 use crate::{FreezeMessage, GameCheetahEngine, MessageCommand, ProcessInfo, SearchMode, SearchType, SearchValue};
+use crossbeam_channel;
 
 const APP_NAME: &str = "Game Cheetah";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -226,10 +227,14 @@ impl App {
                     let search_type = current_search.search_type;
                     match search_type.from_string(&current_search.search_value_text) {
                         Ok(_search_value) => {
-                            let len = self.state.searches.get(search_index).unwrap().results.lock().unwrap().len();
-                            if len == 0 {
+                            // Collect any pending results first
+                            let collected_results = current_search.collect_results();
+
+                            if collected_results.is_empty() {
                                 self.state.initial_search(search_index);
                             } else {
+                                // Put results back before filtering
+                                let _ = current_search.results_sender.send(collected_results);
                                 self.state.filter_searches(search_index);
                             }
                         }
@@ -243,8 +248,17 @@ impl App {
             Message::Tick => {
                 // If searching, keep scheduling ticks
                 let current_search_context = &mut self.state.searches[self.state.current_search];
+
                 if current_search_context.search_complete.load(Ordering::SeqCst) {
-                    current_search_context.search_results = current_search_context.results.lock().unwrap().len() as i64;
+                    // Collect final results
+                    let results = current_search_context.collect_results();
+
+                    // Put them back if needed
+                    if !results.is_empty() {
+                        let _ = current_search_context.results_sender.send(results);
+                    }
+
+                    current_search_context.search_results = current_search_context.result_count.load(Ordering::SeqCst) as i64;
                     current_search_context.searching = SearchMode::None;
                 }
 
@@ -258,7 +272,13 @@ impl App {
                 if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
                     if let Some(old) = search_context.old_results.pop() {
                         search_context.search_results = old.len() as i64;
-                        search_context.results = Arc::new(Mutex::new(old));
+
+                        // Clear current results and send old ones
+                        let (tx, rx) = crossbeam_channel::unbounded();
+                        search_context.results_sender = tx.clone();
+                        search_context.results_receiver = rx;
+                        let _ = tx.send(old);
+                        search_context.result_count.store(search_context.search_results as usize, Ordering::SeqCst);
                     }
                 }
                 Task::none()
@@ -276,22 +296,31 @@ impl App {
             Message::ResultValueChanged(index, value_text) => {
                 if let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle() {
                     if let Some(current_search) = self.state.searches.get_mut(self.state.current_search) {
-                        let results: std::sync::MutexGuard<'_, Vec<crate::SearchResult>> = current_search.results.lock().unwrap();
-                        let result = results[index];
-                        if let Ok(value) = result.search_type.from_string(&value_text) {
-                            handle.put_address(result.addr, &value.1).unwrap_or_default();
-                            if current_search.freezed_addresses.contains(&result.addr) {
-                                self.state
-                                    .freeze_sender
-                                    .send(FreezeMessage {
-                                        msg: crate::MessageCommand::Freeze,
-                                        addr: result.addr,
-                                        value,
-                                    })
-                                    .unwrap_or_default();
+                        // Collect all results
+                        let results = current_search.collect_results();
+
+                        if index < results.len() {
+                            let result = results[index];
+                            if let Ok(value) = result.search_type.from_string(&value_text) {
+                                handle.put_address(result.addr, &value.1).unwrap_or_default();
+                                if current_search.freezed_addresses.contains(&result.addr) {
+                                    self.state
+                                        .freeze_sender
+                                        .send(FreezeMessage {
+                                            msg: crate::MessageCommand::Freeze,
+                                            addr: result.addr,
+                                            value,
+                                        })
+                                        .unwrap_or_default();
+                                }
                             }
                         } else {
                             println!("Invalid value for result at index {}: {}", index, value_text);
+                        }
+
+                        // Put results back
+                        if !results.is_empty() {
+                            let _ = current_search.results_sender.send(results);
                         }
                     }
                 }
@@ -299,47 +328,63 @@ impl App {
             }
             Message::ToggleFreeze(index) => {
                 if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
-                    let results: std::sync::MutexGuard<'_, Vec<crate::SearchResult>> = search_context.results.lock().unwrap();
-                    let result = &results[index];
-                    let b = !search_context.freezed_addresses.contains(&result.addr);
-                    if b {
-                        search_context.freezed_addresses.insert(result.addr);
-                        if let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle() {
-                            if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
-                                self.state
-                                    .freeze_sender
-                                    .send(FreezeMessage {
-                                        msg: MessageCommand::Freeze,
-                                        addr: result.addr,
-                                        value: SearchValue(result.search_type, buf),
-                                    })
-                                    .unwrap_or_default();
+                    // Collect all results
+                    let results = search_context.collect_results();
+
+                    if index < results.len() {
+                        let result = &results[index];
+                        let b = !search_context.freezed_addresses.contains(&result.addr);
+                        if b {
+                            search_context.freezed_addresses.insert(result.addr);
+                            if let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle() {
+                                if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
+                                    self.state
+                                        .freeze_sender
+                                        .send(FreezeMessage {
+                                            msg: MessageCommand::Freeze,
+                                            addr: result.addr,
+                                            value: SearchValue(result.search_type, buf),
+                                        })
+                                        .unwrap_or_default();
+                                }
                             }
+                        } else {
+                            search_context.freezed_addresses.remove(&(result.addr));
+                            self.state
+                                .freeze_sender
+                                .send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
+                                .unwrap_or_default();
                         }
-                    } else {
-                        search_context.freezed_addresses.remove(&(result.addr));
-                        self.state
-                            .freeze_sender
-                            .send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
-                            .unwrap_or_default();
+                    }
+
+                    // Put results back
+                    if !results.is_empty() {
+                        let _ = search_context.results_sender.send(results);
                     }
                 }
                 Task::none()
             }
             Message::OpenEditor(index) => {
                 if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
-                    let results: std::sync::MutexGuard<'_, Vec<crate::SearchResult>> = search_context.results.lock().unwrap();
+                    // Collect all results
+                    let results = search_context.collect_results();
+
                     if index < results.len() {
                         let result = &results[index];
                         self.state.edit_address = result.addr;
                         self.memory_editor_address_text = format!("{:X}", result.addr);
-                        self.memory_editor_initial_address = result.addr; // Store initial address
-                        self.memory_editor_initial_size = result.search_type.get_byte_length(); // Store size
+                        self.memory_editor_initial_address = result.addr;
+                        self.memory_editor_initial_size = result.search_type.get_byte_length();
                         // Reset cursor to highlight the first byte
                         self.memory_cursor_row = 0;
                         self.memory_cursor_col = 0;
                         self.memory_cursor_nibble = 0;
                         self.app_state = AppState::MemoryEditor;
+                    }
+
+                    // Put results back
+                    if !results.is_empty() {
+                        let _ = search_context.results_sender.send(results);
                     }
                 }
                 Task::none()
@@ -843,8 +888,15 @@ impl App {
 
     fn render_result_table(&self) -> Element<'_, Message> {
         let current_search_context = &self.state.searches[self.state.current_search];
-        let results = current_search_context.results.lock().unwrap();
+
+        // Collect all results for display
+        let results = current_search_context.collect_results();
         let show_search_types = matches!(current_search_context.search_type, SearchType::Guess);
+
+        // Keep results available by sending them back
+        if !results.is_empty() {
+            let _ = current_search_context.results_sender.send(results.clone());
+        }
 
         let table_header = row![
             container(text(fl!(crate::LANGUAGE_LOADER, "address-heading")).size(14))

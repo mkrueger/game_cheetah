@@ -1,18 +1,17 @@
-use std::{
-    cmp::min,
-    collections::{HashMap, HashSet},
-    mem,
-    sync::{Arc, Mutex, atomic::Ordering, mpsc},
-    thread,
-    time::{Duration, SystemTime},
-};
-
 use crate::{FreezeMessage, MessageCommand, SearchContext, SearchMode, SearchResult, SearchType, SearchValue};
+use crossbeam_channel;
 use i18n_embed_fl::fl;
 use memchr::memmem;
 use proc_maps::get_process_maps;
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 use rayon::prelude::*;
+use std::sync::{atomic::Ordering, mpsc};
+use std::{
+    cmp::min,
+    collections::{HashMap, HashSet},
+    thread,
+    time::{Duration, SystemTime},
+};
 use sysinfo::*;
 
 #[derive(Debug, Clone)]
@@ -199,11 +198,23 @@ impl GameCheetahEngine {
         self.remove_freezes(search_index);
         let search_context = self.searches.get_mut(search_index).unwrap();
         search_context.searching = SearchMode::Percent;
-        let old_results_arc: Arc<Mutex<Vec<SearchResult>>> = mem::replace(&mut search_context.results, Arc::new(Mutex::new(Vec::new())));
-        let old_results = old_results_arc.lock().unwrap().clone();
+
+        // OLD CODE - Remove this:
+        // let old_results_arc: Arc<Mutex<Vec<SearchResult>>> = mem::replace(&mut search_context.results, Arc::new(Mutex::new(Vec::new())));
+        // let old_results = old_results_arc.lock().unwrap().clone();
+
+        // NEW CODE - Use this instead:
+        let old_results = search_context.collect_results();
+
         search_context.total_bytes = old_results.len();
         search_context.current_bytes.swap(0, Ordering::SeqCst);
         search_context.old_results.push(old_results.clone());
+
+        // Reset the channel for new results
+        let (tx, rx) = crossbeam_channel::unbounded();
+        search_context.results_sender = tx;
+        search_context.results_receiver = rx;
+        search_context.result_count.store(0, Ordering::SeqCst);
 
         let max_block = 200 * 1024;
         let chunks: Vec<(usize, usize)> = (0..old_results.len())
@@ -276,39 +287,45 @@ impl GameCheetahEngine {
         let current_bytes = search_context.current_bytes.clone();
         let pid = self.pid;
         let value_text = search_context.search_value_text.clone();
-        let results = search_context.results.clone();
+
+        // OLD CODE - Remove this:
+        // let results = search_context.results.clone();
+
+        // NEW CODE - Use this instead:
+        let results_sender = search_context.results_sender.clone();
+        let result_count = search_context.result_count.clone();
+
         let search_complete = search_context.search_complete.clone();
         search_complete.store(false, Ordering::SeqCst);
 
         // Spawn a separate thread to handle the parallel search
         std::thread::spawn(move || {
             // Process chunks in parallel using rayon
-            let chunk_results: Vec<Vec<SearchResult>> = chunks
-                .par_iter()
-                .map(|(from, to)| {
-                    let handle = match pid.try_into_process_handle() {
-                        Ok(h) => h,
-                        Err(e) => {
-                            eprintln!("Failed to get process handle: {}", e);
-                            current_bytes.fetch_add(to - from, Ordering::SeqCst); // Still update progress
-                            return Vec::new();
-                        }
-                    };
+            chunks.par_iter().for_each(|(from, to)| {
+                let handle = match pid.try_into_process_handle() {
+                    Ok(h) => h,
+                    Err(e) => {
+                        eprintln!("Failed to get process handle: {}", e);
+                        current_bytes.fetch_add(to - from, Ordering::SeqCst);
+                        return;
+                    }
+                };
 
-                    let chunk = &old_results[*from..*to];
-                    let updated = update_results(chunk, &value_text, &handle);
-                    current_bytes.fetch_add(to - from, Ordering::SeqCst); // Update progress atomically
-                    updated
-                })
-                .collect();
+                let chunk = &old_results[*from..*to];
+                let updated = update_results(chunk, &value_text, &handle);
 
-            // Merge all results
-            let mut all_results = Vec::new();
-            for chunk_result in chunk_results {
-                all_results.extend(chunk_result);
-            }
+                // Send results if any found
+                if !updated.is_empty() {
+                    let count = updated.len();
+                    result_count.fetch_add(count, Ordering::SeqCst);
+                    let _ = results_sender.send(updated);
+                }
 
-            results.lock().unwrap().extend(all_results);
+                current_bytes.fetch_add(to - from, Ordering::SeqCst);
+            });
+
+            // OLD CODE - Remove this:
+            // results.lock().unwrap().extend(all_results);
 
             // Mark search as complete
             search_complete.store(true, Ordering::SeqCst);
@@ -316,80 +333,59 @@ impl GameCheetahEngine {
     }
 
     fn spawn_parallel_search(&mut self, search_value: SearchValue, regions: Vec<(usize, usize)>, search_index: usize) {
-        let search_context = self.searches.get(search_index).unwrap();
+        let search_context = self.searches.get_mut(search_index).unwrap();
         let pid = self.pid;
         let current_bytes = search_context.current_bytes.clone();
-        let results = search_context.results.clone();
-        let search_complete = search_context.search_complete.clone(); // Clone the completion flag
+        let results_sender = search_context.results_sender.clone();
+        let result_count = search_context.result_count.clone();
+        let search_complete = search_context.search_complete.clone();
+
         search_complete.store(false, Ordering::SeqCst);
 
-        // Spawn a separate thread to handle the parallel search
         std::thread::spawn(move || {
-            // Process regions in parallel using rayon
-            let region_results: Vec<Vec<SearchResult>> = regions
-                .par_iter()
-                .map(|(start, size)| {
-                    let handle = match (pid as process_memory::Pid).try_into_process_handle() {
-                        Ok(h) => h,
-                        Err(_) => {
-                            current_bytes.fetch_add(*size, Ordering::SeqCst);
-                            return Vec::new();
-                        }
-                    };
-
-                    // Try to read memory, but don't log every failure
-                    match copy_address(*start, *size, &handle) {
-                        Ok(memory_data) => {
-                            let mut local_results = Vec::new();
-
-                            match search_value.0 {
-                                SearchType::Guess => {
-                                    let val: String = String::from_utf8(search_value.1.clone()).unwrap();
-
-                                    if let Ok(search_value) = SearchType::Int.from_string(&val) {
-                                        let search_data = &search_value.1;
-                                        let r = search_memory(&memory_data, search_data, SearchType::Int, *start);
-                                        local_results.extend(r);
-                                    }
-                                    if let Ok(search_value) = SearchType::Float.from_string(&val) {
-                                        let search_data = &search_value.1;
-                                        let r = search_memory(&memory_data, search_data, SearchType::Float, *start);
-                                        local_results.extend(r);
-                                    }
-                                    if let Ok(search_value) = SearchType::Double.from_string(&val) {
-                                        let search_data = &search_value.1;
-                                        let r = search_memory(&memory_data, search_data, SearchType::Double, *start);
-                                        local_results.extend(r);
-                                    }
-                                }
-                                _ => {
-                                    let search_data = &search_value.1;
-                                    let r = search_memory(&memory_data, search_data, search_value.0, *start);
-                                    local_results.extend(r);
-                                }
-                            }
-                            current_bytes.fetch_add(*size, Ordering::SeqCst);
-                            local_results
-                        }
-                        Err(_) => {
-                            // Silently skip inaccessible regions - this is normal
-                            current_bytes.fetch_add(*size, Ordering::SeqCst);
-                            Vec::new()
-                        }
+            regions.par_iter().for_each(|(start, size)| {
+                let handle = match (pid as process_memory::Pid).try_into_process_handle() {
+                    Ok(h) => h,
+                    Err(_) => {
+                        current_bytes.fetch_add(*size, Ordering::SeqCst);
+                        return;
                     }
-                })
-                .collect();
+                };
 
-            // Merge all results
-            let mut all_results = Vec::new();
-            for region_result in region_results {
-                all_results.extend(region_result);
-            }
+                match copy_address(*start, *size, &handle) {
+                    Ok(memory_data) => {
+                        let local_results = match search_value.0 {
+                            SearchType::Guess => {
+                                let mut results = Vec::new();
+                                let val: String = String::from_utf8(search_value.1.clone()).unwrap();
 
-            // Update results
-            results.lock().unwrap().extend(all_results);
+                                // Process all types in parallel
+                                let types = vec![SearchType::Int, SearchType::Float, SearchType::Double];
+                                for search_type in types {
+                                    if let Ok(search_value) = search_type.from_string(&val) {
+                                        let r = search_memory(&memory_data, &search_value.1, search_type, *start);
+                                        results.extend(r);
+                                    }
+                                }
+                                results
+                            }
+                            _ => search_memory(&memory_data, &search_value.1, search_value.0, *start),
+                        };
 
-            // Mark search as complete
+                        if !local_results.is_empty() {
+                            let count = local_results.len();
+                            result_count.fetch_add(count, Ordering::SeqCst);
+                            let _ = results_sender.send(local_results);
+                        }
+
+                        current_bytes.fetch_add(*size, Ordering::SeqCst);
+                    }
+                    Err(_) => {
+                        current_bytes.fetch_add(*size, Ordering::SeqCst);
+                    }
+                }
+            });
+
             search_complete.store(true, Ordering::SeqCst);
         });
     }
