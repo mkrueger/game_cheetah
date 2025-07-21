@@ -15,7 +15,6 @@ use iced::{
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 
 use crate::{FreezeMessage, GameCheetahEngine, MessageCommand, ProcessInfo, SearchMode, SearchType, SearchValue};
-use crossbeam_channel;
 
 const APP_NAME: &str = "Game Cheetah";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -894,6 +893,10 @@ impl App {
 
     fn render_result_table(&self) -> Element<'_, Message> {
         let current_search_context = &self.state.searches[self.state.current_search];
+        // Don't show results if search is still in progress
+        if !matches!(current_search_context.searching, SearchMode::None) {
+            return column![].into();
+        }
 
         // Collect all results for display
         let results = current_search_context.collect_results();

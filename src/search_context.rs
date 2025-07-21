@@ -10,7 +10,6 @@ use std::{
 use crate::{FreezeMessage, GameCheetahEngine, SearchResult, SearchType};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use std::sync::RwLock;
-
 #[derive(PartialEq, Clone, Copy)]
 pub enum SearchMode {
     None,
@@ -36,7 +35,7 @@ pub struct SearchContext {
     pub old_results: Vec<Vec<SearchResult>>,
     pub search_complete: Arc<AtomicBool>,
 
-    cached_results: Arc<RwLock<Option<Vec<SearchResult>>>>,
+    pub cached_results: Arc<RwLock<Option<Vec<SearchResult>>>>,
     pub cache_valid: Arc<AtomicBool>,
 }
 
@@ -108,21 +107,24 @@ impl SearchContext {
             }
         }
 
-        // If we have a cached result but it's marked invalid, we need to merge
-        // the cached results with any new results from the channel
         let mut all_results = Vec::new();
 
-        // First, get any existing cached results
-        if let Ok(cache) = self.cached_results.read() {
-            if let Some(ref cached) = *cache {
-                all_results.extend_from_slice(cached);
+        // Get existing cached results in a separate scope to ensure lock is dropped
+        {
+            if let Ok(cache) = self.cached_results.read() {
+                if let Some(ref cached) = *cache {
+                    all_results.extend_from_slice(cached);
+                }
             }
-        }
+        } // Read lock definitely dropped here
 
-        // Then add any new results from the channel
+        // Add any new results from the channel
         while let Ok(results) = self.results_receiver.try_recv() {
             all_results.extend(results);
         }
+
+        // Update the result count
+        self.result_count.store(all_results.len(), Ordering::SeqCst);
 
         // Update cache with the merged results
         if let Ok(mut cache) = self.cached_results.write() {

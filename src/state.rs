@@ -212,11 +212,7 @@ impl GameCheetahEngine {
         search_context.results_receiver = rx;
         search_context.result_count.store(0, Ordering::SeqCst);
 
-        // REMOVE THESE LINES - they're causing the problem
-        // if !old_results.is_empty() {
-        //     let _ = search_context.results_sender.send(old_results.clone());
-        //     search_context.result_count.store(old_results.len(), Ordering::SeqCst);
-        // }
+        search_context.invalidate_cache();
 
         let max_block = 200 * 1024;
         let chunks: Vec<(usize, usize)> = (0..old_results.len())
