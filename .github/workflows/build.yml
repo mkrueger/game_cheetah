@@ -81,7 +81,8 @@ jobs:
         $VERSION=$(cargo pkgid | foreach-object { $_ -replace '(.*)#','' })
         echo "Version: $VERSION"
         Add-Content -Path $env:GITHUB_ENV -Value "VERSION=$VERSION"
-        get-content .\build\file_id.diz | %{$_ -replace "#VERSION","$VERSION"} >file_id.diz        
+        get-content .\build\file_id.diz | %{$_ -replace "#VERSION","$VERSION"} >file_id.diz
+        cp target/release/${{ env.APP_NAME }}.exe "./${{ env.APP_NAME }}.exe"
     - name: Delete PFX certificate
       run: del "./cert.pfx"
     - name: 'Upload Artifact'
@@ -89,7 +90,7 @@ jobs:
       with:
         name: ${{ env.APP_NAME }}_${{ env.VERSION }}_windows
         path: |
-          target/release/${{ env.APP_NAME }}.exe
+          ${{ env.APP_NAME }}.exe
           file_id.diz
           
   build_mac:
