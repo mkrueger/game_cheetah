@@ -45,9 +45,19 @@ Keep in mind that altering a game memory contents may lead to game and/or comput
 
 [![Watch the video](https://img.youtube.com/vi/ng_1LBaUS48/maxresdefault.jpg)](https://youtu.be/ng_1LBaUS48)
 
+# Installing 
+
+Easiest way is to use cargo.
+
+See: 
+https://doc.rust-lang.org/cargo/getting-started/installation.html
+
+Then install it with: `cargo install game_cheetah`
+Ensure that the cargo bin path is in your PATH (but cargo tells you about it)
+
 # Get binaries
 
-Get the latest release here:
+Alternatively get the latest release here:
 https://github.com/mkrueger/game_cheetah/releases/latest
 
 # Build
