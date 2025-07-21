@@ -10,6 +10,7 @@ pub mod search_context;
 pub use search_context::*;
 
 pub mod app;
+pub use app::*;
 
 mod state;
 pub use state::*;

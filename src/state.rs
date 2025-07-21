@@ -417,7 +417,7 @@ where
     results
 }
 
-fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: SearchType, start: usize) -> Vec<SearchResult> {
+pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: SearchType, start: usize) -> Vec<SearchResult> {
     let mut result = Vec::new();
 
     match search_type {

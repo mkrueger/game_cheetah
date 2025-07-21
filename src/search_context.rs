@@ -10,7 +10,8 @@ use std::{
 use crate::{FreezeMessage, GameCheetahEngine, SearchResult, SearchType};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use std::sync::RwLock;
-#[derive(PartialEq, Clone, Copy)]
+
+#[derive(PartialEq, Clone, Copy, Debug)]
 pub enum SearchMode {
     None,
     Percent,
@@ -19,7 +20,6 @@ pub enum SearchMode {
 
 pub struct SearchContext {
     pub description: String,
-    pub rename_mode: bool,
 
     pub search_value_text: String,
     pub search_type: SearchType,
@@ -44,7 +44,6 @@ impl SearchContext {
         let (tx, rx) = unbounded();
         Self {
             description,
-            rename_mode: false,
             search_value_text: "".to_owned(),
             searching: SearchMode::None,
             results_sender: tx,

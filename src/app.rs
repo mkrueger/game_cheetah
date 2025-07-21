@@ -33,7 +33,7 @@ pub enum Message {
     TickProcess,
     SwitchSearch(usize),
     SearchValueChanged(String),
-    AddSearch,
+    NewSearch,
     RemoveSearch,
     RenameSearch,
     RenameSearchTextChanged(String),
@@ -64,7 +64,7 @@ pub enum Message {
     MemoryEditorEndEdit,
 }
 
-#[derive(Default)]
+#[derive(Default, PartialEq, Debug, Clone, Copy)]
 pub enum AppState {
     #[default]
     MainWindow,
@@ -76,10 +76,10 @@ pub enum AppState {
 
 #[derive(Default)]
 pub struct App {
-    app_state: AppState,
-    state: GameCheetahEngine,
+    pub app_state: AppState,
+    pub state: GameCheetahEngine,
 
-    renaming_search_index: Option<usize>,
+    pub renaming_search_index: Option<usize>,
     rename_search_text: String,
 
     memory_editor_address_text: String,
@@ -155,7 +155,7 @@ impl App {
                 },
                 |_| Message::TickProcess,
             ),
-            Message::AddSearch => {
+            Message::NewSearch => {
                 self.state.new_search();
                 Task::none()
             }
@@ -1055,7 +1055,7 @@ impl App {
         .spacing(5);
 
         let add_button = button(text(fl!(crate::LANGUAGE_LOADER, "add-search-button")))
-            .on_press(Message::AddSearch)
+            .on_press(Message::NewSearch)
             .padding(5);
         let remove_button = button(text(fl!(crate::LANGUAGE_LOADER, "remove-search-button")))
             .on_press(Message::RemoveSearch)
