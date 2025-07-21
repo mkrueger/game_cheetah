@@ -31,6 +31,8 @@ close-button = Close
 hide-results-button = Hide Results
 show-results-button = Show Results
 rename-button = Rename
+edit-button = Edit
+remove-button = Remove
 
 add-search-button = Add
 remove-search-button = Remove

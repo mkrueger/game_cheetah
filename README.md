@@ -1,16 +1,43 @@
 # ![Logo](/build/linux/128x128.png) Game Cheetah
-Game cheetah is an utility to modifiy the state of a game process.
 
-Make yourself more memory, better stats or more lifes.
+**Game Cheetah** is a high-performance memory scanner and game trainer for Linux, Windows, and macOS. It allows users to search, modify, and freeze values in running processes, particularly games, to create cheats, trainers, or analyze program behavior.
 
-Single player games store the game state in memory where multi player games
-don't. So, this utility is not useful for multiplayer games.
+Make yourself more memory, better stats or more lives. Single player games store the game state in memory where multiplayer games don't. So, this utility is not useful for multiplayer games.
 
-Features:
- * Easy to use UI
- * Supports multiple searches
- * Guesses the data type of the searched value
- * Game Cheetah runs natively on Linux, Mac and Windows computers.
+## Key Features
+
+- **Multi-Platform Support**: Works on Linux, Windows, and macOS with platform-specific optimizations
+- **Advanced Memory Search**: 
+  - Multiple data types (integers, floats, doubles, strings, arrays)
+  - SIMD-optimized search algorithms for blazing-fast performance
+  - Parallel search using all CPU cores
+  - Smart memory region filtering to skip system libraries
+- **Real-time Value Manipulation**:
+  - Modify values directly in memory
+  - Freeze values to prevent games from changing them
+  - Multiple search tabs for different values
+  - Undo/redo functionality
+- **Intuitive GUI**: Built with Iced framework for a responsive, modern interface
+- **Memory Editor**: Hex editor view for direct memory inspection and editing
+- **Internationalization**: Multi-language support via Fluent localization
+
+## Technical Highlights
+
+- Written in Rust for memory safety and performance
+- Lock-free data structures for efficient multi-threaded operations
+- SIMD instructions (SSE2/AVX2) for accelerated searches
+- Zero-copy memory access where possible
+- Optimized for both speed and low memory usage
+
+## Use Cases
+
+- Creating game trainers and cheats
+- Debugging and reverse engineering
+- Educational purposes to understand memory management
+- Game modding and analysis
+- Performance analysis of applications
+
+**Similar to**: Cheat Engine, ArtMoney, or GameGuardian, but with a focus on performance, safety, and cross-platform compatibility.
 
 Keep in mind that altering a game memory contents may lead to game and/or computer crashes. Use at your own risk.
 

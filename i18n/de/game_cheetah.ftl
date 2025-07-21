@@ -31,6 +31,8 @@ close-button = Schließen
 hide-results-button = Ergebnisse verstecken
 show-results-button = Ergebnisse zeigen
 rename-button = Umbenennen
+edit-button = Bearbeiten
+remove-button = Entfernen
 
 add-search-button = Neu
 remove-search-button = Löschen

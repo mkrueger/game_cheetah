@@ -50,6 +50,7 @@ pub enum Message {
     ResultValueChanged(usize, String),
     ToggleFreeze(usize),
     OpenEditor(usize),
+    RemoveResult(usize),
     CloseMemoryEditor,
     MemoryEditorAddressChanged(String),
     MemoryEditorJumpToAddress,
@@ -269,13 +270,7 @@ impl App {
             Message::Undo => {
                 if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
                     if let Some(old) = search_context.old_results.pop() {
-                        // Clear current results and send old ones
-                        let (tx, rx) = crossbeam_channel::unbounded();
-                        search_context.results_sender = tx.clone();
-                        search_context.results_receiver = rx;
-                        let _ = tx.send(old);
-                        search_context.result_count.store(search_context.get_result_count() as usize, Ordering::SeqCst);
-                        search_context.invalidate_cache(); // Add this!
+                        search_context.set_cached_results(old);
                     }
                 }
                 Task::none()
@@ -347,6 +342,34 @@ impl App {
                                 .send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
                                 .unwrap_or_default();
                         }
+                    }
+                }
+                Task::none()
+            }
+            Message::RemoveResult(index) => {
+                if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
+                    // Collect all results
+                    let mut results = search_context.collect_results();
+
+                    if index < results.len() {
+                        // Remove any freeze for this address before removing it
+                        let result = &results[index];
+                        if search_context.freezed_addresses.contains(&result.addr) {
+                            search_context.freezed_addresses.remove(&result.addr);
+                            self.state
+                                .freeze_sender
+                                .send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
+                                .unwrap_or_default();
+                        }
+
+                        // Save current results to old_results for undo functionality
+                        search_context.old_results.push(results.clone());
+
+                        // Remove the item
+                        results.remove(index);
+
+                        // Clear the channel and send updated results
+                        search_context.set_cached_results(results);
                     }
                 }
                 Task::none()
@@ -877,23 +900,18 @@ impl App {
         let show_search_types = matches!(current_search_context.search_type, SearchType::Guess);
 
         let table_header = row![
-            container(text(fl!(crate::LANGUAGE_LOADER, "address-heading")).size(14))
-                .width(Length::Fixed(120.0))
-                .padding(5),
-            container(text(fl!(crate::LANGUAGE_LOADER, "value-heading")).size(14))
-                .width(Length::Fixed(120.0))
-                .padding(5),
+            container(text(fl!(crate::LANGUAGE_LOADER, "address-heading")).size(14)).width(Length::Fixed(120.0)),
+            container(text(fl!(crate::LANGUAGE_LOADER, "value-heading")).size(14)).width(Length::Fixed(120.0)),
             if show_search_types {
-                container(text(fl!(crate::LANGUAGE_LOADER, "datatype-heading")).size(14))
-                    .width(Length::Fixed(120.0))
-                    .padding(5)
+                container(text(fl!(crate::LANGUAGE_LOADER, "datatype-heading")).size(14)).width(Length::Fixed(120.0))
             } else {
                 container(text("")).width(Length::Fixed(0.0))
             },
-            container(text(fl!(crate::LANGUAGE_LOADER, "freezed-heading")).size(14))
-                .width(Length::Fill)
-                .padding(5),
-        ];
+            container(text(fl!(crate::LANGUAGE_LOADER, "freezed-heading")).size(14)).width(Length::Fill)
+        ]
+        .padding(2)
+        .spacing(5)
+        .align_y(alignment::Alignment::Center);
 
         let table_rows = results.iter().enumerate().map(|(i, result)| -> iced::Element<'_, Message> {
             let value_text = if let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle() {
@@ -907,15 +925,12 @@ impl App {
                 String::new()
             };
             row![
-                container(text(format!("0x{:X}", result.addr)).size(14)).width(Length::Fixed(120.0)).padding(5),
+                container(text(format!("0x{:X}", result.addr)).size(14)).width(Length::Fixed(120.0)),
                 text_input("", &value_text)
                     .on_input(move |v| Message::ResultValueChanged(i, v))
-                    .width(Length::Fixed(120.0))
-                    .padding(5),
+                    .width(Length::Fixed(120.0)),
                 if show_search_types {
-                    container(text(result.search_type.get_description_text()).size(14))
-                        .width(Length::Fixed(120.0))
-                        .padding(5)
+                    container(text(result.search_type.get_description_text()).size(14)).width(Length::Fixed(120.0))
                 } else {
                     container(text("")).width(Length::Fixed(0.0))
                 },
@@ -923,8 +938,12 @@ impl App {
                     .on_toggle(move |_| Message::ToggleFreeze(i))
                     .size(14)
                     .width(Length::Fill),
-                button(text("Edit")).on_press(Message::OpenEditor(i)).padding(5),
+                button(text(fl!(crate::LANGUAGE_LOADER, "edit-button"))).on_press(Message::OpenEditor(i)),
+                button(text(fl!(crate::LANGUAGE_LOADER, "remove-button"))).on_press(Message::RemoveResult(i))
             ]
+            .padding(2)
+            .spacing(5)
+            .align_y(alignment::Alignment::Center)
             .into()
         });
 

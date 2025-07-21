@@ -69,6 +69,33 @@ impl SearchContext {
 
     pub fn clear_results(&mut self, freeze_sender: &mpsc::Sender<FreezeMessage>) {
         GameCheetahEngine::remove_freezes_from(freeze_sender, &mut self.freezed_addresses);
+        // Clear old results history
+        self.old_results.clear();
+
+        // Create new channel to clear all pending results
+        let (tx, rx) = unbounded();
+        self.results_sender = tx;
+        self.results_receiver = rx;
+
+        // Reset counters
+        self.result_count.store(0, Ordering::SeqCst);
+        self.current_bytes.store(0, Ordering::SeqCst);
+        self.search_complete.store(false, Ordering::SeqCst);
+
+        // Reset search mode
+        self.searching = SearchMode::None;
+
+        // Invalidate any cached results
+        self.invalidate_cache();
+    }
+
+    pub fn set_cached_results(&self, results: Vec<SearchResult>) {
+        // Update the cache with new results
+        if let Ok(mut cache) = self.cached_results.write() {
+            *cache = Some(results.clone());
+            self.cache_valid.store(true, Ordering::Release);
+            self.result_count.store(results.len(), Ordering::SeqCst);
+        }
     }
 
     pub fn collect_results(&self) -> Vec<SearchResult> {
@@ -81,13 +108,23 @@ impl SearchContext {
             }
         }
 
-        // Collect from channel
+        // If we have a cached result but it's marked invalid, we need to merge
+        // the cached results with any new results from the channel
         let mut all_results = Vec::new();
+
+        // First, get any existing cached results
+        if let Ok(cache) = self.cached_results.read() {
+            if let Some(ref cached) = *cache {
+                all_results.extend_from_slice(cached);
+            }
+        }
+
+        // Then add any new results from the channel
         while let Ok(results) = self.results_receiver.try_recv() {
             all_results.extend(results);
         }
 
-        // Update cache but DON'T put results back in channel
+        // Update cache with the merged results
         if let Ok(mut cache) = self.cached_results.write() {
             *cache = Some(all_results.clone());
             self.cache_valid.store(true, Ordering::Release);
@@ -98,5 +135,8 @@ impl SearchContext {
 
     pub fn invalidate_cache(&self) {
         self.cache_valid.store(false, Ordering::Release);
+        if let Ok(mut cache) = self.cached_results.write() {
+            *cache = None;
+        }
     }
 }

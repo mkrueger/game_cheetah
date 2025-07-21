@@ -1,10 +1,10 @@
 [package]
 name = "game_cheetah"
-version = "0.4.1"
+version = "0.4.2"
 authors = ["Mike Krüger <mkrueger@posteo.de>"]
 edition = "2024"
 rust-version = "1.88"
-description = "An in memory trainer for games."
+description = "High-performance memory scanner/editor and game trainer for Linux, Windows, and macOS"
 license = "Apache-2.0"
 repository = "https://github.com/mkrueger/game_cheetah"
 
