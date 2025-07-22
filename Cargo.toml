@@ -1,5 +1,5 @@
 [package]
-name = "game_cheetah"
+name = "game-cheetah"
 version = "0.4.4"
 authors = ["Mike Krüger <mkrueger@posteo.de>"]
 edition = "2024"

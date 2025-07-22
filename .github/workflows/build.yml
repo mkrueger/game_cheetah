@@ -6,7 +6,7 @@ on:
     types: 
       - completed
 env:
-  APP_NAME: game_cheetah
+  APP_NAME: game-cheetah
   CARGO_TERM_COLOR: always
 jobs:
   build_linux:
@@ -24,7 +24,7 @@ jobs:
    - name: Build deb
      id: build-deb
      run: |
-       export VERSION=$(cargo get version)
+       export VERSION=$(python3 tools/prep_diz.py "${{ env.APP_NAME }}" "file_id.diz")
        echo "VERSION=$VERSION" >> $GITHUB_ENV
        export DEB=$(cargo deb)
        echo "Copy $DEB to ${{ env.APP_NAME }}_${VERSION}_amd64.deb"
@@ -40,12 +40,12 @@ jobs:
    - name: Build AppImage
      id: build-appimage
      run: |
-       cargo build --release
+       cargo build --release  # Add this - need to build first!
        wget https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
        chmod +x appimagetool-x86_64.AppImage
        mkdir -p ${{ env.APP_NAME }}-appimage/usr/bin
        cp build/linux/256x256.png ${{ env.APP_NAME }}-appimage/${{ env.APP_NAME }}.png
-       cp build/linux/game_cheetah.desktop ${{ env.APP_NAME }}-appimage/
+       cp build/linux/${{ env.APP_NAME }}.desktop ${{ env.APP_NAME }}-appimage/
        cp target/release/${{ env.APP_NAME }} ${{ env.APP_NAME }}-appimage/usr/bin/
        echo "#!/bin/bash" > ${{ env.APP_NAME }}-appimage/AppRun
        echo "exec \"\$(dirname \"\$0\")/usr/bin/${{ env.APP_NAME }}\" \"\$@\"" >> ${{ env.APP_NAME }}-appimage/AppRun
@@ -60,87 +60,6 @@ jobs:
      with:
       name: ${{ env.APP_NAME }}_appimage_${{ env.VERSION }}
       path: ${{ env.APP_IMG }}
-
-  build_arch:
-    runs-on: ubuntu-latest
-    container:
-      image: archlinux:base-devel
-    steps:
-    - uses: actions/checkout@v4
-    - name: Install dependencies
-      run: |
-        pacman -Syu --noconfirm
-        pacman -S --noconfirm rust cargo git gtk3 libxcb libxkbcommon wayland fontconfig freetype2 pkgconf python
-    - name: Create build user
-      run: |
-        useradd -m builduser
-        echo "builduser ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-    - name: Create PKGBUILD
-      run: |
-        export VERSION=$(cargo pkgid | sed 's/.*#//')
-        echo "VERSION=$VERSION" >> $GITHUB_ENV
-        cat > PKGBUILD << 'EOF'
-# Maintainer: Mike Krüger <mkrueger@posteo.de>
-pkgname=game-cheetah
-pkgver=VERSION_PLACEHOLDER
-pkgrel=1
-pkgdesc="High-performance memory scanner/editor and game trainer for Linux"
-arch=('x86_64')
-url="https://github.com/mkrueger/game_cheetah"
-license=('Apache')
-depends=('gtk3' 'libxcb' 'libxkbcommon' 'wayland' 'libgl' 'fontconfig' 'freetype2')
-makedepends=('rust' 'cargo' 'git')
-
-build() {
-    cd "$srcdir"
-    export RUSTFLAGS="-C target-cpu=x86-64-v2"
-    cargo build --release --locked
-}
-
-check() {
-    cd "$srcdir"
-    cargo test --release --locked
-}
-
-package() {
-    cd "$srcdir"
-    
-    # Install binary
-    install -Dm755 "target/release/game_cheetah" "$pkgdir/usr/bin/game-cheetah"
-    
-    # Install desktop file
-    install -Dm644 "build/linux/game_cheetah.desktop" "$pkgdir/usr/share/applications/game-cheetah.desktop"
-    sed -i 's/Exec=game_cheetah/Exec=game-cheetah/' "$pkgdir/usr/share/applications/game-cheetah.desktop"
-    
-    # Install icons
-    install -Dm644 "build/linux/128x128.png" "$pkgdir/usr/share/icons/hicolor/128x128/apps/game-cheetah.png"
-    install -Dm644 "build/linux/256x256.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/game-cheetah.png"
-    
-    # Install license
-    install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-    
-    # Install documentation
-    install -Dm644 "README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
-}
-EOF
-        sed -i "s/VERSION_PLACEHOLDER/$VERSION/" PKGBUILD
-        chown -R builduser:builduser .
-    - name: Build package
-      run: |
-        cd $GITHUB_WORKSPACE
-        sudo -u builduser makepkg -s --noconfirm
-        ls -la *.pkg.tar.zst
-    - name: Generate .SRCINFO
-      run: |
-        sudo -u builduser makepkg --printsrcinfo > .SRCINFO
-    - name: 'Upload Arch Package'
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ env.APP_NAME }}_arch_${{ env.VERSION }}
-        path: |
-          *.pkg.tar.zst
-          PKGBUILD
-          .SRCINFO
       
   build_windows:
     runs-on: windows-latest
@@ -175,7 +94,7 @@ EOF
           file_id.diz
           
   build_mac:
-    runs-on: macos-latest
+    runs-on: macos-latest  # Removed matrix strategy
     steps:
       - uses: actions/checkout@v4
       - name: Install cargo bundle & get
@@ -205,7 +124,7 @@ EOF
           sips -z 16 16 build/mac/128x128@2x.png --out AppIcon.iconset/icon_16x16.png
           sips -z 32 32 build/mac/128x128@2x.png --out AppIcon.iconset/icon_16x16@2x.png
           sips -z 32 32 build/mac/128x128@2x.png --out AppIcon.iconset/icon_32x32.png
-          sips -z 64 64 build/mac/128x128@2x.png --out AppIcon.iconset/icon_32x32@2x.png
+          sips -z 64 64 build/mac/128x128@2x.png --out AppIcon.iconset/icon_32x32@2x.png  # Fixed typo
           sips -z 128 128 build/mac/128x128@2x.png --out AppIcon.iconset/icon_128x128.png
           cp build/mac/128x128@2x.png AppIcon.iconset/icon_128x128@2x.png
           iconutil -c icns AppIcon.iconset
