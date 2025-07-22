@@ -35,8 +35,6 @@ edit-button = Bearbeiten
 remove-button = Entfernen
 
 add-search-button = Neu
-remove-search-button = Löschen
-rename-search-button = Umbenennen
 
 generic-error-label = <Fehler>
 invalid-input-error = Eingabe ungültig

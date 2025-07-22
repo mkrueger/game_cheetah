@@ -35,8 +35,6 @@ edit-button = Edit
 remove-button = Remove
 
 add-search-button = Add
-remove-search-button = Remove
-rename-search-button = Rename
 
 generic-error-label = <error>
 invalid-input-error = Invalid input

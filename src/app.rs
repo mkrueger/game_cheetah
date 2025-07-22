@@ -34,7 +34,7 @@ pub enum Message {
     SwitchSearch(usize),
     SearchValueChanged(String),
     NewSearch,
-    RemoveSearch,
+    CloseSearch(usize),
     RenameSearch,
     RenameSearchTextChanged(String),
     ConfirmRenameSearch,
@@ -159,13 +159,13 @@ impl App {
                 self.state.new_search();
                 Task::none()
             }
-            Message::RemoveSearch => {
+            Message::CloseSearch(index) => {
                 if self.state.searches.is_empty() {
                     return Task::none();
                 }
-                self.state.remove_freezes(self.state.current_search);
-                self.state.searches.remove(self.state.current_search);
-                if self.state.current_search > 0 {
+                self.state.remove_freezes(index);
+                self.state.searches.remove(index);
+                if self.state.current_search >= index {
                     self.state.current_search -= 1;
                 }
                 Task::none()
@@ -971,17 +971,16 @@ impl App {
 
         let search_table = column![
             // Table header
-            container(row![
-                container(text(fl!(crate::LANGUAGE_LOADER, "searches-heading")).size(14))
-                    .width(Length::Fixed(120.0))
-                    .padding(5),
-            ])
-            .style(|theme: &iced::Theme| {
-                container::Style {
-                    background: Some(theme.extended_palette().background.weak.color.into()),
-                    ..Default::default()
-                }
-            }),
+            container(
+                text(fl!(crate::LANGUAGE_LOADER, "searches-heading"))
+                    .size(14)
+                    .style(|theme: &iced::Theme| iced::widget::text::Style {
+                        color: Some(theme.palette().primary),
+                    })
+            )
+            .padding(5)
+            .width(140.0),
+            container(horizontal_rule(1)).width(120.0),
             // Table body
             scrollable(
                 column(
@@ -1004,7 +1003,21 @@ impl App {
                                 .style(move |_theme: &iced::Theme| container::Style::default())
                                 .into()
                             } else {
-                                container(
+                                let mut close_button = button(text("×")).padding(2).style(move |theme: &iced::Theme, _| button::Style {
+                                    background: Some(iced::Color::TRANSPARENT.into()),
+                                    text_color: if i == 0 {
+                                        iced::Color::from_rgb(0.5, 0.5, 0.5)
+                                    } else {
+                                        theme.palette().danger
+                                    },
+                                    ..Default::default()
+                                });
+
+                                if i != 0 {
+                                    close_button = close_button.on_press(Message::CloseSearch(i));
+                                }
+
+                                row![
                                     // Show normal button
                                     button(
                                         row![container(text(search.description.to_string()).size(14)).width(Length::Fixed(120.0)).padding(5)]
@@ -1041,8 +1054,8 @@ impl App {
                                     .on_press(Message::SwitchSearch(i))
                                     .width(Length::Fixed(120.0))
                                     .padding(0),
-                                )
-                                .style(move |_theme: &iced::Theme| container::Style::default())
+                                    close_button
+                                ]
                                 .into()
                             }
                         })
@@ -1057,10 +1070,7 @@ impl App {
         let add_button = button(text(fl!(crate::LANGUAGE_LOADER, "add-search-button")))
             .on_press(Message::NewSearch)
             .padding(5);
-        let remove_button = button(text(fl!(crate::LANGUAGE_LOADER, "remove-search-button")))
-            .on_press(Message::RemoveSearch)
-            .padding(5);
-        let rename_button = button(text(fl!(crate::LANGUAGE_LOADER, "rename-search-button")))
+        let rename_button = button(text(fl!(crate::LANGUAGE_LOADER, "rename-button")))
             .on_press(Message::RenameSearch)
             .padding(5);
 
@@ -1082,7 +1092,7 @@ impl App {
             .align_y(alignment::Alignment::Center),
             horizontal_rule(1),
             row![
-                column![search_table, column![add_button, remove_button, rename_button].spacing(5).padding(10)].height(Length::Fill),
+                column![search_table, column![add_button, rename_button].spacing(5).padding(10)].height(Length::Fill),
                 vertical_rule(1),
                 self.search_ui()
             ]
