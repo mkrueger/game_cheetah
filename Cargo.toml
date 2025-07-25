@@ -80,8 +80,8 @@ section="Utility"
 copyright = "Copyright (c) Mike Krüger 2022-25. All rights reserved."
 license-file="build/license.rtf"
 assets = [
-    ["target/release/game_cheetah", "/usr/bin/", "755"],
-    ["build/linux/game_cheetah.desktop", "/usr/share/applications/", "644"],
-    ["build/linux/128x128.png", "/usr/share/icons/hicolor/128x128/apps/game_cheetah.png",     "644"],
-    ["build/linux/256x256.png", "/usr/share/icons/hicolor/256x256/apps/game_cheetah.png",     "644"],
+    ["target/release/game-cheetah", "/usr/bin/", "755"],
+    ["build/linux/game-cheetah.desktop", "/usr/share/applications/", "644"],
+    ["build/linux/128x128.png", "/usr/share/icons/hicolor/128x128/apps/game-cheetah.png",     "644"],
+    ["build/linux/256x256.png", "/usr/share/icons/hicolor/256x256/apps/game-cheetah.png",     "644"],
 ]

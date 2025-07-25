@@ -52,7 +52,7 @@ Easiest way is to use cargo.
 See: 
 https://doc.rust-lang.org/cargo/getting-started/installation.html
 
-Then install it with: `cargo install game_cheetah`
+Then install it with: `cargo install game-cheetah`
 Ensure that the cargo bin path is in your PATH (but cargo tells you about it)
 
 # Get binaries

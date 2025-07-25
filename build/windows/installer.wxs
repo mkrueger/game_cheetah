@@ -1,6 +1,6 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
    <?define PackageName="GameCheetah" ?>
-   <?define ExeName="game_cheetah" ?>
+   <?define ExeName="game-cheetah" ?>
    <?define Guid1="d35d0094-4709-4f79-b6de-589663cc8bde" ?>
    <?define Guid2="e94f6d2f-fa9a-40b9-909d-6d7efb3bff3a" ?>
    
