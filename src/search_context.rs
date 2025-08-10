@@ -3,7 +3,6 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc,
     },
 };
 
@@ -65,7 +64,7 @@ impl SearchContext {
         self.result_count.load(Ordering::Relaxed)
     }
 
-    pub fn clear_results(&mut self, freeze_sender: &mpsc::Sender<FreezeMessage>) {
+    pub fn clear_results(&mut self, freeze_sender: &crossbeam_channel::Sender<FreezeMessage>) {
         GameCheetahEngine::remove_freezes_from(freeze_sender, &mut self.freezed_addresses);
         // Clear old results history
         self.old_results.clear();

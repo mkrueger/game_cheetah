@@ -1,11 +1,11 @@
 use crate::{FreezeMessage, MessageCommand, SearchContext, SearchMode, SearchResult, SearchType, SearchValue};
-use crossbeam_channel;
+use crossbeam_channel::{tick, select};
 use i18n_embed_fl::fl;
 use memchr::memmem;
 use proc_maps::get_process_maps;
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 use rayon::prelude::*;
-use std::sync::{atomic::Ordering, mpsc};
+use std::sync::atomic::Ordering;
 use std::{
     cmp::min,
     collections::{HashMap, HashSet},
@@ -36,7 +36,7 @@ pub struct GameCheetahEngine {
     pub current_search: usize,
     pub searches: Vec<Box<SearchContext>>,
     // Removed: pub search_threads: ThreadPool,
-    pub freeze_sender: mpsc::Sender<FreezeMessage>,
+    pub freeze_sender: crossbeam_channel::Sender<FreezeMessage>,
     pub error_text: String,
     pub show_results: bool,
     pub set_focus: bool,
@@ -46,15 +46,15 @@ pub struct GameCheetahEngine {
 
 impl Default for GameCheetahEngine {
     fn default() -> Self {
-        let (tx, rx) = mpsc::channel::<FreezeMessage>();
-
+        let (tx, rx) = crossbeam_channel::unbounded::<FreezeMessage>();
         thread::spawn(move || {
-            let mut freezed_values = HashMap::new();
-            let mut pid = 0;
+            let mut freezed_values: HashMap<usize, SearchValue> = HashMap::new();
+            let mut pid: i32 = 0;
+            let ticker = tick(Duration::from_millis(500));
             loop {
-                if let Ok(msg) = rx.try_recv() {
+                // Drain all pending messages quickly
+                while let Ok(msg) = rx.try_recv() {
                     match msg.msg {
-                        // MessageCommand::Quit => { return; },
                         MessageCommand::Pid => {
                             pid = msg.addr as i32;
                             if pid == 0 {
@@ -69,12 +69,32 @@ impl Default for GameCheetahEngine {
                         }
                     }
                 }
-                for (addr, value) in &freezed_values {
-                    if let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle() {
-                        handle.put_address(*addr, &value.1).unwrap_or_default();
+                // Wait either for next tick or a new message
+                select! {
+                    recv(ticker) -> _ => {
+                        if pid != 0 {
+                            if let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle() {
+                                for (addr, value) in &freezed_values {
+                                    let _ = handle.put_address(*addr, &value.1);
+                                }
+                            }
+                        }
+                    },
+                    recv(rx) -> msg => {
+                        if let Ok(msg) = msg {
+                            match msg.msg {
+                                MessageCommand::Pid => {
+                                    pid = msg.addr as i32;
+                                    if pid == 0 { freezed_values.clear(); }
+                                }
+                                MessageCommand::Freeze => { freezed_values.insert(msg.addr, msg.value); }
+                                MessageCommand::Unfreeze => { freezed_values.remove(&msg.addr); }
+                            }
+                        } else {
+                            break; // channel closed
+                        }
                     }
                 }
-                thread::sleep(Duration::from_millis(500));
             }
         });
 
@@ -111,107 +131,124 @@ impl GameCheetahEngine {
     }
 
     pub fn initial_search(&mut self, search_index: usize) {
-        if !matches!(self.searches.get_mut(search_index).unwrap().searching, SearchMode::None) {
+        // Validate index
+        let Some(ctx_view) = self.searches.get(search_index) else {
+            self.error_text = format!("Invalid search index {search_index}");
+            return; 
+        };
+        if !matches!(ctx_view.searching, SearchMode::None) {
             return;
         }
+
+        // Remove freezes first
         self.remove_freezes(search_index);
 
-        self.searches.get_mut(search_index).unwrap().searching = SearchMode::Memory;
+        // Set searching state (need mutable borrow)
+        if let Some(ctx_mut) = self.searches.get_mut(search_index) {
+            ctx_mut.searching = SearchMode::Memory;
+            ctx_mut.total_bytes = 0;
+            ctx_mut.current_bytes.swap(0, Ordering::SeqCst);
+        } else {
+            self.error_text = format!("Invalid search index {search_index}");
+            return;
+        }
+
+        // Extract needed data (release mutable borrow)
+        let (search_type, search_value_text) = {
+            let ctx = &self.searches[search_index];
+            (ctx.search_type, ctx.search_value_text.clone())
+        };
+
+        // Parse target value
+        let search_for_value = match search_type.from_string(&search_value_text) {
+            Ok(v) => v,
+            Err(e) => {
+                self.error_text = format!("Parse error: {e}");
+                return;
+            }
+        };
+        self.error_text.clear();
 
         match get_process_maps(self.pid) {
             Ok(maps) => {
                 let mut regions = Vec::new();
-                self.searches.get_mut(search_index).unwrap().total_bytes = 0;
-                self.searches.get_mut(search_index).unwrap().current_bytes.swap(0, Ordering::SeqCst);
+                if let Some(ctx_mut) = self.searches.get_mut(search_index) {
+                    for map in maps {
+                        if cfg!(target_os = "windows") {
+                            if let Some(file_name) = map.filename() {
+                                if file_name.starts_with("C:\\WINDOWS\\") {
+                                    continue;
+                                }
+                            }
+                        } else if cfg!(target_os = "linux") {
+                            if !map.is_write() || map.is_exec() {
+                                continue;
+                            }
+                            if let Some(file_name) = map.filename() {
+                                if file_name.starts_with("/usr/")
+                                    || file_name.starts_with("/lib/")
+                                    || file_name.starts_with("/lib64/")
+                                    || file_name.starts_with("/dev/")
+                                    || file_name.starts_with("/proc/")
+                                    || file_name.starts_with("/sys/")
+                                {
+                                    continue;
+                                }
+                            }
+                        } else {
+                            if !map.is_write() || map.is_exec() || map.filename().is_none() || map.size() < 1024 * 1024 {
+                                continue;
+                            }
+                            if let Some(file_name) = map.filename() {
+                                if file_name.starts_with("/usr/lib") || file_name.starts_with("/System/") {
+                                    continue;
+                                }
+                            }
+                        }
 
-                for map in maps {
-                    // More aggressive filtering
-                    if cfg!(target_os = "windows") {
-                        if let Some(file_name) = map.filename() {
-                            if file_name.starts_with("C:\\WINDOWS\\") {
-                                continue;
-                            }
-                        }
-                    } else if cfg!(target_os = "linux") {
-                        // Skip non-writable, executable, and system regions
-                        if !map.is_write() || map.is_exec() {
-                            continue;
-                        }
+                        let mut size = map.size();
+                        let mut start = map.start();
+                        ctx_mut.total_bytes += size;
 
-                        // Skip kernel and system libraries
-                        if let Some(file_name) = map.filename() {
-                            if file_name.starts_with("/usr/")
-                                || file_name.starts_with("/lib/")
-                                || file_name.starts_with("/lib64/")
-                                || file_name.starts_with("/dev/")
-                                || file_name.starts_with("/proc/")
-                                || file_name.starts_with("/sys/")
-                            {
-                                continue;
-                            }
+                        const MAX_BLOCK: usize = 10 * 1024 * 1024;
+                        while size > MAX_BLOCK + 3 {
+                            regions.push((start, MAX_BLOCK + 3));
+                            start += MAX_BLOCK;
+                            size -= MAX_BLOCK;
                         }
-                    /*
-                    // Skip special memory regions
-                    if map.p == "[vvar]" || map.pathname == "[vdso]" || map.pathname == "[vsyscall]" {
-                        continue;
-                    }*/
-                    } else {
-                        if !map.is_write() || map.is_exec() || map.filename().is_none() || map.size() < 1024 * 1024 {
-                            continue;
-                        }
-                        if let Some(file_name) = map.filename() {
-                            if file_name.starts_with("/usr/lib") || file_name.starts_with("/System/") {
-                                continue;
-                            }
-                        }
+                        regions.push((start, size));
                     }
-
-                    let mut size = map.size();
-                    let mut start = map.start();
-                    self.searches.get_mut(search_index).unwrap().total_bytes += size;
-
-                    const MAX_BLOCK: usize = 10 * 1024 * 1024;
-
-                    while size > MAX_BLOCK + 3 {
-                        regions.push((start, MAX_BLOCK + 3));
-                        start += MAX_BLOCK;
-                        size -= MAX_BLOCK;
-                    }
-                    regions.push((start, size));
+                } else {
+                    self.error_text = format!("Search context vanished for index {search_index}");
+                    return;
                 }
 
-                let current_search = self.searches.get(search_index).unwrap();
-                let search_for_value = current_search.search_type.from_string(&current_search.search_value_text).unwrap();
-                self.error_text.clear();
-
-                // Use rayon to process regions in parallel
                 self.spawn_parallel_search(search_for_value, regions, search_index);
             }
             Err(err) => {
                 eprintln!("error getting process maps for pid {}: {}", self.pid, err);
-                self.error_text = format!("error getting process maps for pid {}: {}", self.pid, err);
+                self.error_text = format!("Error getting process maps for pid {}: {}", self.pid, err);
             }
         }
     }
 
     pub fn filter_searches(&mut self, search_index: usize) {
         self.remove_freezes(search_index);
-        let search_context = self.searches.get_mut(search_index).unwrap();
+        let Some(search_context) = self.searches.get_mut(search_index) else {
+            self.error_text = format!("Invalid search index {search_index}");
+            return;
+        };
         search_context.searching = SearchMode::Percent;
 
-        // Collect old results
         let old_results = search_context.collect_results();
-
         search_context.total_bytes = old_results.len();
         search_context.current_bytes.swap(0, Ordering::SeqCst);
         search_context.old_results.push(old_results.clone());
 
-        // Reset the channel for new results
         let (tx, rx) = crossbeam_channel::unbounded();
         search_context.results_sender = tx;
         search_context.results_receiver = rx;
         search_context.result_count.store(0, Ordering::SeqCst);
-
         search_context.invalidate_cache();
 
         let max_block = 200 * 1024;
@@ -224,11 +261,12 @@ impl GameCheetahEngine {
     }
 
     pub fn remove_freezes(&mut self, search_index: usize) {
-        let search_context = self.searches.get_mut(search_index).unwrap();
-        GameCheetahEngine::remove_freezes_from(&self.freeze_sender, &mut search_context.freezed_addresses);
+        if let Some(search_context) = self.searches.get_mut(search_index) {
+            GameCheetahEngine::remove_freezes_from(&self.freeze_sender, &mut search_context.freezed_addresses);
+        }
     }
 
-    pub fn remove_freezes_from(freeze_sender: &mpsc::Sender<FreezeMessage>, freezes: &mut std::collections::HashSet<usize>) {
+    pub fn remove_freezes_from(freeze_sender: &crossbeam_channel::Sender<FreezeMessage>, freezes: &mut std::collections::HashSet<usize>) {
         for result in freezes.iter() {
             freeze_sender
                 .send(FreezeMessage::from_addr(MessageCommand::Unfreeze, *result))
@@ -243,10 +281,15 @@ impl GameCheetahEngine {
         self.processes.clear();
 
         let Ok(current_pid) = get_current_pid() else {
+            self.error_text = "Failed to get current pid".into();
             return;
         };
+        let Some(cur_process) = sys.process(current_pid) else {
+            self.error_text = "Current process info not found".into();
+            return;
+        };
+
         let mut parents = HashSet::new();
-        let cur_process = sys.process(current_pid).unwrap();
         for (pid2, process) in sys.processes() {
             if process.memory() == 0 || process.user_id() != cur_process.user_id() {
                 continue;
@@ -258,37 +301,34 @@ impl GameCheetahEngine {
                 parents.insert(parent);
             }
 
-            let pid = pid2.as_u32();
-            let user = match process.user_id() {
-                Some(user) => user.to_string(),
-                None => "".to_string(),
+            let pid_u32 = pid2.as_u32();
+            let user = process.user_id().map(|u| u.to_string()).unwrap_or_default();
+            let Ok(conv_pid) = pid_u32.try_into() else {
+                continue;
             };
             self.processes.push(ProcessInfo {
-                pid: pid.try_into().unwrap(),
+                pid: conv_pid,
                 name: process.name().to_string_lossy().to_string(),
                 cmd: format!("{:?} ", process.cmd()),
                 user,
                 memory: process.memory() as usize,
             });
         }
-        self.processes.sort_by(|a, b| {
-            let cmp = a.name.cmp(&b.name);
-            if cmp == std::cmp::Ordering::Equal {
-                return a.pid.cmp(&b.pid);
-            }
-            cmp
-        });
+        self.processes.sort_by(|a, b| a.name.cmp(&b.name).then(a.pid.cmp(&b.pid)));
     }
 
     fn spawn_update_search(&mut self, search_index: usize, old_results: Vec<SearchResult>, chunks: Vec<(usize, usize)>) {
-        let search_context = self.searches.get_mut(search_index).unwrap();
+        let Some(search_context) = self.searches.get_mut(search_index) else {
+            self.error_text = format!("Invalid search index {search_index}");
+            return;
+        };
         let current_bytes = search_context.current_bytes.clone();
         let pid = self.pid;
         let value_text = search_context.search_value_text.clone();
         let results_sender = search_context.results_sender.clone();
         let result_count = search_context.result_count.clone();
         let search_complete = search_context.search_complete.clone();
-        let cache_valid = search_context.cache_valid.clone(); // Add this
+        let cache_valid = search_context.cache_valid.clone();
 
         search_complete.store(false, Ordering::SeqCst);
 
@@ -297,7 +337,7 @@ impl GameCheetahEngine {
                 let handle = match pid.try_into_process_handle() {
                     Ok(h) => h,
                     Err(e) => {
-                        eprintln!("Failed to get process handle: {}", e);
+                        eprintln!("Failed to get process handle: {e}");
                         current_bytes.fetch_add(to - from, Ordering::SeqCst);
                         return;
                     }
@@ -307,23 +347,23 @@ impl GameCheetahEngine {
                 let updated = update_results(chunk, &value_text, &handle);
 
                 if !updated.is_empty() {
-                    let count = updated.len();
-                    result_count.fetch_add(count, Ordering::SeqCst);
+                    result_count.fetch_add(updated.len(), Ordering::SeqCst);
                     let _ = results_sender.send(updated);
-                    // DON'T invalidate cache here!
                 }
 
                 current_bytes.fetch_add(to - from, Ordering::SeqCst);
             });
 
-            // Invalidate cache only ONCE when search is complete
             cache_valid.store(false, Ordering::Release);
             search_complete.store(true, Ordering::SeqCst);
         });
     }
 
     fn spawn_parallel_search(&mut self, search_value: SearchValue, regions: Vec<(usize, usize)>, search_index: usize) {
-        let search_context = self.searches.get_mut(search_index).unwrap();
+        let Some(search_context) = self.searches.get_mut(search_index) else {
+            self.error_text = format!("Invalid search index {search_index}");
+            return;
+        };
         let pid = self.pid;
         let current_bytes = search_context.current_bytes.clone();
         let results_sender = search_context.results_sender.clone();
@@ -337,7 +377,8 @@ impl GameCheetahEngine {
             regions.par_iter().for_each(|(start, size)| {
                 let handle = match (pid as process_memory::Pid).try_into_process_handle() {
                     Ok(h) => h,
-                    Err(_) => {
+                    Err(e) => {
+                        eprintln!("Process handle error: {e}");
                         current_bytes.fetch_add(*size, Ordering::SeqCst);
                         return;
                     }
@@ -348,13 +389,11 @@ impl GameCheetahEngine {
                         let local_results = match search_value.0 {
                             SearchType::Guess => {
                                 let mut results = Vec::new();
-                                let val: String = String::from_utf8(search_value.1.clone()).unwrap();
-
-                                let types = vec![SearchType::Int, SearchType::Float, SearchType::Double];
-                                for search_type in types {
-                                    if let Ok(search_value) = search_type.from_string(&val) {
-                                        let r = search_memory(&memory_data, &search_value.1, search_type, *start);
-                                        results.extend(r);
+                                if let Ok(val) = String::from_utf8(search_value.1.clone()) {
+                                    for t in [SearchType::Int, SearchType::Float, SearchType::Double] {
+                                        if let Ok(parsed) = t.from_string(&val) {
+                                            results.extend(search_memory(&memory_data, &parsed.1, t, *start));
+                                        }
                                     }
                                 }
                                 results
@@ -363,34 +402,31 @@ impl GameCheetahEngine {
                         };
 
                         if !local_results.is_empty() {
-                            let count = local_results.len();
-                            result_count.fetch_add(count, Ordering::SeqCst);
+                            result_count.fetch_add(local_results.len(), Ordering::SeqCst);
                             let _ = results_sender.send(local_results);
-                            // DON'T invalidate cache here!
                         }
-
                         current_bytes.fetch_add(*size, Ordering::SeqCst);
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        eprintln!("copy_address failed @ {start:#x}: {e:?}");
                         current_bytes.fetch_add(*size, Ordering::SeqCst);
                     }
                 }
             });
 
-            // Invalidate cache only ONCE when search is complete
             cache_valid.store(false, Ordering::Release);
             search_complete.store(true, Ordering::SeqCst);
         });
     }
 
     pub(crate) fn select_process(&mut self, process: &ProcessInfo) {
-        self.pid = process.pid;
-        self.freeze_sender
-            .send(FreezeMessage::from_addr(MessageCommand::Pid, process.pid as usize))
-            .unwrap_or_default();
-        self.process_name = process.name.clone();
-        self.show_process_window = false;
-    }
+         self.pid = process.pid;
+        if let Err(e) = self.freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Pid, process.pid as usize)) {
+             self.error_text = format!("Failed to send pid freeze message: {e}");
+         }
+         self.process_name = process.name.clone();
+         self.show_process_window = false;
+     }
 }
 
 fn update_results<T>(old_results: &[SearchResult], value_text: &str, handle: &T) -> Vec<SearchResult>
