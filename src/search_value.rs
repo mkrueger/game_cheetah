@@ -9,11 +9,7 @@ impl Display for SearchValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use SearchType::*;
         let to_str = |needed: usize, convert: &dyn Fn(&[u8]) -> String| -> Option<String> {
-            if self.1.len() >= needed {
-                Some(convert(&self.1[..needed]))
-            } else {
-                None
-            }
+            if self.1.len() >= needed { Some(convert(&self.1[..needed])) } else { None }
         };
         let s = match self.0 {
             Byte => self.1.get(0).map(|b| b.to_string()),
@@ -38,7 +34,8 @@ impl Display for SearchValue {
                 f64::from_le_bytes(arr).to_string()
             }),
             Guess => None,
-        }.ok_or(std::fmt::Error)?;
+        }
+        .ok_or(std::fmt::Error)?;
         f.write_str(&s)
     }
 }

@@ -181,7 +181,7 @@ impl GameCheetahEngine {
                                 }
                             }
                         } else if cfg!(target_os = "linux") {
-                            if !map.is_write() || map.is_exec() {
+                            if !map.is_write() {
                                 continue;
                             }
                             if let Some(file_name) = map.filename() {
@@ -196,7 +196,7 @@ impl GameCheetahEngine {
                                 }
                             }
                         } else {
-                            if !map.is_write() || map.is_exec() || map.filename().is_none() || map.size() < 1024 * 1024 {
+                            if !map.is_write() || map.filename().is_none() || map.size() < 1024 * 1024 {
                                 continue;
                             }
                             if let Some(file_name) = map.filename() {

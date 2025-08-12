@@ -33,7 +33,7 @@ impl SearchType {
             SearchType::Byte => 1,
             SearchType::Short => 2,
             SearchType::Int => 4,
-            SearchType::Int64 => 4,
+            SearchType::Int64 => 8,
             SearchType::Float => 4,
             SearchType::Double => 8,
         }
@@ -54,53 +54,32 @@ impl SearchType {
     pub fn from_string(&self, txt: &str) -> Result<SearchValue, String> {
         match self {
             SearchType::Byte => {
-                let parsed = txt.parse::<u8>();
-                match parsed {
-                    Ok(f) => Ok(SearchValue(SearchType::Byte, vec![f])),
-                    Err(_) => Err(fl!(crate::LANGUAGE_LOADER, "invalid-input-error")),
-                }
+                let val = txt.parse::<u8>().map_err(|_| format!("Invalid byte value: {}", txt))?;
+                Ok(SearchValue(*self, vec![val]))
             }
             SearchType::Short => {
-                let parsed = txt.parse::<i16>();
-                match parsed {
-                    Ok(f) => Ok(SearchValue(SearchType::Short, i16::to_le_bytes(f).to_vec())),
-                    Err(_) => Err(fl!(crate::LANGUAGE_LOADER, "invalid-input-error")),
-                }
+                let val = txt.parse::<i16>().map_err(|_| format!("Invalid short value: {}", txt))?;
+                Ok(SearchValue(*self, val.to_le_bytes().to_vec()))
             }
             SearchType::Int => {
-                let parsed = txt.parse::<i32>();
-                match parsed {
-                    Ok(f) => Ok(SearchValue(SearchType::Int, i32::to_le_bytes(f).to_vec())),
-                    Err(_) => Err(fl!(crate::LANGUAGE_LOADER, "invalid-input-error")),
-                }
+                let val = txt.parse::<i32>().map_err(|_| format!("Invalid int value: {}", txt))?;
+                Ok(SearchValue(*self, val.to_le_bytes().to_vec()))
             }
             SearchType::Int64 => {
-                let parsed = txt.parse::<i64>();
-                match parsed {
-                    Ok(f) => Ok(SearchValue(SearchType::Int64, i64::to_le_bytes(f).to_vec())),
-                    Err(_) => Err(fl!(crate::LANGUAGE_LOADER, "invalid-input-error")),
-                }
+                let val = txt.parse::<i64>().map_err(|_| format!("Invalid int64 value: {}", txt))?;
+                Ok(SearchValue(*self, val.to_le_bytes().to_vec()))
             }
             SearchType::Float => {
-                let parsed = txt.parse::<f32>();
-                match parsed {
-                    Ok(f) => Ok(SearchValue(SearchType::Float, f32::to_le_bytes(f).to_vec())),
-                    Err(_) => Err(fl!(crate::LANGUAGE_LOADER, "invalid-input-error")),
-                }
+                let val = txt.parse::<f32>().map_err(|_| format!("Invalid float value: {}", txt))?;
+                Ok(SearchValue(*self, val.to_le_bytes().to_vec()))
             }
             SearchType::Double => {
-                let parsed = txt.parse::<f64>();
-                match parsed {
-                    Ok(f) => Ok(SearchValue(SearchType::Double, f64::to_le_bytes(f).to_vec())),
-                    Err(_) => Err(fl!(crate::LANGUAGE_LOADER, "invalid-input-error")),
-                }
+                let val = txt.parse::<f64>().map_err(|_| format!("Invalid double value: {}", txt))?;
+                Ok(SearchValue(*self, val.to_le_bytes().to_vec()))
             }
             SearchType::Guess => {
-                if txt.parse::<i64>().is_err() {
-                    return Err(fl!(crate::LANGUAGE_LOADER, "invalid-input-error"));
-                }
-                let parsed = txt.as_bytes().to_vec();
-                Ok(SearchValue(SearchType::Guess, parsed))
+                // For Guess, we don't parse here - it's handled in spawn_parallel_search
+                Ok(SearchValue(*self, txt.as_bytes().to_vec()))
             }
         }
     }
