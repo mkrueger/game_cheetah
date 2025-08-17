@@ -1322,6 +1322,27 @@ impl App {
             } else {
                 0
             };
+            
+            // Add float and double representations
+            let float_val = if bytes_available >= 4 {
+                f32::from_le_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]])
+            } else {
+                0.0
+            };
+            let double_val = if bytes_available >= 8 {
+                f64::from_le_bytes([
+                    value_bytes[0],
+                    value_bytes[1],
+                    value_bytes[2],
+                    value_bytes[3],
+                    value_bytes[4],
+                    value_bytes[5],
+                    value_bytes[6],
+                    value_bytes[7],
+                ])
+            } else {
+                0.0
+            };
 
             container(
                 column![
@@ -1331,6 +1352,7 @@ impl App {
                             text("Byte:").size(14).font(iced::Font::MONOSPACE),
                             text("U16:").size(14).font(iced::Font::MONOSPACE),
                             text("U32:").size(14).font(iced::Font::MONOSPACE),
+                            text("U64:").size(14).font(iced::Font::MONOSPACE),
                         ]
                         .width(Length::Fixed(60.0))
                         .spacing(5),
@@ -1338,13 +1360,37 @@ impl App {
                             text(format!("{}", byte_val)).size(14).font(iced::Font::MONOSPACE),
                             text(format!("{}", u16_val)).size(14).font(iced::Font::MONOSPACE),
                             text(format!("{}", u32_val)).size(14).font(iced::Font::MONOSPACE),
+                            text(format!("{}", u64_val)).size(14).font(iced::Font::MONOSPACE),
                         ]
-                        .width(Length::Fixed(200.0))
+                        .width(Length::Fixed(150.0))
                         .spacing(5),
-                        column![text("U64:").size(14).font(iced::Font::MONOSPACE),]
-                            .width(Length::Fixed(60.0))
-                            .spacing(5),
-                        column![text(format!("{}", u64_val)).size(14).font(iced::Font::MONOSPACE),].spacing(5),
+                        column![
+                            text("Float:").size(14).font(iced::Font::MONOSPACE),
+                            text("Double:").size(14).font(iced::Font::MONOSPACE),
+                        ]
+                        .width(Length::Fixed(60.0))
+                        .spacing(5),
+                        column![
+                            text(if bytes_available >= 4 {
+                                if float_val.is_finite() {
+                                    format!("{:.6}", float_val)
+                                } else {
+                                    format!("{}", float_val)
+                                }
+                            } else {
+                                "N/A".to_string()
+                            }).size(14).font(iced::Font::MONOSPACE),
+                            text(if bytes_available >= 8 {
+                                if double_val.is_finite() {
+                                    format!("{:.10}", double_val)
+                                } else {
+                                    format!("{}", double_val)
+                                }
+                            } else {
+                                "N/A".to_string()
+                            }).size(14).font(iced::Font::MONOSPACE),
+                        ]
+                        .spacing(5),
                     ]
                     .spacing(20)
                 ]
