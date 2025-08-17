@@ -314,7 +314,7 @@ impl GameCheetahEngine {
                 memory: process.memory() as usize,
             });
         }
-        self.processes.sort_by(|a, b| a.pid.cmp(&b.pid));
+        self.processes.sort_by(|a, b| b.pid.cmp(&a.pid));
     }
 
     fn spawn_update_search(&mut self, search_index: usize, old_results: Vec<SearchResult>, chunks: Vec<(usize, usize)>) {
@@ -436,17 +436,64 @@ where
     let mut results = Vec::new();
     for result in old_results {
         match result.search_type.from_string(value_text) {
-            Ok(my_int) => {
+            Ok(search_value) => {
                 if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), handle) {
-                    let val = SearchValue(result.search_type, buf);
-                    if val.1 == my_int.1 {
+                    let matches = match result.search_type {
+                        SearchType::Float => {
+                            if buf.len() == 4 && search_value.1.len() == 4 {
+                                let current = f32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+                                let target = f32::from_le_bytes([
+                                    search_value.1[0], search_value.1[1], 
+                                    search_value.1[2], search_value.1[3]
+                                ]);
+                                
+                                let epsilon = 1.0;
+                                
+                                if current.is_finite() && target.is_finite() {
+                                    (current - target).abs() <= epsilon
+                                } else {
+                                    current == target || (current.is_nan() && target.is_nan())
+                                }
+                            } else {
+                                false
+                            }
+                        }
+                        SearchType::Double => {
+                            if buf.len() == 8 && search_value.1.len() == 8 {
+                                let current = f64::from_le_bytes([
+                                    buf[0], buf[1], buf[2], buf[3],
+                                    buf[4], buf[5], buf[6], buf[7]
+                                ]);
+                                let target = f64::from_le_bytes([
+                                    search_value.1[0], search_value.1[1], search_value.1[2], search_value.1[3],
+                                    search_value.1[4], search_value.1[5], search_value.1[6], search_value.1[7]
+                                ]);
+                                
+                                let epsilon = 1.0;
+                                
+                                if current.is_finite() && target.is_finite() {
+                                    (current - target).abs() <= epsilon
+                                } else {
+                                    current == target || (current.is_nan() && target.is_nan())
+                                }
+                            } else {
+                                false
+                            }
+                        }
+                        _ => {
+                            // For integer types, use exact comparison
+                            let val = SearchValue(result.search_type, buf);
+                            val.1 == search_value.1
+                        }
+                    };
+                    
+                    if matches {
                         results.push(*result);
                     }
                 }
             }
             Err(err) => {
                 eprintln!("Error converting {:?}: {}", result.search_type, err);
-                //   self.error_text = format!("Error converting {:?}: {}", result.search_type, err);
             }
         }
     }
@@ -471,21 +518,82 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
             // Use SIMD-optimized pattern matching for aligned data
             result = search_aligned_integers(memory_data, search_data, search_type, start);
         }
-        // For floats and doubles, fall back to boyer-moore or memmem
-        SearchType::Float | SearchType::Double | SearchType::Guess => {
-            // Use memmem for better performance than boyer-moore
+        // For floats, search with epsilon tolerance
+        SearchType::Float => {
+            if search_data.len() == 4 {
+                let target = f32::from_le_bytes([search_data[0], search_data[1], search_data[2], search_data[3]]);
+                
+                let epsilon = 1.0;
+                
+                // Scan through memory interpreting each position as a potential float
+                if memory_data.len() >= 4 {
+                    for i in 0..=memory_data.len() - 4 {
+                        let value = f32::from_le_bytes([
+                            memory_data[i],
+                            memory_data[i + 1],
+                            memory_data[i + 2],
+                            memory_data[i + 3],
+                        ]);
+                        
+                        // Check if value is close enough to target
+                        // Also handle special cases like NaN and infinity
+                        if value.is_finite() && target.is_finite() {
+                            if (value - target).abs() <= epsilon {
+                                result.push(SearchResult::new(start + i, SearchType::Float));
+                            }
+                        } else if value.is_nan() && target.is_nan() {
+                            // Both are NaN
+                            result.push(SearchResult::new(start + i, SearchType::Float));
+                        } else if value == target {
+                            // Handle infinities
+                            result.push(SearchResult::new(start + i, SearchType::Float));
+                        }
+                    }
+                }
+            }
+        }
+        // For doubles, search with epsilon tolerance
+        SearchType::Double => {
+            if search_data.len() == 8 {
+                let target = f64::from_le_bytes([
+                    search_data[0], search_data[1], search_data[2], search_data[3],
+                    search_data[4], search_data[5], search_data[6], search_data[7],
+                ]);
+                
+                // Similar epsilon strategy for doubles
+                let epsilon = 1.0;
+                
+                // Scan through memory interpreting each position as a potential double
+                if memory_data.len() >= 8 {
+                    for i in 0..=memory_data.len() - 8 {
+                        let value = f64::from_le_bytes([
+                            memory_data[i], memory_data[i + 1], memory_data[i + 2], memory_data[i + 3],
+                            memory_data[i + 4], memory_data[i + 5], memory_data[i + 6], memory_data[i + 7],
+                        ]);
+                        
+                        // Check if value is close enough to target
+                        if value.is_finite() && target.is_finite() {
+                            if (value - target).abs() <= epsilon {
+                                result.push(SearchResult::new(start + i, SearchType::Double));
+                            }
+                        } else if value.is_nan() && target.is_nan() {
+                            result.push(SearchResult::new(start + i, SearchType::Double));
+                        } else if value == target {
+                            // Handle infinities
+                            result.push(SearchResult::new(start + i, SearchType::Double));
+                        }
+                    }
+                }
+            }
+        }
+        SearchType::Guess => {
+            // For Guess type, still use exact matching with memmem
+            // The epsilon matching is handled when we try Float/Double variants
             let finder = memmem::Finder::new(search_data);
             for pos in finder.find_iter(memory_data) {
                 result.push(SearchResult::new(pos + start, search_type));
             }
-        } /*
-          _ => {
-              // Fallback to boyer-moore for other types
-              let search_bytes = BMByte::from(search_data.to_vec()).unwrap();
-              for i in search_bytes.find_all_in(memory_data.to_vec()) {
-                  result.push(SearchResult::new(i + start, search_type));
-              }
-          }*/
+        }
     }
 
     result
