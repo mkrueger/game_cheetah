@@ -314,7 +314,7 @@ impl GameCheetahEngine {
                 memory: process.memory() as usize,
             });
         }
-        self.processes.sort_by(|a, b| a.name.cmp(&b.name).then(a.pid.cmp(&b.pid)));
+        self.processes.sort_by(|a, b| a.pid.cmp(&b.pid));
     }
 
     fn spawn_update_search(&mut self, search_index: usize, old_results: Vec<SearchResult>, chunks: Vec<(usize, usize)>) {
