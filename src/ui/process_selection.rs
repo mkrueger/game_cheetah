@@ -6,8 +6,77 @@ use iced::{
 
 use crate::{app::App, message::Message};
 
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum ProcessSortColumn {
+    #[default]
+    Pid,
+    Name,
+    Memory,
+    Command,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum SortDirection {
+    #[default]
+    Ascending,
+    Descending,
+}
+
 pub fn view_process_selection(app: &App) -> Element<'_, Message> {
     let filter = app.state.process_filter.to_ascii_uppercase();
+
+    // Get sort indicator
+    let sort_indicator = |column: ProcessSortColumn| -> String {
+        if app.process_sort_column == column {
+            match app.process_sort_direction {
+                SortDirection::Ascending => " ▲".to_string(),
+                SortDirection::Descending => " ▼".to_string(),
+            }
+        } else {
+            String::new()
+        }
+    };
+
+    // Filter processes
+    let mut filtered_processes: Vec<_> = app.state
+        .processes
+        .iter()
+        .filter(|process| {
+            filter.is_empty()
+                || process.name.to_ascii_uppercase().contains(filter.as_str())
+                || process.cmd.to_ascii_uppercase().contains(filter.as_str())
+                || process.pid.to_string().contains(filter.as_str())
+        })
+        .cloned()
+        .collect();
+
+    // Sort processes
+    match app.process_sort_column {
+        ProcessSortColumn::Pid => {
+            filtered_processes.sort_by(|a, b| match app.process_sort_direction {
+                SortDirection::Ascending => a.pid.cmp(&b.pid),
+                SortDirection::Descending => b.pid.cmp(&a.pid),
+            });
+        }
+        ProcessSortColumn::Name => {
+            filtered_processes.sort_by(|a, b| match app.process_sort_direction {
+                SortDirection::Ascending => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                SortDirection::Descending => b.name.to_lowercase().cmp(&a.name.to_lowercase()),
+            });
+        }
+        ProcessSortColumn::Memory => {
+            filtered_processes.sort_by(|a, b| match app.process_sort_direction {
+                SortDirection::Ascending => a.memory.cmp(&b.memory),
+                SortDirection::Descending => b.memory.cmp(&a.memory),
+            });
+        }
+        ProcessSortColumn::Command => {
+            filtered_processes.sort_by(|a, b| match app.process_sort_direction {
+                SortDirection::Ascending => a.cmd.to_lowercase().cmp(&b.cmd.to_lowercase()),
+                SortDirection::Descending => b.cmd.to_lowercase().cmp(&a.cmd.to_lowercase()),
+            });
+        }
+    }
 
     // Process selection dialog
     container(
@@ -26,20 +95,87 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
             ]
             .spacing(10)
             .align_y(alignment::Alignment::Center),
-            // Table header
+            // Table header with sortable columns
             container(row![
-                container(text(fl!(crate::LANGUAGE_LOADER, "pid-heading")).size(14))
+                button(
+                    container(
+                        text(format!("{}{}", 
+                            fl!(crate::LANGUAGE_LOADER, "pid-heading"),
+                            sort_indicator(ProcessSortColumn::Pid)
+                        )).size(14)
+                    )
                     .width(Length::Fixed(80.0))
-                    .padding(5),
-                container(text(fl!(crate::LANGUAGE_LOADER, "name-heading")).size(14))
+                    .padding(5)
+                )
+                .on_press(Message::SortProcesses(ProcessSortColumn::Pid))
+                .style(|theme: &iced::Theme, _status| button::Style {
+                    background: Some(theme.extended_palette().background.weak.color.into()),
+                    border: iced::Border::default(),
+                    text_color: theme.palette().text,
+                    ..Default::default()
+                })
+                .width(Length::Fixed(80.0))
+                .padding(0),
+                
+                button(
+                    container(
+                        text(format!("{}{}", 
+                            fl!(crate::LANGUAGE_LOADER, "name-heading"),
+                            sort_indicator(ProcessSortColumn::Name)
+                        )).size(14)
+                    )
                     .width(Length::Fixed(250.0))
-                    .padding(5),
-                container(text(fl!(crate::LANGUAGE_LOADER, "memory-heading")).size(14))
+                    .padding(5)
+                )
+                .on_press(Message::SortProcesses(ProcessSortColumn::Name))
+                .style(|theme: &iced::Theme, _status| button::Style {
+                    background: Some(theme.extended_palette().background.weak.color.into()),
+                    border: iced::Border::default(),
+                    text_color: theme.palette().text,
+                    ..Default::default()
+                })
+                .width(Length::Fixed(250.0))
+                .padding(0),
+                
+                button(
+                    container(
+                        text(format!("{}{}", 
+                            fl!(crate::LANGUAGE_LOADER, "memory-heading"),
+                            sort_indicator(ProcessSortColumn::Memory)
+                        )).size(14)
+                    )
                     .width(Length::Fixed(200.0))
-                    .padding(5),
-                container(text(fl!(crate::LANGUAGE_LOADER, "command-heading")).size(14))
+                    .padding(5)
+                )
+                .on_press(Message::SortProcesses(ProcessSortColumn::Memory))
+                .style(|theme: &iced::Theme, _status| button::Style {
+                    background: Some(theme.extended_palette().background.weak.color.into()),
+                    border: iced::Border::default(),
+                    text_color: theme.palette().text,
+                    ..Default::default()
+                })
+                .width(Length::Fixed(200.0))
+                .padding(0),
+                
+                button(
+                    container(
+                        text(format!("{}{}", 
+                            fl!(crate::LANGUAGE_LOADER, "command-heading"),
+                            sort_indicator(ProcessSortColumn::Command)
+                        )).size(14)
+                    )
                     .width(Length::Fill)
-                    .padding(5),
+                    .padding(5)
+                )
+                .on_press(Message::SortProcesses(ProcessSortColumn::Command))
+                .style(|theme: &iced::Theme, _status| button::Style {
+                    background: Some(theme.extended_palette().background.weak.color.into()),
+                    border: iced::Border::default(),
+                    text_color: theme.palette().text,
+                    ..Default::default()
+                })
+                .width(Length::Fill)
+                .padding(0),
             ])
             .style(|theme: &iced::Theme| {
                 container::Style {
@@ -50,19 +186,11 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
             // Table body
             scrollable(
                 column(
-                    app.state
-                        .processes
+                    filtered_processes
                         .iter()
-                        .filter(|process| {
-                            filter.is_empty()
-                                || process.name.to_ascii_uppercase().contains(filter.as_str())
-                                || process.cmd.to_ascii_uppercase().contains(filter.as_str())
-                                || process.pid.to_string().contains(filter.as_str())
-                        })
                         .enumerate()
                         .map(|(_index, process)| {
                             let process_clone = process.clone();
-                            // let is_even = index % 2 == 0;
                             let bb = gabi::BytesConfig::default();
                             let memory = bb.bytes(process.memory as u64).to_string();
 
@@ -77,7 +205,7 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
                                     use iced::widget::button::Status;
                                     match status {
                                         Status::Hovered => button::Style {
-                                            background: Some(theme.palette().primary.into()), // highlight color
+                                            background: Some(theme.palette().primary.into()),
                                             border: iced::Border::default(),
                                             text_color: theme.palette().text,
                                             ..Default::default()
@@ -95,14 +223,7 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
                                 .padding(0),
                             )
                             .style(move |_theme: &iced::Theme| {
-                                //if is_even {
                                 container::Style::default()
-                                /*} else {
-                                    container::Style {
-                                        background: Some(theme.extended_palette().secondary.weak.color.into()),
-                                        ..Default::default()
-                                    }
-                                }*/
                             })
                             .into()
                         })

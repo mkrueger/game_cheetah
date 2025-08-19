@@ -13,6 +13,7 @@ use iced::{
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 
 use crate::{DIALOG_PADDING, FreezeMessage, GameCheetahEngine, MessageCommand, SearchMode, SearchType, SearchValue, message::Message};
+use crate::ui::process_selection::{ProcessSortColumn, SortDirection};
 
 #[derive(Default, PartialEq, Debug, Clone, Copy)]
 pub enum AppState {
@@ -33,6 +34,9 @@ pub struct App {
     rename_search_text: String,
 
     memory_editor: super::memory_editor::MemoryEditor,
+
+    pub process_sort_column: ProcessSortColumn,
+    pub process_sort_direction: SortDirection,
 }
 
 impl App {
@@ -407,6 +411,20 @@ impl App {
                 self.memory_editor.edit_hex(self.state.edit_address, self.state.pid, hex_digit);
 
                 Task::none()
+            }
+            Message::SortProcesses(column) => {
+                if self.process_sort_column == column {
+                    // Toggle direction if clicking same column
+                    self.process_sort_direction = match self.process_sort_direction {
+                        SortDirection::Ascending => SortDirection::Descending,
+                        SortDirection::Descending => SortDirection::Ascending,
+                    };
+                } else {
+                    // New column, default to ascending
+                    self.process_sort_column = column;
+                    self.process_sort_direction = SortDirection::Ascending;
+                }
+                iced::Task::none()
             }
         }
     }

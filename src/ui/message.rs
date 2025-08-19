@@ -1,4 +1,4 @@
-use crate::{ProcessInfo, SearchType};
+use crate::{process_selection::ProcessSortColumn, ProcessInfo, SearchType};
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -43,4 +43,5 @@ pub enum Message {
     MemoryEditorEditHex(u8), // hex digit input
     MemoryEditorBeginEdit,
     MemoryEditorEndEdit,
+    SortProcesses(ProcessSortColumn),
 }
