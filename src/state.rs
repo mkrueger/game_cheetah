@@ -5,8 +5,8 @@ use memchr::memmem;
 use proc_maps::get_process_maps;
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 use rayon::prelude::*;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::{
     cmp::min,
     collections::HashMap,
@@ -245,7 +245,7 @@ impl GameCheetahEngine {
         let old_results = search_context.collect_results();
         search_context.total_bytes = old_results.len();
         search_context.current_bytes.swap(0, Ordering::SeqCst);
-        
+
         // Need to dereference Arc to clone the underlying Vec for old_results history
         search_context.old_results.push((*old_results).clone());
 

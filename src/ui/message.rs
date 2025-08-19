@@ -1,4 +1,4 @@
-use crate::{process_selection::ProcessSortColumn, ProcessInfo, SearchType};
+use crate::{ProcessInfo, SearchType, process_selection::ProcessSortColumn};
 
 #[derive(Debug, Clone)]
 pub enum Message {

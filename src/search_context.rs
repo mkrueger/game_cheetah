@@ -1,9 +1,8 @@
 use std::{
     collections::HashSet,
     sync::{
-        Arc,
+        Arc, RwLock,
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        RwLock,
     },
 };
 
@@ -91,7 +90,7 @@ impl SearchContext {
         // Wrap in Arc for cheap future clones
         let arc_results = Arc::new(results);
         let count = arc_results.len();
-        
+
         if let Ok(mut cache) = self.cached_results.write() {
             *cache = Some(arc_results);
             self.cache_valid.store(true, Ordering::Release);
@@ -104,7 +103,7 @@ impl SearchContext {
         if self.cache_valid.load(Ordering::Acquire) {
             if let Ok(cache) = self.cached_results.read() {
                 if let Some(ref results) = *cache {
-                    return Arc::clone(results);  // Only clones the Arc, not the Vec!
+                    return Arc::clone(results); // Only clones the Arc, not the Vec!
                 }
             }
         }
@@ -133,7 +132,7 @@ impl SearchContext {
 
         // Update cache with the Arc
         if let Ok(mut cache) = self.cached_results.write() {
-            *cache = Some(Arc::clone(&arc_results));  // Store an Arc clone
+            *cache = Some(Arc::clone(&arc_results)); // Store an Arc clone
             self.cache_valid.store(true, Ordering::Release);
         }
 

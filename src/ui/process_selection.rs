@@ -38,7 +38,8 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
     };
 
     // Filter processes
-    let mut filtered_processes: Vec<_> = app.state
+    let mut filtered_processes: Vec<_> = app
+        .state
         .processes
         .iter()
         .filter(|process| {
@@ -99,10 +100,12 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
             container(row![
                 button(
                     container(
-                        text(format!("{}{}", 
+                        text(format!(
+                            "{}{}",
                             fl!(crate::LANGUAGE_LOADER, "pid-heading"),
                             sort_indicator(ProcessSortColumn::Pid)
-                        )).size(14)
+                        ))
+                        .size(14)
                     )
                     .width(Length::Fixed(80.0))
                     .padding(5)
@@ -116,13 +119,14 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
                 })
                 .width(Length::Fixed(80.0))
                 .padding(0),
-                
                 button(
                     container(
-                        text(format!("{}{}", 
+                        text(format!(
+                            "{}{}",
                             fl!(crate::LANGUAGE_LOADER, "name-heading"),
                             sort_indicator(ProcessSortColumn::Name)
-                        )).size(14)
+                        ))
+                        .size(14)
                     )
                     .width(Length::Fixed(250.0))
                     .padding(5)
@@ -136,13 +140,14 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
                 })
                 .width(Length::Fixed(250.0))
                 .padding(0),
-                
                 button(
                     container(
-                        text(format!("{}{}", 
+                        text(format!(
+                            "{}{}",
                             fl!(crate::LANGUAGE_LOADER, "memory-heading"),
                             sort_indicator(ProcessSortColumn::Memory)
-                        )).size(14)
+                        ))
+                        .size(14)
                     )
                     .width(Length::Fixed(200.0))
                     .padding(5)
@@ -156,13 +161,14 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
                 })
                 .width(Length::Fixed(200.0))
                 .padding(0),
-                
                 button(
                     container(
-                        text(format!("{}{}", 
+                        text(format!(
+                            "{}{}",
                             fl!(crate::LANGUAGE_LOADER, "command-heading"),
                             sort_indicator(ProcessSortColumn::Command)
-                        )).size(14)
+                        ))
+                        .size(14)
                     )
                     .width(Length::Fill)
                     .padding(5)
@@ -222,9 +228,7 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
                                 .width(Length::Fill)
                                 .padding(0),
                             )
-                            .style(move |_theme: &iced::Theme| {
-                                container::Style::default()
-                            })
+                            .style(move |_theme: &iced::Theme| container::Style::default())
                             .into()
                         })
                         .collect::<Vec<Element<'_, Message>>>()

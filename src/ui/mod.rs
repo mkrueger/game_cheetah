@@ -1,6 +1,7 @@
 pub mod app;
 pub mod message;
 
+pub mod in_process_view;
 pub mod main_window;
 pub mod memory_editor;
 pub mod process_selection;
