@@ -1362,7 +1362,7 @@ impl App {
                             text(format!("{}", u32_val)).size(14).font(iced::Font::MONOSPACE),
                             text(format!("{}", u64_val)).size(14).font(iced::Font::MONOSPACE),
                         ]
-                        .width(Length::Fixed(150.0))
+                        .width(Length::Fixed(200.0))
                         .spacing(5),
                         column![
                             text("Float:").size(14).font(iced::Font::MONOSPACE),
@@ -1373,7 +1373,23 @@ impl App {
                         column![
                             text(if bytes_available >= 4 {
                                 if float_val.is_finite() {
-                                    format!("{:.6}", float_val)
+                                    // Format float value more intelligently
+                                    let abs_val = float_val.abs();
+                                    if abs_val == 0.0 {
+                                        "0.0".to_string()
+                                    } else if abs_val >= 1e6 || abs_val <= 1e-3 {
+                                        // Use scientific notation for very large or very small numbers
+                                        format!("{:.3e}", float_val)
+                                    } else if abs_val >= 1000.0 {
+                                        // For large numbers, show fewer decimal places
+                                        format!("{:.1}", float_val)
+                                    } else if abs_val >= 1.0 {
+                                        // For medium numbers, show up to 3 decimal places
+                                        format!("{:.3}", float_val)
+                                    } else {
+                                        // For small numbers, show up to 4 decimal places
+                                        format!("{:.4}", float_val)
+                                    }
                                 } else {
                                     format!("{}", float_val)
                                 }
@@ -1384,7 +1400,23 @@ impl App {
                             .font(iced::Font::MONOSPACE),
                             text(if bytes_available >= 8 {
                                 if double_val.is_finite() {
-                                    format!("{:.10}", double_val)
+                                    // Format double value more intelligently
+                                    let abs_val = double_val.abs();
+                                    if abs_val == 0.0 {
+                                        "0.0".to_string()
+                                    } else if abs_val >= 1e7 || abs_val <= 1e-4 {
+                                        // Use scientific notation for very large or very small numbers
+                                        format!("{:.4e}", double_val)
+                                    } else if abs_val >= 1000.0 {
+                                        // For large numbers, show fewer decimal places
+                                        format!("{:.2}", double_val)
+                                    } else if abs_val >= 1.0 {
+                                        // For medium numbers, show up to 4 decimal places
+                                        format!("{:.4}", double_val)
+                                    } else {
+                                        // For small numbers, show up to 6 decimal places
+                                        format!("{:.6}", double_val)
+                                    }
                                 } else {
                                     format!("{}", double_val)
                                 }
