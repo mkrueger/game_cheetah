@@ -80,12 +80,12 @@ fn test_search_int64_values() {
 #[test]
 fn test_search_float_values() {
     let pi: f32 = std::f32::consts::PI;
-    let e: f32 = std::f32::consts::E;
+    let pi5: f32 = std::f32::consts::PI * 5.0;
 
     let mut memory = vec![0x00; 20];
     memory[0..4].copy_from_slice(&pi.to_le_bytes());
     memory[8..12].copy_from_slice(&pi.to_le_bytes());
-    memory[16..20].copy_from_slice(&e.to_le_bytes());
+    memory[16..20].copy_from_slice(&pi5.to_le_bytes());
 
     let search_value = pi.to_le_bytes().to_vec();
 
@@ -99,12 +99,12 @@ fn test_search_float_values() {
 #[test]
 fn test_search_double_values() {
     let pi: f64 = std::f64::consts::PI;
-    let e: f64 = std::f64::consts::E;
+    let pi5: f64 = std::f64::consts::PI * 5.0;
 
     let mut memory = vec![0x00; 32];
     memory[0..8].copy_from_slice(&pi.to_le_bytes());
     memory[16..24].copy_from_slice(&pi.to_le_bytes());
-    memory[24..32].copy_from_slice(&e.to_le_bytes());
+    memory[24..32].copy_from_slice(&pi5.to_le_bytes());
 
     let search_value = pi.to_le_bytes().to_vec();
 

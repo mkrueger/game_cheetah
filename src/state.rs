@@ -1,5 +1,5 @@
 use crate::{FreezeMessage, MessageCommand, SearchContext, SearchMode, SearchResult, SearchType, SearchValue};
-use crossbeam_channel::{tick, select};
+use crossbeam_channel::{select, tick};
 use i18n_embed_fl::fl;
 use memchr::memmem;
 use proc_maps::get_process_maps;
@@ -134,7 +134,7 @@ impl GameCheetahEngine {
         // Validate index
         let Some(ctx_view) = self.searches.get(search_index) else {
             self.error_text = format!("Invalid search index {search_index}");
-            return; 
+            return;
         };
         if !matches!(ctx_view.searching, SearchMode::None) {
             return;
@@ -420,13 +420,13 @@ impl GameCheetahEngine {
     }
 
     pub(crate) fn select_process(&mut self, process: &ProcessInfo) {
-         self.pid = process.pid;
+        self.pid = process.pid;
         if let Err(e) = self.freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Pid, process.pid as usize)) {
-             self.error_text = format!("Failed to send pid freeze message: {e}");
-         }
-         self.process_name = process.name.clone();
-         self.show_process_window = false;
-     }
+            self.error_text = format!("Failed to send pid freeze message: {e}");
+        }
+        self.process_name = process.name.clone();
+        self.show_process_window = false;
+    }
 }
 
 fn update_results<T>(old_results: &[SearchResult], value_text: &str, handle: &T) -> Vec<SearchResult>
@@ -442,13 +442,10 @@ where
                         SearchType::Float => {
                             if buf.len() == 4 && search_value.1.len() == 4 {
                                 let current = f32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
-                                let target = f32::from_le_bytes([
-                                    search_value.1[0], search_value.1[1], 
-                                    search_value.1[2], search_value.1[3]
-                                ]);
-                                
+                                let target = f32::from_le_bytes([search_value.1[0], search_value.1[1], search_value.1[2], search_value.1[3]]);
+
                                 let epsilon = 1.0;
-                                
+
                                 if current.is_finite() && target.is_finite() {
                                     (current - target).abs() <= epsilon
                                 } else {
@@ -460,17 +457,20 @@ where
                         }
                         SearchType::Double => {
                             if buf.len() == 8 && search_value.1.len() == 8 {
-                                let current = f64::from_le_bytes([
-                                    buf[0], buf[1], buf[2], buf[3],
-                                    buf[4], buf[5], buf[6], buf[7]
-                                ]);
+                                let current = f64::from_le_bytes([buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]]);
                                 let target = f64::from_le_bytes([
-                                    search_value.1[0], search_value.1[1], search_value.1[2], search_value.1[3],
-                                    search_value.1[4], search_value.1[5], search_value.1[6], search_value.1[7]
+                                    search_value.1[0],
+                                    search_value.1[1],
+                                    search_value.1[2],
+                                    search_value.1[3],
+                                    search_value.1[4],
+                                    search_value.1[5],
+                                    search_value.1[6],
+                                    search_value.1[7],
                                 ]);
-                                
+
                                 let epsilon = 1.0;
-                                
+
                                 if current.is_finite() && target.is_finite() {
                                     (current - target).abs() <= epsilon
                                 } else {
@@ -486,7 +486,7 @@ where
                             val.1 == search_value.1
                         }
                     };
-                    
+
                     if matches {
                         results.push(*result);
                     }
@@ -522,19 +522,14 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
         SearchType::Float => {
             if search_data.len() == 4 {
                 let target = f32::from_le_bytes([search_data[0], search_data[1], search_data[2], search_data[3]]);
-                
+
                 let epsilon = 1.0;
-                
+
                 // Scan through memory interpreting each position as a potential float
                 if memory_data.len() >= 4 {
                     for i in 0..=memory_data.len() - 4 {
-                        let value = f32::from_le_bytes([
-                            memory_data[i],
-                            memory_data[i + 1],
-                            memory_data[i + 2],
-                            memory_data[i + 3],
-                        ]);
-                        
+                        let value = f32::from_le_bytes([memory_data[i], memory_data[i + 1], memory_data[i + 2], memory_data[i + 3]]);
+
                         // Check if value is close enough to target
                         // Also handle special cases like NaN and infinity
                         if value.is_finite() && target.is_finite() {
@@ -556,21 +551,33 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
         SearchType::Double => {
             if search_data.len() == 8 {
                 let target = f64::from_le_bytes([
-                    search_data[0], search_data[1], search_data[2], search_data[3],
-                    search_data[4], search_data[5], search_data[6], search_data[7],
+                    search_data[0],
+                    search_data[1],
+                    search_data[2],
+                    search_data[3],
+                    search_data[4],
+                    search_data[5],
+                    search_data[6],
+                    search_data[7],
                 ]);
-                
+
                 // Similar epsilon strategy for doubles
                 let epsilon = 1.0;
-                
+
                 // Scan through memory interpreting each position as a potential double
                 if memory_data.len() >= 8 {
                     for i in 0..=memory_data.len() - 8 {
                         let value = f64::from_le_bytes([
-                            memory_data[i], memory_data[i + 1], memory_data[i + 2], memory_data[i + 3],
-                            memory_data[i + 4], memory_data[i + 5], memory_data[i + 6], memory_data[i + 7],
+                            memory_data[i],
+                            memory_data[i + 1],
+                            memory_data[i + 2],
+                            memory_data[i + 3],
+                            memory_data[i + 4],
+                            memory_data[i + 5],
+                            memory_data[i + 6],
+                            memory_data[i + 7],
                         ]);
-                        
+
                         // Check if value is close enough to target
                         if value.is_finite() && target.is_finite() {
                             if (value - target).abs() <= epsilon {

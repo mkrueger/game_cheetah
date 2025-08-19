@@ -1322,7 +1322,7 @@ impl App {
             } else {
                 0
             };
-            
+
             // Add float and double representations
             let float_val = if bytes_available >= 4 {
                 f32::from_le_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]])
@@ -1379,7 +1379,9 @@ impl App {
                                 }
                             } else {
                                 "N/A".to_string()
-                            }).size(14).font(iced::Font::MONOSPACE),
+                            })
+                            .size(14)
+                            .font(iced::Font::MONOSPACE),
                             text(if bytes_available >= 8 {
                                 if double_val.is_finite() {
                                     format!("{:.10}", double_val)
@@ -1388,7 +1390,9 @@ impl App {
                                 }
                             } else {
                                 "N/A".to_string()
-                            }).size(14).font(iced::Font::MONOSPACE),
+                            })
+                            .size(14)
+                            .font(iced::Font::MONOSPACE),
                         ]
                         .spacing(5),
                     ]
