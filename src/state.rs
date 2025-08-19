@@ -175,6 +175,16 @@ impl GameCheetahEngine {
                 let mut regions = Vec::new();
                 if let Some(ctx_mut) = self.searches.get_mut(search_index) {
                     for map in maps {
+                        // Skip kernel vsyscall region
+                        if map.start() == 0xffffffffff600000 {
+                            continue;
+                        }
+
+                        // Skip regions that are likely to cause issues
+                        if map.size() == 0 {
+                            continue;
+                        }
+
                         if cfg!(target_os = "windows") {
                             if let Some(file_name) = map.filename() {
                                 if file_name.starts_with("C:\\WINDOWS\\") {
@@ -185,13 +195,28 @@ impl GameCheetahEngine {
                             if !map.is_write() {
                                 continue;
                             }
+                            // Skip if not readable at all
+                            if !map.is_read() {
+                                continue;
+                            }
+                            
+                            // Skip kernel space addresses (very high addresses)
+                            if map.start() > 0x7fffffffffff {
+                                continue;
+                            }
+
+                            // Skip special regions
                             if let Some(file_name) = map.filename() {
-                                if file_name.starts_with("/usr/")
-                                    || file_name.starts_with("/lib/")
-                                    || file_name.starts_with("/lib64/")
-                                    || file_name.starts_with("/dev/")
-                                    || file_name.starts_with("/proc/")
-                                    || file_name.starts_with("/sys/")
+                                let file_str = file_name.to_string_lossy();
+                                if file_str.starts_with("/usr/")
+                                    || file_str.starts_with("/lib/")
+                                    || file_str.starts_with("/lib64/")
+                                    || file_str.starts_with("/dev/")
+                                    || file_str.starts_with("/proc/")
+                                    || file_str.starts_with("/sys/")
+                                    || file_str == "[vvar]"
+                                    || file_str == "[vdso]"
+                                    || file_str == "[vsyscall]"
                                 {
                                     continue;
                                 }
@@ -422,13 +447,14 @@ impl GameCheetahEngine {
         });
     }
 
-    fn spawn_parallel_search(&mut self, search_value: SearchValue, regions: Vec<(usize, usize)>, search_index: usize) {
+    fn spawn_parallel_search(&mut self, search_data: SearchValue, regions: Vec<(usize, usize)>, search_index: usize) {
         let Some(search_context) = self.searches.get_mut(search_index) else {
             self.error_text = format!("Invalid search index {search_index}");
             return;
         };
-        let pid = self.pid;
+        
         let current_bytes = search_context.current_bytes.clone();
+        let pid = self.pid;
         let results_sender = search_context.results_sender.clone();
         let result_count = search_context.result_count.clone();
         let search_complete = search_context.search_complete.clone();
@@ -438,43 +464,55 @@ impl GameCheetahEngine {
 
         std::thread::spawn(move || {
             regions.par_iter().for_each(|(start, size)| {
-                let handle = match (pid as process_memory::Pid).try_into_process_handle() {
+                let handle = match pid.try_into_process_handle() {
                     Ok(h) => h,
                     Err(e) => {
-                        eprintln!("Process handle error: {e}");
+                        eprintln!("Failed to get process handle: {e}");
                         current_bytes.fetch_add(*size, Ordering::SeqCst);
                         return;
                     }
                 };
 
+                // Try to copy the memory region, but handle failures gracefully
                 match copy_address(*start, *size, &handle) {
-                    Ok(memory_data) => {
-                        let local_results = match search_value.0 {
-                            SearchType::Guess => {
-                                let mut results = Vec::new();
-                                if let Ok(val) = String::from_utf8(search_value.1.clone()) {
-                                    for t in [SearchType::Int, SearchType::Float, SearchType::Double] {
-                                        if let Ok(parsed) = t.from_string(&val) {
-                                            results.extend(search_memory(&memory_data, &parsed.1, t, *start));
-                                        }
-                                    }
+                    Ok(memory) => {
+                        let results = if matches!(search_data.0, SearchType::Guess) {
+                            // For Guess type, try all possible interpretations
+                            let mut all_results = Vec::new();
+                            
+                            // Try as each type
+                            for search_type in [
+                                // SearchType::Byte,
+                                // SearchType::Short,
+                                SearchType::Int,
+                                // SearchType::Int64,
+                                SearchType::Float,
+                                SearchType::Double,
+                            ] {
+                                if let Ok(typed_value) = search_type.from_string(&search_data.1.iter().map(|b| format!("{:02x}", b)).collect::<String>()) {
+                                    let typed_results = search_memory(&memory, &typed_value.1, search_type, *start);
+                                    all_results.extend(typed_results);
                                 }
-                                results
                             }
-                            _ => search_memory(&memory_data, &search_value.1, search_value.0, *start),
+                            
+                            all_results
+                        } else {
+                            search_memory(&memory, &search_data.1, search_data.0, *start)
                         };
 
-                        if !local_results.is_empty() {
-                            result_count.fetch_add(local_results.len(), Ordering::SeqCst);
-                            let _ = results_sender.send(local_results);
+                        if !results.is_empty() {
+                            result_count.fetch_add(results.len(), Ordering::SeqCst);
+                            let _ = results_sender.send(results);
                         }
-                        current_bytes.fetch_add(*size, Ordering::SeqCst);
                     }
-                    Err(e) => {
-                        eprintln!("copy_address failed @ {start:#x}: {e:?}");
-                        current_bytes.fetch_add(*size, Ordering::SeqCst);
+                    Err(_) => {
+                        // Silently skip this region - it's no longer accessible
+                        // This is normal for dynamic memory regions
+                        // Don't log every failure as it would spam the console
                     }
                 }
+
+                current_bytes.fetch_add(*size, Ordering::SeqCst);
             });
 
             cache_valid.store(false, Ordering::Release);
