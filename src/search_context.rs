@@ -3,12 +3,12 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        RwLock,
     },
 };
 
 use crate::{FreezeMessage, GameCheetahEngine, SearchResult, SearchType};
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use std::sync::RwLock;
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum SearchMode {
@@ -34,7 +34,8 @@ pub struct SearchContext {
     pub old_results: Vec<Vec<SearchResult>>,
     pub search_complete: Arc<AtomicBool>,
 
-    pub cached_results: Arc<RwLock<Option<Vec<SearchResult>>>>,
+    // Changed to Arc<Vec> for cheap cloning - no Mutex needed since Vec is immutable
+    pub cached_results: Arc<RwLock<Option<Arc<Vec<SearchResult>>>>>,
     pub cache_valid: Arc<AtomicBool>,
 }
 
@@ -87,20 +88,23 @@ impl SearchContext {
     }
 
     pub fn set_cached_results(&self, results: Vec<SearchResult>) {
-        // Update the cache with new results
+        // Wrap in Arc for cheap future clones
+        let arc_results = Arc::new(results);
+        let count = arc_results.len();
+        
         if let Ok(mut cache) = self.cached_results.write() {
-            *cache = Some(results.clone());
+            *cache = Some(arc_results);
             self.cache_valid.store(true, Ordering::Release);
-            self.result_count.store(results.len(), Ordering::SeqCst);
+            self.result_count.store(count, Ordering::SeqCst);
         }
     }
 
-    pub fn collect_results(&self) -> Vec<SearchResult> {
-        // Check if cache is valid
+    pub fn collect_results(&self) -> Arc<Vec<SearchResult>> {
+        // Check if cache is valid - return Arc clone (cheap!)
         if self.cache_valid.load(Ordering::Acquire) {
             if let Ok(cache) = self.cached_results.read() {
                 if let Some(ref results) = *cache {
-                    return results.clone();
+                    return Arc::clone(results);  // Only clones the Arc, not the Vec!
                 }
             }
         }
@@ -124,13 +128,16 @@ impl SearchContext {
         // Update the result count
         self.result_count.store(all_results.len(), Ordering::SeqCst);
 
-        // Update cache with the merged results
+        // Wrap in Arc for cheap future clones
+        let arc_results = Arc::new(all_results);
+
+        // Update cache with the Arc
         if let Ok(mut cache) = self.cached_results.write() {
-            *cache = Some(all_results.clone());
+            *cache = Some(Arc::clone(&arc_results));  // Store an Arc clone
             self.cache_valid.store(true, Ordering::Release);
         }
 
-        all_results
+        arc_results
     }
 
     pub fn invalidate_cache(&self) {

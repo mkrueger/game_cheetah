@@ -294,8 +294,8 @@ impl App {
             }
             Message::RemoveResult(index) => {
                 if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
-                    // Collect all results
-                    let mut results = search_context.collect_results();
+                    // Collect all results - now returns Arc<Vec<SearchResult>>
+                    let results = search_context.collect_results();
 
                     if index < results.len() {
                         // Remove any freeze for this address before removing it
@@ -309,13 +309,15 @@ impl App {
                         }
 
                         // Save current results to old_results for undo functionality
-                        search_context.old_results.push(results.clone());
+                        // Need to clone the underlying Vec here since we're modifying it
+                        search_context.old_results.push((*results).clone());
 
-                        // Remove the item
-                        results.remove(index);
+                        // Create a new vector without the removed item
+                        let mut new_results = (*results).clone();
+                        new_results.remove(index);
 
-                        // Clear the channel and send updated results
-                        search_context.set_cached_results(results);
+                        // Update the cached results
+                        search_context.set_cached_results(new_results);
                     }
                 }
                 Task::none()

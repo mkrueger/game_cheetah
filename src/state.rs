@@ -6,6 +6,7 @@ use proc_maps::get_process_maps;
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 use rayon::prelude::*;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::{
     cmp::min,
     collections::HashMap,
@@ -240,10 +241,13 @@ impl GameCheetahEngine {
         };
         search_context.searching = SearchMode::Percent;
 
+        // collect_results now returns Arc<Vec<SearchResult>>
         let old_results = search_context.collect_results();
         search_context.total_bytes = old_results.len();
         search_context.current_bytes.swap(0, Ordering::SeqCst);
-        search_context.old_results.push(old_results.clone());
+        
+        // Need to dereference Arc to clone the underlying Vec for old_results history
+        search_context.old_results.push((*old_results).clone());
 
         let (tx, rx) = crossbeam_channel::unbounded();
         search_context.results_sender = tx;
@@ -376,7 +380,7 @@ impl GameCheetahEngine {
         self.processes.sort_by(|a, b| b.pid.cmp(&a.pid));
     }
 
-    fn spawn_update_search(&mut self, search_index: usize, old_results: Vec<SearchResult>, chunks: Vec<(usize, usize)>) {
+    fn spawn_update_search(&mut self, search_index: usize, old_results: Arc<Vec<SearchResult>>, chunks: Vec<(usize, usize)>) {
         let Some(search_context) = self.searches.get_mut(search_index) else {
             self.error_text = format!("Invalid search index {search_index}");
             return;
