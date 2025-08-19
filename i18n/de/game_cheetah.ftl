@@ -14,6 +14,7 @@ name-label = Name:
 value-label = Wert:
 search-description-label = Suchbeschreibung
 search-value-label = Suche nach { $valuetype }
+truncated-results-warning = Zeige erste {$shown} von {$total} Ergebnissen. Verwenden Sie 'Aktualisieren' um die Ergebnisse einzugrenzen.
 
 found-results-label =
     { $results ->

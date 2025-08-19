@@ -616,6 +616,12 @@ impl App {
         // Collect all results for display
         let results = current_search_context.collect_results();
         let show_search_types = matches!(current_search_context.search_type, SearchType::Guess);
+        
+        // Limit displayed results for performance
+        const MAX_DISPLAY_RESULTS: usize = 1000;
+        let total_results = results.len();
+        let displayed_results = results.iter().take(MAX_DISPLAY_RESULTS);
+        let is_truncated = total_results > MAX_DISPLAY_RESULTS;
 
         let table_header = row![
             container(text(fl!(crate::LANGUAGE_LOADER, "address-heading")).size(14)).width(Length::Fixed(120.0)),
@@ -631,7 +637,7 @@ impl App {
         .spacing(5)
         .align_y(alignment::Alignment::Center);
 
-        let table_rows = results.iter().enumerate().map(|(i, result)| -> iced::Element<'_, Message> {
+        let table_rows = displayed_results.enumerate().map(|(i, result)| -> iced::Element<'_, Message> {
             let value_text = if let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle() {
                 if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
                     let val = SearchValue(result.search_type, buf);
@@ -665,17 +671,46 @@ impl App {
             .into()
         });
 
-        column![
+        let mut table_content = vec![
             container(table_header).style(|theme: &iced::Theme| {
                 container::Style {
                     background: Some(theme.extended_palette().background.weak.color.into()),
                     ..Default::default()
                 }
-            }),
-            scrollable(column(table_rows.collect::<Vec<Element<'_, Message>>>()).spacing(5).padding(5)).height(Length::FillPortion(1))
-        ]
-        .spacing(0)
-        .into()
+            }).into()
+        ];
+        
+        // Add truncation warning if needed
+        if is_truncated {
+            table_content.push(
+                container(
+                    text(fl!(
+                        crate::LANGUAGE_LOADER,
+                        "truncated-results-warning",
+                        shown = MAX_DISPLAY_RESULTS,
+                        total = total_results
+                    ).chars()
+                    .filter(|c| c.is_ascii())
+                    .collect::<String>())
+                    .size(12)
+                    .style(|theme: &iced::Theme| iced::widget::text::Style {
+                        color: Some(theme.extended_palette().danger.base.color),
+                    })
+                )
+                .padding(5)
+                .into()
+            );
+        }
+        
+        table_content.push(
+            scrollable(column(table_rows.collect::<Vec<Element<'_, Message>>>()).spacing(5).padding(5))
+                .height(Length::FillPortion(1))
+                .into()
+        );
+
+        column(table_content)
+            .spacing(0)
+            .into()
     }
 
     fn show_search_in_process_view(&self) -> Element<'_, Message> {
