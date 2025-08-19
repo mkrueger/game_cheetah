@@ -8,7 +8,7 @@ use rayon::prelude::*;
 use std::sync::atomic::Ordering;
 use std::{
     cmp::min,
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     thread,
     time::{Duration, SystemTime},
 };

@@ -9,8 +9,8 @@ pub use search_value::*;
 pub mod search_context;
 pub use search_context::*;
 
-pub mod app;
-pub use app::*;
+pub mod ui;
+pub use ui::*;
 
 mod state;
 pub use state::*;

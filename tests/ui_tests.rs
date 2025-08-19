@@ -1,4 +1,8 @@
-use game_cheetah::{App, AppState, Message, SearchMode, SearchType};
+use game_cheetah::{
+    SearchMode, SearchType,
+    app::{App, AppState},
+    message::Message,
+};
 
 fn create_test_app() -> App {
     App::default()
