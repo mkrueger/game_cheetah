@@ -289,24 +289,23 @@ impl GameCheetahEngine {
             return;
         };
 
-        let mut parents = HashSet::new();
+        // Track seen process names and their PIDs
+        let mut seen_processes: HashMap<String, ProcessInfo> = HashMap::new();
+
+        // First pass: collect all processes
+        let mut all_processes: Vec<ProcessInfo> = Vec::new();
         for (pid2, process) in sys.processes() {
             if process.memory() == 0 || process.user_id() != cur_process.user_id() {
                 continue;
             }
-            if let Some(parent) = process.parent() {
-                if parents.contains(&parent) {
-                    continue;
-                }
-                parents.insert(parent);
-            }
 
             let pid_u32 = pid2.as_u32();
-            let user = process.user_id().map(|u| u.to_string()).unwrap_or_default();
             let Ok(conv_pid) = pid_u32.try_into() else {
                 continue;
             };
-            self.processes.push(ProcessInfo {
+
+            let user = process.user_id().map(|u| u.to_string()).unwrap_or_default();
+            all_processes.push(ProcessInfo {
                 pid: conv_pid,
                 name: process.name().to_string_lossy().to_string(),
                 cmd: format!("{:?} ", process.cmd()),
@@ -314,6 +313,66 @@ impl GameCheetahEngine {
                 memory: process.memory() as usize,
             });
         }
+
+        // Build parent-child relationships
+        let mut parent_map: HashMap<Pid, Vec<Pid>> = HashMap::new();
+        for (pid, process) in sys.processes() {
+            if let Some(parent_pid) = process.parent() {
+                parent_map.entry(parent_pid).or_insert_with(Vec::new).push(*pid);
+            }
+        }
+
+        // Filter strategy: Keep only the parent process if multiple processes have the same name
+        for proc_info in all_processes {
+            let base_name = proc_info.name.clone();
+
+            // Check if this is a child process of something we already have
+            let pid_sysinfo = Pid::from_u32(proc_info.pid as u32);
+            let is_child_of_existing = sys
+                .process(pid_sysinfo)
+                .and_then(|p| p.parent())
+                .map(|parent_pid| seen_processes.values().any(|seen| Pid::from_u32(seen.pid as u32) == parent_pid))
+                .unwrap_or(false);
+
+            if is_child_of_existing {
+                continue; // Skip child processes
+            }
+
+            // For processes with the same name, keep the one with:
+            // 1. The most children (likely the main process)
+            // 2. If tie, the one with more memory
+            // 3. If still tie, the one with lower PID (started first)
+            match seen_processes.get_mut(&base_name) {
+                Some(existing) => {
+                    let existing_children = parent_map.get(&Pid::from_u32(existing.pid as u32)).map(|c| c.len()).unwrap_or(0);
+                    let current_children = parent_map.get(&pid_sysinfo).map(|c| c.len()).unwrap_or(0);
+
+                    let should_replace = if current_children > existing_children {
+                        true // This one has more children
+                    } else if current_children == existing_children {
+                        if proc_info.memory > existing.memory {
+                            true // This one uses more memory
+                        } else if proc_info.memory == existing.memory {
+                            proc_info.pid < existing.pid // This one started first
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if should_replace {
+                        *existing = proc_info;
+                    }
+                }
+                None => {
+                    seen_processes.insert(base_name, proc_info);
+                }
+            }
+        }
+
+        // Convert to final list
+        self.processes = seen_processes.into_values().collect();
         self.processes.sort_by(|a, b| b.pid.cmp(&a.pid));
     }
 
