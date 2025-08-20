@@ -27,7 +27,6 @@ pub struct SearchContext {
     pub current_bytes: Arc<AtomicUsize>,
     pub results_sender: Sender<Vec<SearchResult>>,
     pub results_receiver: Receiver<Vec<SearchResult>>,
-    pub result_count: Arc<AtomicUsize>,
     pub freezed_addresses: HashSet<usize>,
 
     pub old_results: Vec<Vec<SearchResult>>,
@@ -51,7 +50,6 @@ impl SearchContext {
             searching: SearchMode::None,
             results_sender: tx,
             results_receiver: rx,
-            result_count: Arc::new(AtomicUsize::new(0)),
             total_bytes: 0,
             current_bytes: Arc::new(AtomicUsize::new(0)),
             freezed_addresses: HashSet::new(),
@@ -67,6 +65,10 @@ impl SearchContext {
         }
     }
 
+    pub fn get_result_count(&self) -> usize {
+        self.collect_results().len()
+    }
+
     pub fn store_memory_snapshot(&self, address: usize, data: Vec<u8>) {
         if let Ok(mut snapshot) = self.memory_snapshot.write() {
             snapshot.push((address, Arc::<[u8]>::from(data.into_boxed_slice())));
@@ -80,10 +82,6 @@ impl SearchContext {
         }
     }
 
-    pub fn get_result_count(&self) -> usize {
-        self.result_count.load(Ordering::Relaxed)
-    }
-
     pub fn clear_results(&mut self, freeze_sender: &crossbeam_channel::Sender<FreezeMessage>) {
         GameCheetahEngine::remove_freezes_from(freeze_sender, &mut self.freezed_addresses);
         // Clear old results history
@@ -95,7 +93,6 @@ impl SearchContext {
         self.results_receiver = rx;
 
         // Reset counters
-        self.result_count.store(0, Ordering::SeqCst);
         self.current_bytes.store(0, Ordering::SeqCst);
         self.search_complete.store(false, Ordering::SeqCst);
 
@@ -109,12 +106,10 @@ impl SearchContext {
     pub fn set_cached_results(&self, results: Vec<SearchResult>) {
         // Wrap in Arc for cheap future clones
         let arc_results = Arc::new(results);
-        let count = arc_results.len();
 
         if let Ok(mut cache) = self.cached_results.write() {
             *cache = Some(arc_results);
             self.cache_valid.store(true, Ordering::Release);
-            self.result_count.store(count, Ordering::SeqCst);
         }
     }
 
@@ -143,9 +138,6 @@ impl SearchContext {
         while let Ok(results) = self.results_receiver.try_recv() {
             all_results.extend(results);
         }
-
-        // Update the result count
-        self.result_count.store(all_results.len(), Ordering::SeqCst);
 
         // Wrap in Arc for cheap future clones
         let arc_results = Arc::new(all_results);

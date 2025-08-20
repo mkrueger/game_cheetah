@@ -139,12 +139,15 @@ fn search_ui(app: &App) -> Element<'_, Message> {
                             button(text(fl!(crate::LANGUAGE_LOADER, "decreased-button"))).on_press(Message::UnknownSearchDecrease),
                             button(text(fl!(crate::LANGUAGE_LOADER, "increased-button"))).on_press(Message::UnknownSearchIncrease),
                             button(text(fl!(crate::LANGUAGE_LOADER, "changed-button"))).on_press(Message::UnknownSearchChanged),
-                            button(text(fl!(crate::LANGUAGE_LOADER, "unchanged-button"))).on_press(Message::UnknownSearchUnchanged),
+                            {
+                                let b = button(text(fl!(crate::LANGUAGE_LOADER, "unchanged-button")));
+                                if can_undo { b.on_press(Message::UnknownSearchUnchanged) } else { b }
+                            },
                             container(vertical_rule(1)).height(Length::Fixed(24.0)),
                             button(text(fl!(crate::LANGUAGE_LOADER, "clear-button"))).on_press(Message::ClearResults),
                             {
                                 let b = button(text(fl!(crate::LANGUAGE_LOADER, "undo-button")));
-                                if can_undo { b.on_press(Message::Undo) } else { b }
+                                if search_results > 0 { b.on_press(Message::Undo) } else { b }
                             },
                             if search_results >= auto_show_treshold {
                                 if app.state.show_results {

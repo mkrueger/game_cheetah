@@ -224,7 +224,6 @@ impl GameCheetahEngine {
         let (tx, rx) = crossbeam_channel::unbounded();
         search_context.results_sender = tx;
         search_context.results_receiver = rx;
-        search_context.result_count.store(0, Ordering::SeqCst);
         search_context.invalidate_cache();
 
         let max_block = 200 * 1024;
@@ -361,7 +360,6 @@ impl GameCheetahEngine {
         let pid = self.pid;
         let value_text = search_context.search_value_text.clone();
         let results_sender = search_context.results_sender.clone();
-        let result_count = search_context.result_count.clone();
         let search_complete = search_context.search_complete.clone();
         let cache_valid = search_context.cache_valid.clone();
 
@@ -382,7 +380,6 @@ impl GameCheetahEngine {
                 let updated = update_results(chunk, &value_text, &handle);
 
                 if !updated.is_empty() {
-                    result_count.fetch_add(updated.len(), Ordering::SeqCst);
                     let _ = results_sender.send(updated);
                 }
 
@@ -403,7 +400,6 @@ impl GameCheetahEngine {
         let current_bytes = search_context.current_bytes.clone();
         let pid = self.pid;
         let results_sender = search_context.results_sender.clone();
-        let result_count = search_context.result_count.clone();
         let search_complete = search_context.search_complete.clone();
         let cache_valid = search_context.cache_valid.clone();
 
@@ -448,7 +444,6 @@ impl GameCheetahEngine {
                         };
 
                         if !results.is_empty() {
-                            result_count.fetch_add(results.len(), Ordering::SeqCst);
                             let _ = results_sender.send(results);
                         }
                     }
@@ -569,12 +564,10 @@ impl GameCheetahEngine {
         let (tx, rx) = crossbeam_channel::unbounded();
         search_context.results_sender = tx;
         search_context.results_receiver = rx;
-        search_context.result_count.store(0, Ordering::SeqCst);
         search_context.invalidate_cache();
 
         let pid = self.pid;
         let current_bytes = search_context.current_bytes.clone();
-        let result_count = search_context.result_count.clone();
         let results_sender = search_context.results_sender.clone();
         let search_complete = search_context.search_complete.clone();
         let cache_valid = search_context.cache_valid.clone();
@@ -595,13 +588,10 @@ impl GameCheetahEngine {
         search_complete.store(false, Ordering::SeqCst);
 
         std::thread::spawn(move || {
-            let handle = match pid.try_into_process_handle() {
-                Ok(h) => h,
-                Err(_) => {
-                    search_complete.store(true, Ordering::SeqCst);
-                    return;
-                }
-            };
+            if pid.try_into_process_handle().is_err() {
+                search_complete.store(true, Ordering::SeqCst);
+                return;
+            }
 
             const BATCH: usize = 4096;
             if old_results.is_empty() {
@@ -616,12 +606,10 @@ impl GameCheetahEngine {
 
                 // Spawn consumer thread
                 let results_sender_clone = results_sender.clone();
-                let result_count_clone = result_count.clone();
                 let consumer = std::thread::spawn(move || {
                     let mut total = 0;
                     while let Ok(batch) = local_rx.recv() {
                         total += batch.len();
-                        result_count_clone.fetch_add(batch.len(), Ordering::Relaxed);
                         let _ = results_sender_clone.send(batch);
                     }
                     total
@@ -662,7 +650,6 @@ impl GameCheetahEngine {
                             }
 
                             if local_out.len() >= BATCH {
-                                result_count.fetch_add(local_out.len(), Ordering::SeqCst);
                                 let _ = results_sender.send(std::mem::take(&mut local_out));
                             }
                         }
@@ -682,7 +669,6 @@ impl GameCheetahEngine {
                             }
 
                             if local_out.len() >= BATCH {
-                                result_count.fetch_add(local_out.len(), Ordering::SeqCst);
                                 let _ = results_sender.send(std::mem::take(&mut local_out));
                             }
                         }
@@ -800,7 +786,6 @@ impl GameCheetahEngine {
                                     }
 
                                     if local_out.len() >= BATCH {
-                                        result_count.fetch_add(local_out.len(), Ordering::Relaxed);
                                         let _ = results_sender.send(std::mem::take(&mut local_out));
                                     }
                                 }
@@ -808,7 +793,6 @@ impl GameCheetahEngine {
                         }
 
                         if !local_out.is_empty() {
-                            result_count.fetch_add(local_out.len(), Ordering::Relaxed);
                             let _ = results_sender.send(local_out);
                         }
                     }

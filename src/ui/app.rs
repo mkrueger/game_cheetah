@@ -167,8 +167,10 @@ impl App {
             }
 
             Message::SwitchSearchType(search_type) => {
+                self.state.remove_freezes(self.state.current_search);
                 if let Some(current_search) = self.state.searches.get_mut(self.state.current_search) {
                     current_search.search_type = search_type;
+                    current_search.clear_results(&self.state.freeze_sender);
                 }
                 Task::none()
             }
@@ -186,7 +188,7 @@ impl App {
                     match search_type.from_string(&current_search.search_value_text) {
                         Ok(_search_value) => {
                             // Check the actual result count, not just search_results
-                            let has_results = current_search.result_count.load(Ordering::Relaxed) > 0 || current_search.get_result_count() > 0;
+                            let has_results = current_search.get_result_count() > 0;
 
                             if !has_results {
                                 self.state.initial_search(search_index);

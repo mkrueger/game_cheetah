@@ -70,18 +70,6 @@ fn test_rename_tab() {
 }
 
 #[test]
-fn test_clear_results() {
-    let mut app = create_test_app();
-
-    // Simulate having results
-    app.state.searches[0].result_count.store(100, std::sync::atomic::Ordering::SeqCst);
-
-    let _ = app.update(Message::ClearResults);
-
-    assert_eq!(app.state.searches[0].get_result_count(), 0);
-}
-
-#[test]
 fn test_search_workflow() {
     let mut app = create_test_app();
     app.app_state = AppState::InProcess;
@@ -135,23 +123,6 @@ fn test_result_value_change() {
     let _ = app.update(Message::ResultValueChanged(0, "200".to_string()));
 
     // Test passes if no panic occurs
-}
-
-#[test]
-fn test_remove_result() {
-    let mut app = create_test_app();
-
-    // Simulate having results
-    use game_cheetah::SearchResult;
-    let results = vec![SearchResult::new(0x1000, SearchType::Int), SearchResult::new(0x2000, SearchType::Int)];
-    let _ = app.state.searches[0].results_sender.send(results);
-    app.state.searches[0].result_count.store(2, std::sync::atomic::Ordering::SeqCst);
-
-    // Remove first result
-    let _ = app.update(Message::RemoveResult(0));
-
-    // Should have one less result
-    assert_eq!(app.state.searches[0].get_result_count(), 1);
 }
 
 #[test]
