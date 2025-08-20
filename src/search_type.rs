@@ -12,6 +12,15 @@ pub enum SearchType {
     Int64,
     Float,
     Double,
+    Unknown, // New type for unknown value searches
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum UnknownComparison {
+    Decreased,
+    Increased,
+    Changed,
+    Unchanged,
 }
 
 impl SearchType {
@@ -24,12 +33,14 @@ impl SearchType {
             SearchType::Int64 => fl!(crate::LANGUAGE_LOADER, "int64-value-item"),
             SearchType::Float => fl!(crate::LANGUAGE_LOADER, "float-value-item"),
             SearchType::Double => fl!(crate::LANGUAGE_LOADER, "double-value-item"),
+            SearchType::Unknown => fl!(crate::LANGUAGE_LOADER, "unknown-value-item"),
         }
     }
 
     pub fn get_byte_length(&self) -> usize {
         match self {
             SearchType::Guess => panic!("guess has no length"),
+            SearchType::Unknown => panic!("unknown has no length"),
             SearchType::Byte => 1,
             SearchType::Short => 2,
             SearchType::Int => 4,
@@ -48,6 +59,7 @@ impl SearchType {
             SearchType::Int64 => fl!(crate::LANGUAGE_LOADER, "int64-descr"),
             SearchType::Float => fl!(crate::LANGUAGE_LOADER, "float-descr"),
             SearchType::Double => fl!(crate::LANGUAGE_LOADER, "double-descr"),
+            SearchType::Unknown => fl!(crate::LANGUAGE_LOADER, "unknown-descr"),
         }
     }
 
@@ -81,6 +93,10 @@ impl SearchType {
                 // For Guess, we don't parse here - it's handled in spawn_parallel_search
                 Ok(SearchValue(*self, txt.as_bytes().to_vec()))
             }
+            SearchType::Unknown => {
+                // Unknown doesn't use text input, return empty
+                Ok(SearchValue(*self, vec![]))
+            }
         }
     }
 }
@@ -95,6 +111,7 @@ impl fmt::Display for SearchType {
             SearchType::Int64 => fl!(crate::LANGUAGE_LOADER, "int64-value-item"),
             SearchType::Float => fl!(crate::LANGUAGE_LOADER, "float-value-item"),
             SearchType::Double => fl!(crate::LANGUAGE_LOADER, "double-value-item"),
+            SearchType::Unknown => fl!(crate::LANGUAGE_LOADER, "unknown-value-item"),
         };
         write!(f, "{}", text)
     }

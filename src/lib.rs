@@ -12,7 +12,7 @@ pub use search_context::*;
 pub mod ui;
 pub use ui::*;
 
-mod state;
+pub mod state;
 pub use state::*;
 mod about_dialog;
 

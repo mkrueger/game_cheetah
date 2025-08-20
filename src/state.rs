@@ -1,4 +1,4 @@
-use crate::{FreezeMessage, MessageCommand, SearchContext, SearchMode, SearchResult, SearchType, SearchValue};
+use crate::{FreezeMessage, MessageCommand, SearchContext, SearchMode, SearchResult, SearchType, SearchValue, UnknownComparison};
 use crossbeam_channel::{select, tick};
 use i18n_embed_fl::fl;
 use memchr::memmem;
@@ -133,11 +133,11 @@ impl GameCheetahEngine {
 
     pub fn initial_search(&mut self, search_index: usize) {
         // Validate index
-        let Some(ctx_view) = self.searches.get(search_index) else {
+        let Some(search_context) = self.searches.get(search_index) else {
             self.error_text = format!("Invalid search index {search_index}");
             return;
         };
-        if !matches!(ctx_view.searching, SearchMode::None) {
+        if !matches!(search_context.searching, SearchMode::None) {
             return;
         }
 
@@ -175,61 +175,8 @@ impl GameCheetahEngine {
                 let mut regions = Vec::new();
                 if let Some(ctx_mut) = self.searches.get_mut(search_index) {
                     for map in maps {
-                        // Skip kernel vsyscall region
-                        if map.start() == 0xffffffffff600000 {
+                        if skip_memory_region(&map) {
                             continue;
-                        }
-
-                        // Skip regions that are likely to cause issues
-                        if map.size() == 0 {
-                            continue;
-                        }
-
-                        if cfg!(target_os = "windows") {
-                            if let Some(file_name) = map.filename() {
-                                if file_name.starts_with("C:\\WINDOWS\\") {
-                                    continue;
-                                }
-                            }
-                        } else if cfg!(target_os = "linux") {
-                            if !map.is_write() {
-                                continue;
-                            }
-                            // Skip if not readable at all
-                            if !map.is_read() {
-                                continue;
-                            }
-                            
-                            // Skip kernel space addresses (very high addresses)
-                            if map.start() > 0x7fffffffffff {
-                                continue;
-                            }
-
-                            // Skip special regions
-                            if let Some(file_name) = map.filename() {
-                                let file_str = file_name.to_string_lossy();
-                                if file_str.starts_with("/usr/")
-                                    || file_str.starts_with("/lib/")
-                                    || file_str.starts_with("/lib64/")
-                                    || file_str.starts_with("/dev/")
-                                    || file_str.starts_with("/proc/")
-                                    || file_str.starts_with("/sys/")
-                                    || file_str == "[vvar]"
-                                    || file_str == "[vdso]"
-                                    || file_str == "[vsyscall]"
-                                {
-                                    continue;
-                                }
-                            }
-                        } else {
-                            if !map.is_write() || map.filename().is_none() || map.size() < 1024 * 1024 {
-                                continue;
-                            }
-                            if let Some(file_name) = map.filename() {
-                                if file_name.starts_with("/usr/lib") || file_name.starts_with("/System/") {
-                                    continue;
-                                }
-                            }
                         }
 
                         let mut size = map.size();
@@ -452,7 +399,7 @@ impl GameCheetahEngine {
             self.error_text = format!("Invalid search index {search_index}");
             return;
         };
-        
+
         let current_bytes = search_context.current_bytes.clone();
         let pid = self.pid;
         let results_sender = search_context.results_sender.clone();
@@ -479,7 +426,7 @@ impl GameCheetahEngine {
                         let results = if matches!(search_data.0, SearchType::Guess) {
                             // For Guess type, try all possible interpretations
                             let mut all_results = Vec::new();
-                            
+
                             // Try as each type
                             for search_type in [
                                 // SearchType::Byte,
@@ -494,7 +441,7 @@ impl GameCheetahEngine {
                                     all_results.extend(typed_results);
                                 }
                             }
-                            
+
                             all_results
                         } else {
                             search_memory(&memory, &search_data.1, search_data.0, *start)
@@ -528,6 +475,356 @@ impl GameCheetahEngine {
         self.process_name = process.name.clone();
         self.show_process_window = false;
     }
+
+    pub fn take_memory_snapshot(&mut self, search_index: usize) {
+        let Some(search_context) = self.searches.get_mut(search_index) else {
+            return;
+        };
+
+        search_context.searching = SearchMode::Memory;
+        search_context.clear_memory_snapshot();
+
+        match get_process_maps(self.pid) {
+            Ok(maps) => {
+                let mut total_bytes = 0;
+                let mut regions = Vec::new();
+
+                for map in maps {
+                    if skip_memory_region(&map) {
+                        continue;
+                    }
+
+                    total_bytes += map.size();
+                    regions.push((map.start(), map.size()));
+                }
+
+                search_context.total_bytes = total_bytes;
+                search_context.current_bytes.store(0, Ordering::SeqCst);
+
+                self.spawn_snapshot_capture(search_index, regions);
+            }
+            Err(e) => {
+                self.error_text = format!("Failed to get process maps: {}", e);
+                // Set search complete even on error so UI doesn't get stuck
+                search_context.search_complete.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+
+    fn spawn_snapshot_capture(&mut self, search_index: usize, regions: Vec<(usize, usize)>) {
+        let Some(search_context) = self.searches.get_mut(search_index) else {
+            return;
+        };
+
+        let pid = self.pid;
+        let current_bytes = search_context.current_bytes.clone();
+        let memory_snapshot = search_context.memory_snapshot.clone();
+        let search_complete = search_context.search_complete.clone();
+
+        search_complete.store(false, Ordering::SeqCst);
+
+        std::thread::spawn(move || {
+            for (start, size) in regions.iter() {
+                let handle = match pid.try_into_process_handle() {
+                    Ok(h) => h,
+                    Err(_) => {
+                        current_bytes.fetch_add(*size, Ordering::SeqCst);
+                        continue;
+                    }
+                };
+
+                const CHUNK_SIZE: usize = 10 * 1024 * 1024; // 10MB
+                let mut region_offset = 0;
+                while region_offset < *size {
+                    let chunk_size = (*size - region_offset).min(CHUNK_SIZE);
+                    let chunk_start = *start + region_offset;
+
+                    if let Ok(memory) = copy_address(chunk_start, chunk_size, &handle) {
+                        let arc_page: Arc<[u8]> = Arc::<[u8]>::from(memory.into_boxed_slice());
+                        if let Ok(mut snap) = memory_snapshot.write() {
+                            snap.push((chunk_start, arc_page));
+                        }
+                    }
+                    region_offset += chunk_size;
+                    current_bytes.fetch_add(chunk_size, Ordering::SeqCst);
+                }
+            }
+
+            search_complete.store(true, Ordering::SeqCst);
+        });
+    }
+
+    pub fn unknown_search_compare(&mut self, search_index: usize, comparison: UnknownComparison) {
+        let Some(search_context) = self.searches.get_mut(search_index) else {
+            return;
+        };
+        search_context.searching = SearchMode::Percent;
+
+        let old_results = search_context.collect_results();
+        if old_results.len() < 100000 {
+            search_context.old_results.push((*old_results).clone());
+        }
+
+        // Reset channel/cache
+        let (tx, rx) = crossbeam_channel::unbounded();
+        search_context.results_sender = tx;
+        search_context.results_receiver = rx;
+        search_context.result_count.store(0, Ordering::SeqCst);
+        search_context.invalidate_cache();
+
+        let pid = self.pid;
+        let current_bytes = search_context.current_bytes.clone();
+        let result_count = search_context.result_count.clone();
+        let results_sender = search_context.results_sender.clone();
+        let search_complete = search_context.search_complete.clone();
+        let cache_valid = search_context.cache_valid.clone();
+        let memory_snapshot = search_context.memory_snapshot.clone();
+
+        // Progress baseline
+        search_context.total_bytes = if old_results.is_empty() {
+            if let Ok(snap) = memory_snapshot.read() {
+                snap.iter().map(|(_, p)| p.len()).sum()
+            } else {
+                0
+            }
+        } else {
+            old_results.len()
+        };
+
+        current_bytes.store(0, Ordering::SeqCst);
+        search_complete.store(false, Ordering::SeqCst);
+
+        std::thread::spawn(move || {
+            let _handle = match pid.try_into_process_handle() {
+                Ok(h) => h,
+                Err(_) => {
+                    search_complete.store(true, Ordering::SeqCst);
+                    return;
+                }
+            };
+
+            const BATCH: usize = 4096;
+            let out: Vec<SearchResult> = Vec::with_capacity(BATCH);
+
+            if old_results.is_empty() {
+                // First pass: compare snapshot vs current, 4/8-byte aligned offsets only
+                let pages: Vec<(usize, Arc<[u8]>)> = if let Ok(snap) = memory_snapshot.read() {
+                    snap.iter().map(|(b, p)| (*b, Arc::clone(p))).collect()
+                } else {
+                    Vec::new()
+                };
+
+                pages.par_iter().for_each(|(base, old_mem)| {
+                    let len = old_mem.len();
+                    // Each worker gets its own handle (avoid sharing across threads)
+                    let handle = match pid.try_into_process_handle() {
+                        Ok(h) => h,
+                        Err(_) => {
+                            current_bytes.fetch_add(len, Ordering::SeqCst);
+                            return;
+                        }
+                    };
+
+                    if let Ok(new_mem) = copy_address(*base, len, &handle) {
+                        let mut local_out = Vec::with_capacity(BATCH);
+
+                        // 4-byte aligned
+                        for i in (0..=(len.saturating_sub(4))).step_by(4) {
+                            let oldb = &old_mem[i..i + 4];
+                            let newb = &new_mem[i..i + 4];
+
+                            // Fast equality prefilter for Unchanged/Changed
+                            if matches!(comparison, UnknownComparison::Unchanged | UnknownComparison::Changed) && oldb == newb {
+                                if matches!(comparison, UnknownComparison::Unchanged) {
+                                    // For floats we still accept exact-equal as unchanged without decoding
+                                    local_out.push(SearchResult::new_with_bytes(*base + i, SearchType::Int, newb));
+                                    local_out.push(SearchResult::new_with_bytes(*base + i, SearchType::Float, newb));
+                                }
+                            } else {
+                                if compare_values(oldb, newb, SearchType::Int, comparison) {
+                                    local_out.push(SearchResult::new_with_bytes(*base + i, SearchType::Int, newb));
+                                }
+                                if compare_values(oldb, newb, SearchType::Float, comparison) {
+                                    local_out.push(SearchResult::new_with_bytes(*base + i, SearchType::Float, newb));
+                                }
+                            }
+
+                            if local_out.len() >= BATCH {
+                                result_count.fetch_add(local_out.len(), Ordering::SeqCst);
+                                let _ = results_sender.send(std::mem::take(&mut local_out));
+                            }
+                        }
+
+                        // 8-byte aligned
+                        for i in (0..=(len.saturating_sub(8))).step_by(8) {
+                            let oldb = &old_mem[i..i + 8];
+                            let newb = &new_mem[i..i + 8];
+
+                            if matches!(comparison, UnknownComparison::Unchanged | UnknownComparison::Changed) && oldb == newb {
+                                if matches!(comparison, UnknownComparison::Unchanged) {
+                                    // Exact-equal treat as unchanged, skip decoding
+                                    local_out.push(SearchResult::new_with_bytes(*base + i, SearchType::Double, newb));
+                                }
+                            } else if compare_values(oldb, newb, SearchType::Double, comparison) {
+                                local_out.push(SearchResult::new_with_bytes(*base + i, SearchType::Double, newb));
+                            }
+
+                            if local_out.len() >= BATCH {
+                                result_count.fetch_add(local_out.len(), Ordering::SeqCst);
+                                let _ = results_sender.send(std::mem::take(&mut local_out));
+                            }
+                        }
+
+                        if !local_out.is_empty() {
+                            result_count.fetch_add(local_out.len(), Ordering::SeqCst);
+                            let _ = results_sender.send(local_out);
+                        }
+                    }
+
+                    current_bytes.fetch_add(len, Ordering::SeqCst);
+                });
+
+                if let Ok(mut snap) = memory_snapshot.write() {
+                    snap.clear();
+                    snap.shrink_to_fit();
+                }
+            } else {
+                // Subsequent passes: group by page and read in windows
+                const PAGE: usize = 4096; // or use region granularity if known
+                let mut processed = 0usize;
+
+                // Collect windows: map page_base -> Vec<(addr, SearchType)>
+                let mut per_page: std::collections::BTreeMap<usize, Vec<(usize, SearchType)>> = std::collections::BTreeMap::new();
+                for r in old_results.iter() {
+                    per_page.entry(r.addr & !(PAGE - 1)).or_default().push((r.addr, r.search_type));
+                }
+
+                for (_page_base, items) in per_page {
+                    // Coalesce into minimal [min_addr, max_addr+len) span
+                    let mut min_addr = usize::MAX;
+                    let mut max_addr = 0usize;
+                    let item_len = items.len();
+                    for (addr, ty) in &items {
+                        let len = ty.get_byte_length();
+                        min_addr = min_addr.min(*addr);
+                        max_addr = max_addr.max(*addr + len);
+                    }
+                    let span_len = max_addr - min_addr;
+
+                    let handle = match pid.try_into_process_handle() {
+                        Ok(h) => h,
+                        Err(_) => break,
+                    };
+
+                    if let Ok(buf) = copy_address(min_addr, span_len, &handle) {
+                        let mut local_out = Vec::with_capacity(BATCH);
+                        for (addr, ty) in items {
+                            let len = ty.get_byte_length();
+                            let off = addr - min_addr;
+                            let newb = &buf[off..off + len];
+
+                            // Use stored bytes from the result for oldb
+                            // Safety: results were created with new_with_bytes
+                            // If not present, skip
+                            if let Some(r) = old_results.iter().find(|x| x.addr == addr && x.search_type == ty) {
+                                if let Some(oldb) = r.stored_bytes() {
+                                    // Fast equality early-out
+                                    if matches!(comparison, UnknownComparison::Unchanged | UnknownComparison::Changed) && oldb == newb {
+                                        if matches!(comparison, UnknownComparison::Unchanged) {
+                                            local_out.push(SearchResult::new_with_bytes(addr, ty, newb));
+                                        }
+                                    } else if compare_values(oldb, newb, ty, comparison) {
+                                        local_out.push(SearchResult::new_with_bytes(addr, ty, newb));
+                                    }
+                                }
+                            }
+
+                            if local_out.len() >= BATCH {
+                                result_count.fetch_add(local_out.len(), Ordering::SeqCst);
+                                let _ = results_sender.send(std::mem::take(&mut local_out));
+                            }
+                        }
+
+                        if !local_out.is_empty() {
+                            result_count.fetch_add(local_out.len(), Ordering::SeqCst);
+                            let _ = results_sender.send(local_out);
+                        }
+                    }
+                    processed += item_len;
+
+                    current_bytes.store(processed, Ordering::SeqCst);
+                }
+            }
+
+            if !out.is_empty() {
+                result_count.fetch_add(out.len(), Ordering::SeqCst);
+                let _ = results_sender.send(out);
+            }
+
+            cache_valid.store(false, Ordering::Release);
+            search_complete.store(true, Ordering::SeqCst);
+        });
+    }
+}
+
+fn skip_memory_region(map: &proc_maps::MapRange) -> bool {
+    if map.start() == 0xffffffffff600000 {
+        return true;
+    }
+    if map.size() == 0 {
+        return true;
+    }
+    // Skip kernel vsyscall region
+
+    // Skip regions that are likely to cause issues
+
+    if cfg!(target_os = "windows") {
+        if let Some(file_name) = map.filename() {
+            if file_name.starts_with("C:\\WINDOWS\\") {
+                return true;
+            }
+        }
+    } else if cfg!(target_os = "linux") {
+        if !map.is_write() {
+            return true;
+        }
+        // Skip if not readable at all
+        if !map.is_read() {
+            return true;
+        }
+
+        // Skip kernel space addresses (very high addresses)
+        if map.start() > 0x7fffffffffff {
+            return true;
+        }
+
+        // Skip special regions
+        if let Some(file_name) = map.filename() {
+            let file_str = file_name.to_string_lossy();
+            if file_str.starts_with("/usr/")
+                || file_str.starts_with("/lib/")
+                || file_str.starts_with("/lib64/")
+                || file_str.starts_with("/dev/")
+                || file_str.starts_with("/proc/")
+                || file_str.starts_with("/sys/")
+                || file_str == "[vvar]"
+                || file_str == "[vdso]"
+                || file_str == "[vsyscall]"
+            {
+                return true;
+            }
+        }
+    } else {
+        if !map.is_write() || map.filename().is_none() || map.size() < 1024 * 1024 {
+            return true;
+        }
+        if let Some(file_name) = map.filename() {
+            if file_name.starts_with("/usr/lib") || file_name.starts_with("/System/") {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn update_results<T>(old_results: &[SearchResult], value_text: &str, handle: &T) -> Vec<SearchResult>
@@ -589,7 +886,7 @@ where
                     };
 
                     if matches {
-                        results.push(*result);
+                        results.push(result.clone());
                     }
                 }
             }
@@ -701,6 +998,9 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
             for pos in finder.find_iter(memory_data) {
                 result.push(SearchResult::new(pos + start, search_type));
             }
+        }
+        SearchType::Unknown => {
+            eprintln!("Unknown search type encountered, this should not happen in production code.");
         }
     }
 
@@ -993,4 +1293,137 @@ fn search_u64_simd(memory_data: &[u8], search_value: u64, start: usize) -> Vec<S
     }
 
     results
+}
+
+// Helper function to compare values based on type and comparison
+fn float_eps(old: f32) -> f32 {
+    // 0.1% relative or 1e-4 absolute minimum
+    let rel = (old.abs() * 1e-3).max(1e-4);
+    rel
+}
+fn double_eps(old: f64) -> f64 {
+    // 0.01% relative or 1e-6 absolute minimum
+    let rel = (old.abs() * 1e-4).max(1e-6);
+    rel
+}
+
+// Helper function to compare values based on type and comparison
+pub fn compare_values(old_bytes: &[u8], new_bytes: &[u8], search_type: SearchType, comparison: UnknownComparison) -> bool {
+    match search_type {
+        SearchType::Byte => {
+            let old = old_bytes[0] as i16;
+            let new = new_bytes[0] as i16;
+            match comparison {
+                UnknownComparison::Decreased => new < old,
+                UnknownComparison::Increased => new > old,
+                UnknownComparison::Changed => new != old,
+                UnknownComparison::Unchanged => new == old,
+            }
+        }
+        SearchType::Short => {
+            let old = i16::from_le_bytes([old_bytes[0], old_bytes[1]]);
+            let new = i16::from_le_bytes([new_bytes[0], new_bytes[1]]);
+            match comparison {
+                UnknownComparison::Decreased => new < old,
+                UnknownComparison::Increased => new > old,
+                UnknownComparison::Changed => new != old,
+                UnknownComparison::Unchanged => new == old,
+            }
+        }
+        SearchType::Int => {
+            let old = i32::from_le_bytes([old_bytes[0], old_bytes[1], old_bytes[2], old_bytes[3]]);
+            let new = i32::from_le_bytes([new_bytes[0], new_bytes[1], new_bytes[2], new_bytes[3]]);
+            match comparison {
+                UnknownComparison::Decreased => new < old,
+                UnknownComparison::Increased => new > old,
+                UnknownComparison::Changed => new != old,
+                UnknownComparison::Unchanged => new == old,
+            }
+        }
+        SearchType::Int64 => {
+            let old = i64::from_le_bytes([
+                old_bytes[0],
+                old_bytes[1],
+                old_bytes[2],
+                old_bytes[3],
+                old_bytes[4],
+                old_bytes[5],
+                old_bytes[6],
+                old_bytes[7],
+            ]);
+            let new = i64::from_le_bytes([
+                new_bytes[0],
+                new_bytes[1],
+                new_bytes[2],
+                new_bytes[3],
+                new_bytes[4],
+                new_bytes[5],
+                new_bytes[6],
+                new_bytes[7],
+            ]);
+            match comparison {
+                UnknownComparison::Decreased => new < old,
+                UnknownComparison::Increased => new > old,
+                UnknownComparison::Changed => new != old,
+                UnknownComparison::Unchanged => new == old,
+            }
+        }
+        SearchType::Float => {
+            let old = f32::from_le_bytes([old_bytes[0], old_bytes[1], old_bytes[2], old_bytes[3]]);
+            let new = f32::from_le_bytes([new_bytes[0], new_bytes[1], new_bytes[2], new_bytes[3]]);
+            if old.is_finite() && new.is_finite() {
+                let eps = float_eps(old);
+                match comparison {
+                    UnknownComparison::Decreased => new < old - eps,
+                    UnknownComparison::Increased => new > old + eps,
+                    UnknownComparison::Changed => (new - old).abs() > eps,
+                    UnknownComparison::Unchanged => (new - old).abs() <= eps,
+                }
+            } else {
+                match comparison {
+                    UnknownComparison::Changed => new != old,
+                    UnknownComparison::Unchanged => new == old,
+                    _ => false,
+                }
+            }
+        }
+        SearchType::Double => {
+            let old = f64::from_le_bytes([
+                old_bytes[0],
+                old_bytes[1],
+                old_bytes[2],
+                old_bytes[3],
+                old_bytes[4],
+                old_bytes[5],
+                old_bytes[6],
+                old_bytes[7],
+            ]);
+            let new = f64::from_le_bytes([
+                new_bytes[0],
+                new_bytes[1],
+                new_bytes[2],
+                new_bytes[3],
+                new_bytes[4],
+                new_bytes[5],
+                new_bytes[6],
+                new_bytes[7],
+            ]);
+            if old.is_finite() && new.is_finite() {
+                let eps = double_eps(old);
+                match comparison {
+                    UnknownComparison::Decreased => new < old - eps,
+                    UnknownComparison::Increased => new > old + eps,
+                    UnknownComparison::Changed => (new - old).abs() > eps,
+                    UnknownComparison::Unchanged => (new - old).abs() <= eps,
+                }
+            } else {
+                match comparison {
+                    UnknownComparison::Changed => new != old,
+                    UnknownComparison::Unchanged => new == old,
+                    _ => false,
+                }
+            }
+        }
+        _ => false,
+    }
 }

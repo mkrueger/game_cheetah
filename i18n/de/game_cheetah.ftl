@@ -93,3 +93,13 @@ about-dialog-description =
     Speicheränderungen können zu Spiel oder Computerabstürzen führen. Verwendung auf eigenes Risiko.
 about-dialog-ok=OK
 about-dialog-created_by = Programmiert von { $authors }
+
+unknown-value-item = Unbekannt
+unknown-descr = Unbekannter Wert
+compare-label = Vergleichen:
+decreased-button = Verringert
+increased-button = Erhöht
+changed-button = Geändert
+unchanged-button = Unverändert
+search-type-label = Suchtyp:
+unknown-search-description = Speicherwerte vergleichen ohne den genauen Wert zu kennen

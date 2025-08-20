@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use crate::{FreezeMessage, GameCheetahEngine, SearchResult, SearchType};
+use crate::{FreezeMessage, GameCheetahEngine, SearchResult, SearchType, UnknownComparison};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -33,9 +33,13 @@ pub struct SearchContext {
     pub old_results: Vec<Vec<SearchResult>>,
     pub search_complete: Arc<AtomicBool>,
 
-    // Changed to Arc<Vec> for cheap cloning - no Mutex needed since Vec is immutable
+    // Changed to Arc<Vec> for cheap cloning
     pub cached_results: Arc<RwLock<Option<Arc<Vec<SearchResult>>>>>,
     pub cache_valid: Arc<AtomicBool>,
+
+    // For unknown searches - store memory snapshots
+    pub memory_snapshot: Arc<RwLock<Vec<(usize, Arc<[u8]>)>>>,
+    pub unknown_comparison: Option<UnknownComparison>,
 }
 
 impl SearchContext {
@@ -57,6 +61,22 @@ impl SearchContext {
 
             cached_results: Arc::new(RwLock::new(None)),
             cache_valid: Arc::new(AtomicBool::new(false)),
+
+            memory_snapshot: Arc::new(RwLock::new(Vec::new())),
+            unknown_comparison: None,
+        }
+    }
+
+    pub fn store_memory_snapshot(&self, address: usize, data: Vec<u8>) {
+        if let Ok(mut snapshot) = self.memory_snapshot.write() {
+            snapshot.push((address, Arc::<[u8]>::from(data.into_boxed_slice())));
+        }
+    }
+
+    pub fn clear_memory_snapshot(&self) {
+        if let Ok(mut snapshot) = self.memory_snapshot.write() {
+            snapshot.clear();
+            snapshot.shrink_to_fit();
         }
     }
 
@@ -143,6 +163,12 @@ impl SearchContext {
         self.cache_valid.store(false, Ordering::Release);
         if let Ok(mut cache) = self.cached_results.write() {
             *cache = None;
+        }
+    }
+
+    pub fn update_search_mode(&mut self) {
+        if self.search_complete.load(Ordering::Acquire) && !matches!(self.searching, SearchMode::None) {
+            self.searching = SearchMode::None;
         }
     }
 }

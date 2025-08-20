@@ -91,3 +91,14 @@ about-dialog-description =
     Keep in mind that altering a game memory contents may lead to game and/or computer crashes. Use at your own risk.
 about-dialog-ok=OK
 about-dialog-created_by = Created by { $authors }
+
+unknown-value-item = Unknown
+unknown-descr = Unknown value
+compare-label = Compare:
+decreased-button = Decreased
+increased-button = Increased
+changed-button = Changed
+unchanged-button = Unchanged
+search-type-label = Search Type:
+unknown-search-description = Compare memory values without knowing the exact value
+

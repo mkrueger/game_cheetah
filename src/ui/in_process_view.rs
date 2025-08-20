@@ -2,15 +2,17 @@ use std::sync::atomic::Ordering;
 
 use i18n_embed_fl::fl;
 use iced::{
-    alignment, widget::{button, checkbox, column, container, horizontal_rule, pick_list, progress_bar, row, scrollable, text, text_input, vertical_rule}, Element, Length
+    Element, Length, alignment,
+    widget::{button, checkbox, column, container, horizontal_rule, pick_list, progress_bar, row, scrollable, text, text_input, vertical_rule},
 };
-use process_memory::{copy_address, TryIntoProcessHandle};
+use process_memory::{TryIntoProcessHandle, copy_address};
 
-use crate::{app::App, message::Message, SearchMode, SearchType, SearchValue};
+use crate::{SearchMode, SearchType, SearchValue, app::App, message::Message};
 
 fn search_ui(app: &App) -> Element<'_, Message> {
     let search_types = vec![
         SearchType::Guess,
+        SearchType::Unknown,
         SearchType::Short,
         SearchType::Int,
         SearchType::Int64,
@@ -22,11 +24,13 @@ fn search_ui(app: &App) -> Element<'_, Message> {
     let value_text = &current_search_context.search_value_text;
     let search_results = current_search_context.get_result_count();
     let is_search_complete = current_search_context.search_complete.load(Ordering::SeqCst);
+    let can_undo = !current_search_context.old_results.is_empty();
     let show_error = !current_search_context.search_value_text.is_empty()
         && current_search_context
             .search_type
             .from_string(&current_search_context.search_value_text)
-            .is_err();
+            .is_err()
+        && selected_type != SearchType::Unknown; // Don't show error for Unknown type
     let auto_show_treshold = 20;
 
     // Get the current search name for the header
@@ -45,103 +49,162 @@ fn search_ui(app: &App) -> Element<'_, Message> {
                 })
         ),
         horizontal_rule(1),
-        row![
-            text(fl!(crate::LANGUAGE_LOADER, "value-label")),
-            text_input(
-                &fl!(crate::LANGUAGE_LOADER, "search-value-label", valuetype = selected_type.get_description_text()),
-                value_text
-            )
-            .on_input(|v| Message::SearchValueChanged(v))
-            .on_submit(Message::Search)
-            .padding(10)
-            .width(Length::Fill),
-            pick_list(search_types.clone(), Some(selected_type), |t| Message::SwitchSearchType(t)),
-            if show_error {
-                text(fl!(crate::LANGUAGE_LOADER, "invalid-number-error")).style(|theme: &iced::Theme| iced::widget::text::Style {
-                    color: Some(theme.palette().danger.into()),
-                })
-            } else {
-                text("")
-            }
-        ]
-        .spacing(10)
-        .align_y(alignment::Alignment::Center),
-        if !matches!(current_search_context.searching, SearchMode::None) {
-            let current_bytes = current_search_context.current_bytes.load(Ordering::Acquire);
-            //let percentage = current_bytes as f32 / current_search_context.total_bytes as f32;
+        // Conditionally show value input or unknown search info
+        if selected_type == SearchType::Unknown {
             row![
-                progress_bar(0.0..=current_search_context.total_bytes as f32, current_bytes as f32).width(Length::Fill),
-                if current_search_context.searching == SearchMode::Percent {
-                    text(
-                        fl!(
-                            crate::LANGUAGE_LOADER,
-                            "update-numbers-progress",
-                            current = current_bytes,
-                            total = current_search_context.total_bytes
-                        )
-                        .chars()
-                        .filter(|c| c.is_ascii())
-                        .collect::<String>(),
-                    )
-                } else {
-                    let bb = gabi::BytesConfig::default();
-                    let current_bytes_out = bb.bytes(current_bytes as u64).to_string();
-                    let total_bytes_out = bb.bytes(current_search_context.total_bytes as u64).to_string();
-                    text(
-                        fl!(
-                            crate::LANGUAGE_LOADER,
-                            "search-memory-progress",
-                            current = current_bytes_out,
-                            total = total_bytes_out
-                        )
-                        .chars()
-                        .filter(|c| c.is_ascii())
-                        .collect::<String>(),
-                    )
-                }
+                text(fl!(crate::LANGUAGE_LOADER, "search-type-label")),
+                pick_list(search_types.clone(), Some(selected_type), |t| Message::SwitchSearchType(t)),
+                text(fl!(crate::LANGUAGE_LOADER, "unknown-search-description"))
             ]
-            .spacing(10.0)
+            .spacing(10)
             .align_y(alignment::Alignment::Center)
         } else {
-            if !is_search_complete {
-                row![{
-                    let b = button(text(fl!(crate::LANGUAGE_LOADER, "initial-search-button")));
-                    if show_error { b } else { b.on_press(Message::Search) }
-                }]
-                .spacing(10.0)
-            } else {
+            row![
+                text(fl!(crate::LANGUAGE_LOADER, "value-label")),
+                text_input(
+                    &fl!(crate::LANGUAGE_LOADER, "search-value-label", valuetype = selected_type.get_description_text()),
+                    value_text
+                )
+                .on_input(|v| Message::SearchValueChanged(v))
+                .on_submit(Message::Search)
+                .padding(10)
+                .width(Length::Fill),
+                pick_list(search_types.clone(), Some(selected_type), |t| Message::SwitchSearchType(t)),
+                if show_error {
+                    text(fl!(crate::LANGUAGE_LOADER, "invalid-number-error")).style(|theme: &iced::Theme| iced::widget::text::Style {
+                        color: Some(theme.palette().danger.into()),
+                    })
+                } else {
+                    text("")
+                }
+            ]
+            .spacing(10)
+            .align_y(alignment::Alignment::Center)
+        },
+        if !matches!(current_search_context.searching, SearchMode::None) {
+            let current_bytes = current_search_context.current_bytes.load(Ordering::Acquire);
+            column![
                 row![
-                    {
-                        let b = button(text(fl!(crate::LANGUAGE_LOADER, "update-button")));
-                        if show_error { b } else { b.on_press(Message::Search) }
-                    },
-                    button(text(fl!(crate::LANGUAGE_LOADER, "clear-button"))).on_press(Message::ClearResults),
-                    button(text(fl!(crate::LANGUAGE_LOADER, "undo-button"))).on_press(Message::Undo),
-                    if search_results >= auto_show_treshold {
-                        if app.state.show_results {
-                            button(text(fl!(crate::LANGUAGE_LOADER, "hide-results-button"))).on_press(Message::ToggleShowResult)
-                        } else {
-                            button(text(fl!(crate::LANGUAGE_LOADER, "show-results-button"))).on_press(Message::ToggleShowResult)
-                        }
-                    } else {
-                        // Return an invisible button or a placeholder to match the type
-                        button("").style(|_, _| button::Style::default())
-                    },
-                    text(
-                        fl!(crate::LANGUAGE_LOADER, "found-results-label", results = search_results)
+                    progress_bar(0.0..=current_search_context.total_bytes as f32, current_bytes as f32).width(Length::Fill),
+                    if current_search_context.searching == SearchMode::Percent {
+                        text(
+                            fl!(
+                                crate::LANGUAGE_LOADER,
+                                "update-numbers-progress",
+                                current = current_bytes,
+                                total = current_search_context.total_bytes
+                            )
                             .chars()
                             .filter(|c| c.is_ascii())
-                            .collect::<String>()
-                    )
+                            .collect::<String>(),
+                        )
+                    } else {
+                        let bb = gabi::BytesConfig::default();
+                        let current_bytes_out = bb.bytes(current_bytes as u64).to_string();
+                        let total_bytes_out = bb.bytes(current_search_context.total_bytes as u64).to_string();
+                        text(
+                            fl!(
+                                crate::LANGUAGE_LOADER,
+                                "search-memory-progress",
+                                current = current_bytes_out,
+                                total = total_bytes_out
+                            )
+                            .chars()
+                            .filter(|c| c.is_ascii())
+                            .collect::<String>(),
+                        )
+                    }
                 ]
-                .align_y(alignment::Alignment::Center)
                 .spacing(10.0)
+                .align_y(alignment::Alignment::Center)
+            ]
+        } else {
+            if !is_search_complete {
+                column![
+                    row![{
+                        let b = button(text(fl!(crate::LANGUAGE_LOADER, "initial-search-button")));
+                        if show_error && selected_type != SearchType::Unknown {
+                            b
+                        } else {
+                            b.on_press(Message::Search)
+                        }
+                    }]
+                    .spacing(10.0)
+                ]
+            } else {
+                // Different buttons for Unknown search type
+                if selected_type == SearchType::Unknown {
+                    column![
+                        row![
+                            button(text(fl!(crate::LANGUAGE_LOADER, "decreased-button"))).on_press(Message::UnknownSearchDecrease),
+                            button(text(fl!(crate::LANGUAGE_LOADER, "increased-button"))).on_press(Message::UnknownSearchIncrease),
+                            button(text(fl!(crate::LANGUAGE_LOADER, "changed-button"))).on_press(Message::UnknownSearchChanged),
+                            button(text(fl!(crate::LANGUAGE_LOADER, "unchanged-button"))).on_press(Message::UnknownSearchUnchanged),
+                            container(vertical_rule(1)).height(Length::Fixed(24.0)),
+                            button(text(fl!(crate::LANGUAGE_LOADER, "clear-button"))).on_press(Message::ClearResults),
+                            {
+                                let b = button(text(fl!(crate::LANGUAGE_LOADER, "undo-button")));
+                                if can_undo { b.on_press(Message::Undo) } else { b }
+                            },
+                            if search_results >= auto_show_treshold {
+                                if app.state.show_results {
+                                    button(text(fl!(crate::LANGUAGE_LOADER, "hide-results-button"))).on_press(Message::ToggleShowResult)
+                                } else {
+                                    button(text(fl!(crate::LANGUAGE_LOADER, "show-results-button"))).on_press(Message::ToggleShowResult)
+                                }
+                            } else {
+                                button("").style(|_, _| button::Style::default())
+                            }
+                        ]
+                        .align_y(alignment::Alignment::Center)
+                        .spacing(10.0),
+                        row![text(if search_results > 0 || can_undo {
+                            fl!(crate::LANGUAGE_LOADER, "found-results-label", results = search_results)
+                                .chars()
+                                .filter(|c| c.is_ascii())
+                                .collect::<String>()
+                        } else {
+                            String::new()
+                        })]
+                    ]
+                } else {
+                    // Normal search buttons
+                    column![
+                        row![
+                            {
+                                let b = button(text(fl!(crate::LANGUAGE_LOADER, "update-button")));
+                                if show_error { b } else { b.on_press(Message::Search) }
+                            },
+                            button(text(fl!(crate::LANGUAGE_LOADER, "clear-button"))).on_press(Message::ClearResults),
+                            {
+                                let b = button(text(fl!(crate::LANGUAGE_LOADER, "undo-button")));
+                                if can_undo { b.on_press(Message::Undo) } else { b }
+                            },
+                            if search_results >= auto_show_treshold {
+                                if app.state.show_results {
+                                    button(text(fl!(crate::LANGUAGE_LOADER, "hide-results-button"))).on_press(Message::ToggleShowResult)
+                                } else {
+                                    button(text(fl!(crate::LANGUAGE_LOADER, "show-results-button"))).on_press(Message::ToggleShowResult)
+                                }
+                            } else {
+                                button("").style(|_, _| button::Style::default())
+                            },
+                            text(
+                                fl!(crate::LANGUAGE_LOADER, "found-results-label", results = search_results)
+                                    .chars()
+                                    .filter(|c| c.is_ascii())
+                                    .collect::<String>()
+                            )
+                        ]
+                        .align_y(alignment::Alignment::Center)
+                        .spacing(10.0)
+                    ]
+                }
             }
         },
         if search_results > 0 && search_results < auto_show_treshold || app.state.show_results {
             render_result_table(app)
         } else {
-            // Return an empty element as a placeholder
             column![].into()
         }
     ]
@@ -159,7 +222,8 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
 
     // Collect all results for display
     let results = current_search_context.collect_results();
-    let show_search_types = matches!(current_search_context.search_type, SearchType::Guess);
+    let show_search_types =
+        matches!(current_search_context.search_type, SearchType::Guess) || matches!(current_search_context.search_type, SearchType::Unknown);
 
     // Limit displayed results for performance
     const MAX_DISPLAY_RESULTS: usize = 1000;

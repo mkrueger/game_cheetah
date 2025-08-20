@@ -44,4 +44,9 @@ pub enum Message {
     MemoryEditorBeginEdit,
     MemoryEditorEndEdit,
     SortProcesses(ProcessSortColumn),
+
+    UnknownSearchDecrease,
+    UnknownSearchIncrease,
+    UnknownSearchChanged,
+    UnknownSearchUnchanged,
 }

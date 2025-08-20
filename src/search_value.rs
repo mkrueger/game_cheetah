@@ -34,20 +34,57 @@ impl Display for SearchValue {
                 f64::from_le_bytes(arr).to_string()
             }),
             Guess => None,
+            Unknown => None,
         }
         .ok_or(std::fmt::Error)?;
         f.write_str(&s)
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct SearchResult {
     pub addr: usize,
     pub search_type: SearchType,
+    // Inline 0..=8 bytes. Actual logical length is determined by search_type.get_byte_length().
+    pub stored: Option<[u8; 8]>,
 }
 
 impl SearchResult {
     pub fn new(addr: usize, search_type: SearchType) -> Self {
-        Self { addr, search_type }
+        Self {
+            addr,
+            search_type,
+            stored: None,
+        }
+    }
+
+    pub fn new_with_bytes(addr: usize, search_type: SearchType, bytes: &[u8]) -> Self {
+        let mut buf = [0u8; 8];
+        let needed = search_type.get_byte_length().min(8);
+        let copy_len = needed.min(bytes.len());
+        if copy_len > 0 {
+            buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
+            Self {
+                addr,
+                search_type,
+                stored: Some(buf),
+            }
+        } else {
+            // For types without a fixed byte length (e.g., Guess/Unknown), don't store bytes.
+            Self {
+                addr,
+                search_type,
+                stored: None,
+            }
+        }
+    }
+
+    // Returns a slice to the stored bytes matching the SearchType's byte length.
+    pub fn stored_bytes(&self) -> Option<&[u8]> {
+        let len = self.search_type.get_byte_length().min(8);
+        if len == 0 {
+            return None;
+        }
+        self.stored.as_ref().map(|arr| &arr[..len])
     }
 }

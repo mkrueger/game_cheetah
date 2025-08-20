@@ -12,8 +12,11 @@ use iced::{
 };
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 
-use crate::ui::process_selection::{ProcessSortColumn, SortDirection};
 use crate::{FreezeMessage, GameCheetahEngine, MessageCommand, SearchMode, SearchValue, message::Message};
+use crate::{
+    SearchType, UnknownComparison,
+    ui::process_selection::{ProcessSortColumn, SortDirection},
+};
 
 #[derive(Default, PartialEq, Debug, Clone, Copy)]
 pub enum AppState {
@@ -47,6 +50,10 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         if SystemTime::now().duration_since(self.state.last_process_update).unwrap().as_millis() > 500 {
             self.state.update_process_data();
+        }
+        // Check and update search modes for all searches
+        for search_context in &mut self.state.searches {
+            search_context.update_search_mode();
         }
 
         match message {
@@ -168,10 +175,14 @@ impl App {
             Message::Search => {
                 let search_index = self.state.current_search;
                 if let Some(current_search) = self.state.searches.get_mut(search_index) {
+                    let search_type = current_search.search_type;
+                    if current_search.search_type == SearchType::Unknown {
+                        self.state.take_memory_snapshot(self.state.current_search);
+                        return Task::none();
+                    }
                     if current_search.search_value_text.is_empty() {
                         return Task::none();
                     }
-                    let search_type = current_search.search_type;
                     match search_type.from_string(&current_search.search_value_text) {
                         Ok(_search_value) => {
                             // Check the actual result count, not just search_results
@@ -238,7 +249,7 @@ impl App {
                         let results = current_search.collect_results();
 
                         if index < results.len() {
-                            let result = results[index];
+                            let result = &results[index];
                             if let Ok(value) = result.search_type.from_string(&value_text) {
                                 handle.put_address(result.addr, &value.1).unwrap_or_default();
                                 if current_search.freezed_addresses.contains(&result.addr) {
@@ -427,6 +438,36 @@ impl App {
                     self.process_sort_direction = SortDirection::Ascending;
                 }
                 iced::Task::none()
+            }
+
+            Message::UnknownSearchDecrease => {
+                if let Some(ctx) = self.state.searches.get_mut(self.state.current_search) {
+                    ctx.unknown_comparison = Some(UnknownComparison::Decreased);
+                }
+                self.state.unknown_search_compare(self.state.current_search, UnknownComparison::Decreased);
+                Task::none()
+            }
+
+            Message::UnknownSearchIncrease => {
+                if let Some(ctx) = self.state.searches.get_mut(self.state.current_search) {
+                    ctx.unknown_comparison = Some(UnknownComparison::Increased);
+                }
+                self.state.unknown_search_compare(self.state.current_search, UnknownComparison::Increased);
+                Task::none()
+            }
+            Message::UnknownSearchChanged => {
+                if let Some(ctx) = self.state.searches.get_mut(self.state.current_search) {
+                    ctx.unknown_comparison = Some(UnknownComparison::Changed);
+                }
+                self.state.unknown_search_compare(self.state.current_search, UnknownComparison::Changed);
+                Task::none()
+            }
+            Message::UnknownSearchUnchanged => {
+                if let Some(ctx) = self.state.searches.get_mut(self.state.current_search) {
+                    ctx.unknown_comparison = Some(UnknownComparison::Unchanged);
+                }
+                self.state.unknown_search_compare(self.state.current_search, UnknownComparison::Unchanged);
+                Task::none()
             }
         }
     }
