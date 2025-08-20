@@ -595,7 +595,7 @@ impl GameCheetahEngine {
         search_complete.store(false, Ordering::SeqCst);
 
         std::thread::spawn(move || {
-            let _handle = match pid.try_into_process_handle() {
+            let handle = match pid.try_into_process_handle() {
                 Ok(h) => h,
                 Err(_) => {
                     search_complete.store(true, Ordering::SeqCst);
@@ -604,8 +604,6 @@ impl GameCheetahEngine {
             };
 
             const BATCH: usize = 4096;
-            let out: Vec<SearchResult> = Vec::with_capacity(BATCH);
-
             if old_results.is_empty() {
                 // First pass: compare snapshot vs current, 4/8-byte aligned offsets only
                 let pages: Vec<(usize, Arc<[u8]>)> = if let Ok(snap) = memory_snapshot.read() {
@@ -613,7 +611,21 @@ impl GameCheetahEngine {
                 } else {
                     Vec::new()
                 };
+                // Use bounded channel to prevent memory bloat
+                let (local_tx, local_rx) = crossbeam_channel::bounded::<Vec<SearchResult>>(100);
 
+                // Spawn consumer thread
+                let results_sender_clone = results_sender.clone();
+                let result_count_clone = result_count.clone();
+                let consumer = std::thread::spawn(move || {
+                    let mut total = 0;
+                    while let Ok(batch) = local_rx.recv() {
+                        total += batch.len();
+                        result_count_clone.fetch_add(batch.len(), Ordering::Relaxed);
+                        let _ = results_sender_clone.send(batch);
+                    }
+                    total
+                });
                 pages.par_iter().for_each(|(base, old_mem)| {
                     let len = old_mem.len();
                     // Each worker gets its own handle (avoid sharing across threads)
@@ -676,89 +688,133 @@ impl GameCheetahEngine {
                         }
 
                         if !local_out.is_empty() {
-                            result_count.fetch_add(local_out.len(), Ordering::SeqCst);
-                            let _ = results_sender.send(local_out);
+                            let _ = local_tx.send(local_out);
                         }
                     }
 
                     current_bytes.fetch_add(len, Ordering::SeqCst);
                 });
 
+                drop(local_tx); // Signal completion
+                let _ = consumer.join();
+
+                // Clear snapshot after first pass to free memory
                 if let Ok(mut snap) = memory_snapshot.write() {
                     snap.clear();
                     snap.shrink_to_fit();
                 }
             } else {
-                // Subsequent passes: group by page and read in windows
-                const PAGE: usize = 4096; // or use region granularity if known
-                let mut processed = 0usize;
+                // Subsequent passes: optimize with better data structures
+                const PAGE: usize = 4096;
 
-                // Collect windows: map page_base -> Vec<(addr, SearchType)>
-                let mut per_page: std::collections::BTreeMap<usize, Vec<(usize, SearchType)>> = std::collections::BTreeMap::new();
+                // Group by address for single-read optimization
+                let mut addr_to_types: std::collections::BTreeMap<usize, Vec<(SearchType, [u8; 8])>> = std::collections::BTreeMap::new();
+
                 for r in old_results.iter() {
-                    per_page.entry(r.addr & !(PAGE - 1)).or_default().push((r.addr, r.search_type));
+                    if let Some(oldb) = r.stored_bytes() {
+                        let len = r.search_type.get_byte_length();
+                        if len <= 8 && oldb.len() >= len {
+                            let mut buf = [0u8; 8];
+                            buf[..len].copy_from_slice(&oldb[..len]);
+                            addr_to_types.entry(r.addr).or_default().push((r.search_type, buf));
+                        }
+                    }
                 }
 
-                for (_page_base, items) in per_page {
-                    // Coalesce into minimal [min_addr, max_addr+len) span
-                    let mut min_addr = usize::MAX;
-                    let mut max_addr = 0usize;
-                    let item_len = items.len();
-                    for (addr, ty) in &items {
-                        let len = ty.get_byte_length();
-                        min_addr = min_addr.min(*addr);
-                        max_addr = max_addr.max(*addr + len);
+                // Group addresses by page
+                let mut per_page: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
+                for addr in addr_to_types.keys() {
+                    per_page.entry(addr & !(PAGE - 1)).or_default().push(*addr);
+                }
+
+                let per_page_vec: Vec<(usize, Vec<usize>)> = per_page.into_iter().collect();
+
+                per_page_vec.par_iter().for_each(|(_page_base, addrs)| {
+                    // Sort addresses within page for better cache locality
+                    let mut sorted_addrs = addrs.clone();
+                    sorted_addrs.sort_unstable();
+
+                    // Calculate minimal span
+                    let min_addr = *sorted_addrs.first().unwrap();
+                    let sorted_addrs_len = sorted_addrs.len();
+                    let max_addr = sorted_addrs
+                        .iter()
+                        .filter_map(|addr| {
+                            addr_to_types
+                                .get(addr)
+                                .and_then(|types| types.iter().map(|(ty, _)| *addr + ty.get_byte_length()).max())
+                        })
+                        .max()
+                        .unwrap_or(min_addr + 8); // Default to at least 8 bytes
+
+                    let span_len = (max_addr - min_addr).min(PAGE * 4); // Cap at 4 pages
+                    if span_len == 0 {
+                        current_bytes.fetch_add(sorted_addrs.len(), Ordering::Relaxed);
+                        return;
                     }
-                    let span_len = max_addr - min_addr;
 
                     let handle = match pid.try_into_process_handle() {
                         Ok(h) => h,
-                        Err(_) => break,
+                        Err(_) => {
+                            current_bytes.fetch_add(sorted_addrs.len(), Ordering::Relaxed);
+                            return;
+                        }
                     };
 
                     if let Ok(buf) = copy_address(min_addr, span_len, &handle) {
                         let mut local_out = Vec::with_capacity(BATCH);
-                        for (addr, ty) in items {
-                            let len = ty.get_byte_length();
-                            let off = addr - min_addr;
-                            let newb = &buf[off..off + len];
 
-                            // Use stored bytes from the result for oldb
-                            // Safety: results were created with new_with_bytes
-                            // If not present, skip
-                            if let Some(r) = old_results.iter().find(|x| x.addr == addr && x.search_type == ty) {
-                                if let Some(oldb) = r.stored_bytes() {
-                                    // Fast equality early-out
-                                    if matches!(comparison, UnknownComparison::Unchanged | UnknownComparison::Changed) && oldb == newb {
-                                        if matches!(comparison, UnknownComparison::Unchanged) {
-                                            local_out.push(SearchResult::new_with_bytes(addr, ty, newb));
+                        for addr in sorted_addrs {
+                            if let Some(types) = addr_to_types.get(&addr) {
+                                let offset = addr - min_addr;
+
+                                // Read once per address for the largest type
+                                let max_len = types.iter().map(|(ty, _)| ty.get_byte_length()).max().unwrap_or(0);
+                                if offset + max_len > buf.len() {
+                                    continue;
+                                }
+                                let new_max = &buf[offset..offset + max_len];
+
+                                for (ty, old8) in types {
+                                    let len = ty.get_byte_length();
+                                    let oldb = &old8[..len];
+                                    let newb = &new_max[..len];
+
+                                    // Fast prefilter for equality in Changed/Unchanged
+                                    if matches!(comparison, UnknownComparison::Unchanged | UnknownComparison::Changed) {
+                                        if oldb == newb {
+                                            if matches!(comparison, UnknownComparison::Unchanged) {
+                                                local_out.push(SearchResult::new_with_bytes(addr, *ty, newb));
+                                            }
+                                            continue; // equality handled, skip decoding
+                                        } else if matches!(comparison, UnknownComparison::Changed) && !matches!(ty, SearchType::Float | SearchType::Double) {
+                                            // For integers, byte-inequality is sufficient for "Changed"
+                                            local_out.push(SearchResult::new_with_bytes(addr, *ty, newb));
+                                            continue;
                                         }
-                                    } else if compare_values(oldb, newb, ty, comparison) {
-                                        local_out.push(SearchResult::new_with_bytes(addr, ty, newb));
+                                    }
+
+                                    // Fallback to typed comparison (needed for floats/doubles or inc/dec)
+                                    if compare_values(oldb, newb, *ty, comparison) {
+                                        local_out.push(SearchResult::new_with_bytes(addr, *ty, newb));
+                                    }
+
+                                    if local_out.len() >= BATCH {
+                                        result_count.fetch_add(local_out.len(), Ordering::Relaxed);
+                                        let _ = results_sender.send(std::mem::take(&mut local_out));
                                     }
                                 }
-                            }
-
-                            if local_out.len() >= BATCH {
-                                result_count.fetch_add(local_out.len(), Ordering::SeqCst);
-                                let _ = results_sender.send(std::mem::take(&mut local_out));
                             }
                         }
 
                         if !local_out.is_empty() {
-                            result_count.fetch_add(local_out.len(), Ordering::SeqCst);
+                            result_count.fetch_add(local_out.len(), Ordering::Relaxed);
                             let _ = results_sender.send(local_out);
                         }
                     }
-                    processed += item_len;
 
-                    current_bytes.store(processed, Ordering::SeqCst);
-                }
-            }
-
-            if !out.is_empty() {
-                result_count.fetch_add(out.len(), Ordering::SeqCst);
-                let _ = results_sender.send(out);
+                    current_bytes.fetch_add(sorted_addrs_len, Ordering::Relaxed);
+                });
             }
 
             cache_valid.store(false, Ordering::Release);
@@ -1311,8 +1367,8 @@ fn double_eps(old: f64) -> f64 {
 pub fn compare_values(old_bytes: &[u8], new_bytes: &[u8], search_type: SearchType, comparison: UnknownComparison) -> bool {
     match search_type {
         SearchType::Byte => {
-            let old = old_bytes[0] as i16;
-            let new = new_bytes[0] as i16;
+            let old = old_bytes[0];
+            let new = new_bytes[0];
             match comparison {
                 UnknownComparison::Decreased => new < old,
                 UnknownComparison::Increased => new > old,
