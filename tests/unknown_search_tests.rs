@@ -1,5 +1,5 @@
-use game_cheetah::{SearchType, UnknownComparison};
 use game_cheetah::state::compare_values;
+use game_cheetah::{SearchType, UnknownComparison};
 
 #[test]
 fn unknown_compare_int_variants() {
@@ -28,7 +28,7 @@ fn unknown_compare_float_with_epsilon() {
     let old = 1000.0f32;
     let within = old + 0.5; // <= eps -> unchanged
     let beyond = old + 2.0; // > eps -> changed/increased
-    let below = old - 2.0;  // < old - eps -> decreased
+    let below = old - 2.0; // < old - eps -> decreased
 
     let oldb = old.to_le_bytes();
     let withinb = within.to_le_bytes();
@@ -56,7 +56,7 @@ fn unknown_compare_double_with_epsilon() {
     let old = 10_000.0f64;
     let within = old + 0.5; // unchanged
     let beyond = old + 2.0; // increased
-    let below = old - 2.0;  // decreased
+    let below = old - 2.0; // decreased
 
     let oldb = old.to_le_bytes();
     let withinb = within.to_le_bytes();

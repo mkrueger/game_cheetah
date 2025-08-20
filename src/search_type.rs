@@ -3,7 +3,8 @@ use std::fmt;
 
 use crate::SearchValue;
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[repr(u8)]
+#[derive(Debug, PartialEq, Clone, Copy, Eq, Hash)]
 pub enum SearchType {
     Guess,
     Byte,
