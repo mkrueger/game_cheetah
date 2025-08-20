@@ -3,96 +3,103 @@ on:
   workflow_run:
     workflows: ["Run Tests"]
     branches: [main]
-    types: 
+    types:
       - completed
 env:
   APP_NAME: game-cheetah
   CARGO_TERM_COLOR: always
 jobs:
   build_linux:
-   runs-on: ubuntu-latest
-   steps:
-   - uses: actions/checkout@v4
-   - name: Install gtk
-     run: |
-       sudo apt-get update
-       sudo apt-get install build-essential libgtk-3-dev libasound2-dev libxcb-shape0-dev libxcb-xfixes0-dev
-   - name: Install cargo deb & get
-     run: |
-       cargo install cargo-deb --version 2.7.0
-       cargo install cargo-get
-   - name: Build deb
-     id: build-deb
-     run: |
-       export VERSION=$(python3 tools/prep_diz.py "${{ env.APP_NAME }}" "file_id.diz")
-       echo "VERSION=$VERSION" >> $GITHUB_ENV
-       export DEB=$(cargo deb)
-       echo "Copy $DEB to ${{ env.APP_NAME }}_${VERSION}_amd64.deb"
-       mv $DEB ${{ env.APP_NAME }}_${VERSION}_amd64.deb
-       sed "s/#VERSION/$VERSION/g" <build/file_id.diz  >file_id.diz
-   - name: 'Upload Artifact'
-     uses: actions/upload-artifact@v4
-     with:
-       name: ${{ env.APP_NAME }}_linux_${{ env.VERSION }}
-       path: |
-         ${{ env.APP_NAME }}_${{ env.VERSION }}_amd64.deb
-         file_id.diz
-   - name: Build AppImage
-     id: build-appimage
-     run: |
-       cargo build --release  # Add this - need to build first!
-       wget https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
-       chmod +x appimagetool-x86_64.AppImage
-       mkdir -p ${{ env.APP_NAME }}-appimage/usr/bin
-       cp build/linux/256x256.png ${{ env.APP_NAME }}-appimage/${{ env.APP_NAME }}.png
-       cp build/linux/${{ env.APP_NAME }}.desktop ${{ env.APP_NAME }}-appimage/
-       cp target/release/${{ env.APP_NAME }} ${{ env.APP_NAME }}-appimage/usr/bin/
-       echo "#!/bin/bash" > ${{ env.APP_NAME }}-appimage/AppRun
-       echo "exec \"\$(dirname \"\$0\")/usr/bin/${{ env.APP_NAME }}\" \"\$@\"" >> ${{ env.APP_NAME }}-appimage/AppRun
-       chmod a+x ${{ env.APP_NAME }}-appimage/AppRun
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install gtk
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libgtk-3-dev libasound2-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - name: Install cargo deb & get
+        run: |
+          cargo install cargo-deb --version 2.7.0
+          cargo install cargo-get
+      - name: Build deb
+        id: build-deb
+        run: |
+          export VERSION=$(python3 tools/prep_diz.py "${{ env.APP_NAME }}" "file_id.diz")
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          export DEB=$(cargo deb)
+          echo "Copy $DEB to ${{ env.APP_NAME }}_${VERSION}_amd64.deb"
+          mv $DEB ${{ env.APP_NAME }}_${VERSION}_amd64.deb
+          sed "s/#VERSION/$VERSION/g" <build/file_id.diz  >file_id.diz
+      - name: 'Upload Artifact'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}_linux_${{ steps.build-deb.outputs.version }}
+          path: |
+            ${{ env.APP_NAME }}_${{ steps.build-deb.outputs.version }}_amd64.deb
+            file_id.diz
+      - name: Build AppImage
+        id: build-appimage
+        run: |
+          cargo build --release  # Add this - need to build first!
+          wget https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+          mkdir -p ${{ env.APP_NAME }}-appimage/usr/bin
+          cp build/linux/256x256.png ${{ env.APP_NAME }}-appimage/${{ env.APP_NAME }}.png
+          cp build/linux/${{ env.APP_NAME }}.desktop ${{ env.APP_NAME }}-appimage/
+          cp target/release/${{ env.APP_NAME }} ${{ env.APP_NAME }}-appimage/usr/bin/
+          echo "#!/bin/bash" > ${{ env.APP_NAME }}-appimage/AppRun
+          echo "exec \"\$(dirname \"\$0\")/usr/bin/${{ env.APP_NAME }}\" \"\$@\"" >> ${{ env.APP_NAME }}-appimage/AppRun
+          chmod a+x ${{ env.APP_NAME }}-appimage/AppRun
 
-       export app_img=$(python3 tools/get_app_img.py "${{ env.APP_NAME }}" "${{ env.VERSION }}" x86_64)
-       echo "APP_IMG=$app_img" >> $GITHUB_ENV
+          export app_img=$(python3 tools/get_app_img.py "${{ env.APP_NAME }}" "${{ steps.build-deb.outputs.version }}" x86_64)
+          echo "app_img=$app_img" >> $GITHUB_OUTPUT
 
-       ./appimagetool-x86_64.AppImage "${{ env.APP_NAME }}-appimage" "$app_img"
-   - name: 'Upload AppImage'
-     uses: actions/upload-artifact@v4
-     with:
-      name: ${{ env.APP_NAME }}_appimage_${{ env.VERSION }}
-      path: ${{ env.APP_IMG }}
-      
+          ./appimagetool-x86_64.AppImage "${{ env.APP_NAME }}-appimage" "$app_img"
+      - name: 'Upload AppImage'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}_appimage_${{ steps.build-deb.outputs.version }}
+          path: |
+            ${{ steps.build-appimage.outputs.app_img }}
+
   build_windows:
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: Build exe
-      run: |
-        cargo build --release
-    - name: Install WiX
-      run: dotnet tool install --global wix --version 4.0.1
-    - name: Create PFX certificate
-      id: create-pfx
-      shell: pwsh
-      env:
-        PFX_CONTENT: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
-      run: |
-        $encodedBytes=[System.Convert]::FromBase64String($env:PFX_CONTENT);
-        Set-Content "./cert.pfx" -Value $encodedBytes
-        $VERSION=$(cargo pkgid | foreach-object { $_ -replace '(.*)#','' })
-        echo "Version: $VERSION"
-        Add-Content -Path $env:GITHUB_ENV -Value "VERSION=$VERSION"
-        get-content .\build\file_id.diz | %{$_ -replace "#VERSION","$VERSION"} >file_id.diz
-        cp target/release/${{ env.APP_NAME }}.exe "./${{ env.APP_NAME }}.exe"
-    - name: Delete PFX certificate
-      run: del "./cert.pfx"
-    - name: 'Upload Artifact'
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ env.APP_NAME }}_${{ env.VERSION }}_windows
-        path: |
-          ${{ env.APP_NAME }}.exe
-          file_id.diz
-          
+      - uses: actions/checkout@v4
+      - name: Build exe
+        run: |
+          cargo build --release
+      - name: Install WiX
+        run: dotnet tool install --global wix --version 4.0.1
+      - name: Create PFX certificate
+        id: create-pfx
+        shell: pwsh
+        env:
+          PFX_CONTENT: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+        run: |
+          if (-not $env:PFX_CONTENT) {
+            Write-Error "WINDOWS_CERTIFICATE_BASE64 secret is not set."
+            exit 1
+          }
+          $encodedBytes=[System.Convert]::FromBase64String($env:PFX_CONTENT);
+          Set-Content "./cert.pfx" -Value $encodedBytes
+          $VERSION=$(cargo pkgid | foreach-object { $_ -replace '(.*)#','' })
+          echo "Version: $VERSION"
+          Add-Content -Path $env:GITHUB_ENV -Value "VERSION=$VERSION"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$VERSION"
+          get-content .\build\file_id.diz | %{$_ -replace "#VERSION","$VERSION"} >file_id.diz
+          cp target/release/${{ env.APP_NAME }}.exe "./${{ env.APP_NAME }}.exe"
+      - name: Delete PFX certificate
+        run: del "./cert.pfx"
+      - name: 'Upload Artifact'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}_${{ steps.create-pfx.outputs.version }}_windows
+          path: |
+            ${{ env.APP_NAME }}.exe
+            file_id.diz
+
   build_mac:
     runs-on: macos-latest  # Removed matrix strategy
     steps:
@@ -105,13 +112,14 @@ jobs:
           brew install create-dmg
           git submodule update --init
       - name: Build app
+        id: build-app
         run: |
           cargo build --release --target aarch64-apple-darwin
           cargo build --release --target x86_64-apple-darwin
 
           export app=$(python3 tools/get_name.py "${{ env.APP_NAME }}")
           echo "Build bundle for: $app"
-          echo "APP=$app" >> $GITHUB_ENV
+          echo "app=$app" >> $GITHUB_OUTPUT
 
           echo "Creating dir '$app.app/Contents/MacOS'"
           mkdir -p "$app.app/Contents/MacOS"
@@ -129,9 +137,9 @@ jobs:
           cp build/mac/128x128@2x.png AppIcon.iconset/icon_128x128@2x.png
           iconutil -c icns AppIcon.iconset
           cp AppIcon.icns "$app.app/Contents/Resources"
-          
+
           export version=$(python3 tools/prep_diz.py "${{ env.APP_NAME }}" "file_id.diz")
-          echo "VERSION=$version" >> $GITHUB_ENV
+          echo "version=$version" >> $GITHUB_OUTPUT
           echo "Version: $version"
 
           echo "Creating universal binary $app.app/Contents/MacOS/${{ env.APP_NAME }}"
@@ -143,19 +151,20 @@ jobs:
         id: sign-bundle
         run: |
           create-dmg \
-            --volname "${{ env.APP }} Installer" \
+            --volname "${{ steps.build-app.outputs.app }} Installer" \
             --volicon "AppIcon.icns" \
             --window-pos 200 120 \
             --window-size 800 400 \
             --icon-size 128 \
-            --hide-extension "${{ env.APP }}.app" \
+            --hide-extension "${{ steps.build-app.outputs.app }}.app" \
             --app-drop-link 600 185 \
-            "${{ env.APP_NAME }}-${{ env.VERSION }}-universal.dmg" \
-            "${{ env.APP }}.app"
+            "${{ env.APP_NAME }}-${{ steps.build-app.outputs.version }}-universal.dmg" \
+            "${{ steps.build-app.outputs.app }}.app"
+          echo "dmg_file=${{ env.APP_NAME }}-${{ steps.build-app.outputs.version }}-universal.dmg" >> $GITHUB_OUTPUT
       - name: 'Upload dmg'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}_osx_${{ env.VERSION }}_universal
+          name: ${{ env.APP_NAME }}_osx_${{ steps.build-app.outputs.version }}_universal
           path: |
-            ${{ env.APP_NAME }}-${{ env.VERSION }}-universal.dmg
+            ${{ env.APP_NAME }}-${{ steps.build-app.outputs.version }}-universal.dmg
             file_id.diz
