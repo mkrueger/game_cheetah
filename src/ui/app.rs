@@ -63,6 +63,7 @@ impl App {
             }
             Message::MainMenu => {
                 self.app_state = AppState::MainWindow;
+                self.state = GameCheetahEngine::default();
                 Task::none()
             }
             Message::About => {
