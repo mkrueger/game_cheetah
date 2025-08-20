@@ -409,7 +409,11 @@ impl MemoryEditor {
     pub fn initalize(&mut self, addr: usize, search_type: SearchType) {
         self.address_text = format!("{:X}", addr);
         self.editor_initial_address = addr;
-        self.editor_initial_size = search_type.get_byte_length();
+        self.editor_initial_size = if search_type == SearchType::String || search_type == SearchType::StringUtf16 {
+            1
+        } else {
+            search_type.get_byte_length()
+        };
 
         // Reset cursor to highlight the first byte
         self.cursor_row = 0;

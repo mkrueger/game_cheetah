@@ -49,6 +49,7 @@ int-value-item = Int (4 Bytes)
 int64-value-item = Int64 (8 Bytes)
 float-value-item = Float (4 Bytes)
 double-value-item = Double (8 Bytes)
+string-value-item = String
 
 guess-descr = Zahl
 byte-descr = Byte
@@ -57,6 +58,7 @@ int-descr = Int
 int64-descr = Int64
 float-descr = Float
 double-descr = Double
+string-descr = String
 
 address-heading = Addresse
 value-heading = Wert

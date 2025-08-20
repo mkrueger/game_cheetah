@@ -190,7 +190,7 @@ impl App {
                             // Check the actual result count, not just search_results
                             let has_results = current_search.get_result_count() > 0;
 
-                            if !has_results {
+                            if !has_results || current_search.search_type == SearchType::String {
                                 self.state.initial_search(search_index);
                             } else {
                                 self.state.filter_searches(search_index);

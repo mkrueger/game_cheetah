@@ -18,6 +18,7 @@ fn search_ui(app: &App) -> Element<'_, Message> {
         SearchType::Int64,
         SearchType::Float,
         SearchType::Double,
+        SearchType::String,
     ];
     let current_search_context = &app.state.searches[app.state.current_search];
     let selected_type = current_search_context.search_type;
@@ -133,7 +134,30 @@ fn search_ui(app: &App) -> Element<'_, Message> {
                 ]
             } else {
                 // Different buttons for Unknown search type
-                if selected_type == SearchType::Unknown {
+                if selected_type == SearchType::String {
+                    column![
+                        row![
+                            button(text(fl!(crate::LANGUAGE_LOADER, "initial-search-button"))).on_press(Message::Search),
+                            if search_results >= auto_show_treshold {
+                                if app.state.show_results {
+                                    button(text(fl!(crate::LANGUAGE_LOADER, "hide-results-button"))).on_press(Message::ToggleShowResult)
+                                } else {
+                                    button(text(fl!(crate::LANGUAGE_LOADER, "show-results-button"))).on_press(Message::ToggleShowResult)
+                                }
+                            } else {
+                                button("").style(|_, _| button::Style::default())
+                            },
+                            text(
+                                fl!(crate::LANGUAGE_LOADER, "found-results-label", results = search_results)
+                                    .chars()
+                                    .filter(|c| c.is_ascii())
+                                    .collect::<String>()
+                            )
+                        ]
+                        .align_y(alignment::Alignment::Center)
+                        .spacing(10.0)
+                    ]
+                } else if selected_type == SearchType::Unknown {
                     column![
                         row![
                             button(text(fl!(crate::LANGUAGE_LOADER, "decreased-button"))).on_press(Message::UnknownSearchDecrease),
@@ -231,6 +255,9 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
     let results = current_search_context.collect_results();
     let show_search_types =
         matches!(current_search_context.search_type, SearchType::Guess) || matches!(current_search_context.search_type, SearchType::Unknown);
+    let is_string = current_search_context.search_type == SearchType::String;
+    let string_len = current_search_context.search_value_text.len();
+    let string_len_chars = current_search_context.search_value_text.chars().count();
 
     // Limit displayed results for performance
     const MAX_DISPLAY_RESULTS: usize = 1000;
@@ -238,22 +265,38 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
     let displayed_results = results.iter().take(MAX_DISPLAY_RESULTS);
     let is_truncated = total_results > MAX_DISPLAY_RESULTS;
 
-    let table_header = row![
-        container(text(fl!(crate::LANGUAGE_LOADER, "address-heading")).size(14)).width(Length::Fixed(120.0)),
-        container(text(fl!(crate::LANGUAGE_LOADER, "value-heading")).size(14)).width(Length::Fixed(120.0)),
-        if show_search_types {
-            container(text(fl!(crate::LANGUAGE_LOADER, "datatype-heading")).size(14)).width(Length::Fixed(120.0))
-        } else {
-            container(text("")).width(Length::Fixed(0.0))
-        },
-        container(text(fl!(crate::LANGUAGE_LOADER, "freezed-heading")).size(14)).width(Length::Fill)
-    ]
+    let table_header = if is_string {
+        row![
+            container(text(fl!(crate::LANGUAGE_LOADER, "address-heading")).size(14)).width(Length::Fixed(120.0)),
+            container(text(fl!(crate::LANGUAGE_LOADER, "value-heading")).size(14)).width(Length::Fixed(120.0)),
+        ]
+    } else {
+        row![
+            container(text(fl!(crate::LANGUAGE_LOADER, "address-heading")).size(14)).width(Length::Fixed(120.0)),
+            container(text(fl!(crate::LANGUAGE_LOADER, "value-heading")).size(14)).width(Length::Fixed(120.0)),
+            if show_search_types {
+                container(text(fl!(crate::LANGUAGE_LOADER, "datatype-heading")).size(14)).width(Length::Fixed(120.0))
+            } else {
+                container(text("")).width(Length::Fixed(0.0))
+            },
+            container(text(fl!(crate::LANGUAGE_LOADER, "freezed-heading")).size(14)).width(Length::Fill)
+        ]
+    }
     .padding(2)
     .spacing(5)
     .align_y(alignment::Alignment::Center);
 
     let table_rows = displayed_results.enumerate().map(|(i, result)| -> iced::Element<'_, Message> {
-        let value_text = if let Ok(handle) = (app.state.pid as process_memory::Pid).try_into_process_handle() {
+        let value_text = if is_string {
+            let utf16_hint = result.search_type == SearchType::StringUtf16;
+            read_string_from_process(
+                app.state.pid as process_memory::Pid,
+                result.addr,
+                utf16_hint,
+                if utf16_hint { string_len_chars * 2 } else { string_len },
+            )
+            .unwrap_or_default()
+        } else if let Ok(handle) = (app.state.pid as process_memory::Pid).try_into_process_handle() {
             if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
                 let val = SearchValue(result.search_type, buf);
                 val.to_string()
@@ -263,23 +306,32 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
         } else {
             String::new()
         };
-        row![
-            container(text(format!("0x{:X}", result.addr)).size(14)).width(Length::Fixed(120.0)),
-            text_input("", &value_text)
-                .on_input(move |v| Message::ResultValueChanged(i, v))
-                .width(Length::Fixed(120.0)),
-            if show_search_types {
-                container(text(result.search_type.get_description_text()).size(14)).width(Length::Fixed(120.0))
-            } else {
-                container(text("")).width(Length::Fixed(0.0))
-            },
-            checkbox("", current_search_context.freezed_addresses.contains(&result.addr))
-                .on_toggle(move |_| Message::ToggleFreeze(i))
-                .size(14)
-                .width(Length::Fill),
-            button(text(fl!(crate::LANGUAGE_LOADER, "edit-button"))).on_press(Message::OpenEditor(i)),
-            button(text(fl!(crate::LANGUAGE_LOADER, "remove-button"))).on_press(Message::RemoveResult(i))
-        ]
+        if is_string {
+            row![
+                container(text(format!("0x{:X}", result.addr)).size(14)).width(Length::Fixed(120.0)),
+                container(text(value_text)).width(Length::Fill),
+                button(text(fl!(crate::LANGUAGE_LOADER, "edit-button"))).on_press(Message::OpenEditor(i)),
+                button(text(fl!(crate::LANGUAGE_LOADER, "remove-button"))).on_press(Message::RemoveResult(i))
+            ]
+        } else {
+            row![
+                container(text(format!("0x{:X}", result.addr)).size(14)).width(Length::Fixed(120.0)),
+                text_input("", &value_text)
+                    .on_input(move |v| Message::ResultValueChanged(i, v))
+                    .width(Length::Fixed(120.0)),
+                if show_search_types {
+                    container(text(result.search_type.get_description_text()).size(14)).width(Length::Fixed(120.0))
+                } else {
+                    container(text("")).width(Length::Fixed(0.0))
+                },
+                checkbox("", current_search_context.freezed_addresses.contains(&result.addr))
+                    .on_toggle(move |_| Message::ToggleFreeze(i))
+                    .size(14)
+                    .width(Length::Fill),
+                button(text(fl!(crate::LANGUAGE_LOADER, "edit-button"))).on_press(Message::OpenEditor(i)),
+                button(text(fl!(crate::LANGUAGE_LOADER, "remove-button"))).on_press(Message::RemoveResult(i))
+            ]
+        }
         .padding(2)
         .spacing(5)
         .align_y(alignment::Alignment::Center)
@@ -466,4 +518,47 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
         .padding(crate::DIALOG_PADDING),
     ])
     .into()
+}
+
+fn read_string_from_process(pid: process_memory::Pid, addr: usize, utf16le: bool, max_bytes: usize) -> Option<String> {
+    let handle = pid.try_into_process_handle().ok()?;
+
+    if utf16le {
+        // Read up to 256 UTF-16 code units (512 bytes)
+        let buf = copy_address(addr, max_bytes, &handle).ok()?;
+        if buf.len() < 2 {
+            return None;
+        }
+        // Truncate to even length
+        let even_len = buf.len() & !1usize;
+        let mut units = Vec::with_capacity(even_len / 2);
+        let mut iter: std::slice::ChunksExact<'_, u8> = buf[..even_len].chunks_exact(2);
+        for ch in &mut iter {
+            let u = u16::from_le_bytes([ch[0], ch[1]]);
+            if u == 0 {
+                break; // NUL-terminated
+            }
+            units.push(u);
+        }
+        if units.is_empty() { None } else { Some(String::from_utf16_lossy(&units)) }
+    } else {
+        // Read up to 256 bytes and stop at NUL
+        let buf = copy_address(addr, max_bytes, &handle).ok()?;
+        let sbytes = &buf[..];
+        if sbytes.is_empty() {
+            return None;
+        }
+        match std::str::from_utf8(sbytes) {
+            Ok(s) => Some(s.to_string()),
+            Err(e) => {
+                let valid = e.valid_up_to();
+                if valid > 0 {
+                    std::str::from_utf8(&sbytes[..valid]).ok().map(|s| s.to_string())
+                } else {
+                    // Fallback: lossy
+                    Some(String::from_utf8_lossy(sbytes).to_string())
+                }
+            }
+        }
+    }
 }

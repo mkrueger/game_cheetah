@@ -13,7 +13,9 @@ pub enum SearchType {
     Int64,
     Float,
     Double,
-    Unknown, // New type for unknown value searches
+    Unknown,
+    String,
+    StringUtf16,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -35,6 +37,7 @@ impl SearchType {
             SearchType::Float => fl!(crate::LANGUAGE_LOADER, "float-value-item"),
             SearchType::Double => fl!(crate::LANGUAGE_LOADER, "double-value-item"),
             SearchType::Unknown => fl!(crate::LANGUAGE_LOADER, "unknown-value-item"),
+            SearchType::String | SearchType::StringUtf16 => fl!(crate::LANGUAGE_LOADER, "string-value-item"),
         }
     }
 
@@ -42,6 +45,7 @@ impl SearchType {
         match self {
             SearchType::Guess => panic!("guess has no length"),
             SearchType::Unknown => panic!("unknown has no length"),
+            SearchType::String | SearchType::StringUtf16 => panic!("string has no length"),
             SearchType::Byte => 1,
             SearchType::Short => 2,
             SearchType::Int => 4,
@@ -61,6 +65,7 @@ impl SearchType {
             SearchType::Float => fl!(crate::LANGUAGE_LOADER, "float-descr"),
             SearchType::Double => fl!(crate::LANGUAGE_LOADER, "double-descr"),
             SearchType::Unknown => fl!(crate::LANGUAGE_LOADER, "unknown-descr"),
+            SearchType::String | SearchType::StringUtf16 => fl!(crate::LANGUAGE_LOADER, "string-descr"),
         }
     }
 
@@ -98,6 +103,10 @@ impl SearchType {
                 // Unknown doesn't use text input, return empty
                 Ok(SearchValue(*self, vec![]))
             }
+            SearchType::String | SearchType::StringUtf16 => {
+                let val = txt.as_bytes().to_vec();
+                Ok(SearchValue(*self, val))
+            }
         }
     }
 }
@@ -113,6 +122,7 @@ impl fmt::Display for SearchType {
             SearchType::Float => fl!(crate::LANGUAGE_LOADER, "float-value-item"),
             SearchType::Double => fl!(crate::LANGUAGE_LOADER, "double-value-item"),
             SearchType::Unknown => fl!(crate::LANGUAGE_LOADER, "unknown-value-item"),
+            SearchType::String | SearchType::StringUtf16 => fl!(crate::LANGUAGE_LOADER, "string-value-item"),
         };
         write!(f, "{}", text)
     }

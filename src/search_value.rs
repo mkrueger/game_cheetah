@@ -7,34 +7,34 @@ pub struct SearchValue(pub SearchType, pub Vec<u8>);
 
 impl Display for SearchValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        use SearchType::*;
         let to_str = |needed: usize, convert: &dyn Fn(&[u8]) -> String| -> Option<String> {
             if self.1.len() >= needed { Some(convert(&self.1[..needed])) } else { None }
         };
         let s = match self.0 {
-            Byte => self.1.get(0).map(|b| b.to_string()),
-            Short => to_str(2, &|b| {
+            SearchType::Byte => self.1.get(0).map(|b| b.to_string()),
+            SearchType::Short => to_str(2, &|b| {
                 let arr: [u8; 2] = b.try_into().unwrap();
                 i16::from_le_bytes(arr).to_string()
             }),
-            Int => to_str(4, &|b| {
+            SearchType::Int => to_str(4, &|b| {
                 let arr: [u8; 4] = b.try_into().unwrap();
                 i32::from_le_bytes(arr).to_string()
             }),
-            Int64 => to_str(8, &|b| {
+            SearchType::Int64 => to_str(8, &|b| {
                 let arr: [u8; 8] = b.try_into().unwrap();
                 i64::from_le_bytes(arr).to_string()
             }),
-            Float => to_str(4, &|b| {
+            SearchType::Float => to_str(4, &|b| {
                 let arr: [u8; 4] = b.try_into().unwrap();
                 f32::from_le_bytes(arr).to_string()
             }),
-            Double => to_str(8, &|b| {
+            SearchType::Double => to_str(8, &|b| {
                 let arr: [u8; 8] = b.try_into().unwrap();
                 f64::from_le_bytes(arr).to_string()
             }),
-            Guess => None,
-            Unknown => None,
+            SearchType::Guess => None,
+            SearchType::Unknown => None,
+            SearchType::String | SearchType::StringUtf16 => None,
         }
         .ok_or(std::fmt::Error)?;
         f.write_str(&s)

@@ -160,6 +160,52 @@ impl GameCheetahEngine {
             (ctx.search_type, ctx.search_value_text.clone())
         };
 
+        if search_type == SearchType::String {
+            self.error_text.clear();
+
+            // Precompute overlaps for chunking so we don't miss boundary-crossing matches
+            let utf8_len = search_value_text.len();
+            let utf16_len = utf8_len.saturating_mul(2);
+            // For UTF-8, need len-1 overlap; for UTF-16LE, need 2*len - 2 overlap (one u16 less)
+            let overlap = std::cmp::max(utf8_len.saturating_sub(1), utf16_len.saturating_sub(2));
+
+            match get_process_maps(self.pid) {
+                Ok(maps) => {
+                    let mut regions = Vec::new();
+                    if let Some(ctx_mut) = self.searches.get_mut(search_index) {
+                        for map in maps {
+                            if skip_memory_region(&map) {
+                                continue;
+                            }
+
+                            let mut size = map.size();
+                            let mut start = map.start();
+                            ctx_mut.total_bytes += size;
+
+                            const MAX_BLOCK: usize = 10 * 1024 * 1024;
+                            let chunk_plus = MAX_BLOCK.saturating_add(overlap);
+                            while size > chunk_plus {
+                                regions.push((start, chunk_plus));
+                                start += MAX_BLOCK;
+                                size = size.saturating_sub(MAX_BLOCK);
+                            }
+                            regions.push((start, size));
+                        }
+                    } else {
+                        self.error_text = format!("Search context vanished for index {search_index}");
+                        return;
+                    }
+
+                    self.spawn_string_search(search_value_text, regions, search_index);
+                }
+                Err(err) => {
+                    eprintln!("error getting process maps for pid {}: {}", self.pid, err);
+                    self.error_text = format!("Error getting process maps for pid {}: {}", self.pid, err);
+                }
+            }
+            return;
+        }
+
         // Parse target value
         let search_for_value = match search_type.from_string(&search_value_text) {
             Ok(v) => v,
@@ -400,7 +446,7 @@ impl GameCheetahEngine {
         let current_bytes = search_context.current_bytes.clone();
         let pid = self.pid;
         let results_sender = search_context.results_sender.clone();
-        let search_complete = search_context.search_complete.clone();
+        let search_complete: Arc<std::sync::atomic::AtomicBool> = search_context.search_complete.clone();
         let cache_valid = search_context.cache_valid.clone();
 
         search_complete.store(false, Ordering::SeqCst);
@@ -415,7 +461,7 @@ impl GameCheetahEngine {
                         return;
                     }
                 };
-
+                let value_text = String::from_utf8(search_data.1.clone()).unwrap_or_default();
                 // Try to copy the memory region, but handle failures gracefully
                 match copy_address(*start, *size, &handle) {
                     Ok(memory) => {
@@ -432,9 +478,14 @@ impl GameCheetahEngine {
                                 SearchType::Float,
                                 SearchType::Double,
                             ] {
-                                if let Ok(typed_value) = search_type.from_string(&search_data.1.iter().map(|b| format!("{:02x}", b)).collect::<String>()) {
-                                    let typed_results = search_memory(&memory, &typed_value.1, search_type, *start);
-                                    all_results.extend(typed_results);
+                                match search_type.from_string(&value_text) {
+                                    Ok(typed_value) => {
+                                        let typed_results: Vec<SearchResult> = search_memory(&memory, &typed_value.1, search_type, *start);
+                                        all_results.extend(typed_results);
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to parse typed value for {}: {}", search_type, e);
+                                    }
                                 }
                             }
 
@@ -805,6 +856,53 @@ impl GameCheetahEngine {
             search_complete.store(true, Ordering::SeqCst);
         });
     }
+
+    fn spawn_string_search(&mut self, search_text: String, regions: Vec<(usize, usize)>, search_index: usize) {
+        let Some(search_context) = self.searches.get_mut(search_index) else {
+            self.error_text = format!("Invalid search index {search_index}");
+            return;
+        };
+
+        let current_bytes = search_context.current_bytes.clone();
+        let pid = self.pid;
+        let results_sender = search_context.results_sender.clone();
+        let search_complete = search_context.search_complete.clone();
+        let cache_valid = search_context.cache_valid.clone();
+
+        search_complete.store(false, Ordering::SeqCst);
+
+        std::thread::spawn(move || {
+            regions.par_iter().for_each(|(start, size)| {
+                let handle = match pid.try_into_process_handle() {
+                    Ok(h) => h,
+                    Err(e) => {
+                        eprintln!("Failed to get process handle: {e}");
+                        current_bytes.fetch_add(*size, Ordering::SeqCst);
+                        return;
+                    }
+                };
+
+                // Try to copy the memory region, but handle failures gracefully
+                match copy_address(*start, *size, &handle) {
+                    Ok(memory) => {
+                        let results = search_string_in_memory(&memory, &search_text, *start);
+
+                        if !results.is_empty() {
+                            let _ = results_sender.send(results);
+                        }
+                    }
+                    Err(_) => {
+                        // Silently skip this region - it's no longer accessible
+                    }
+                }
+
+                current_bytes.fetch_add(*size, Ordering::SeqCst);
+            });
+
+            cache_valid.store(false, Ordering::Release);
+            search_complete.store(true, Ordering::SeqCst);
+        });
+    }
 }
 
 fn skip_memory_region(map: &proc_maps::MapRange) -> bool {
@@ -1041,6 +1139,9 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
         }
         SearchType::Unknown => {
             eprintln!("Unknown search type encountered, this should not happen in production code.");
+        }
+        SearchType::String | SearchType::StringUtf16 => {
+            // only done in initial search.
         }
     }
 
@@ -1466,4 +1567,84 @@ pub fn compare_values(old_bytes: &[u8], new_bytes: &[u8], search_type: SearchTyp
         }
         _ => false,
     }
+}
+
+fn is_ascii_printable(b: u8) -> bool {
+    (b >= 0x20 && b <= 0x7E) || b == b'\t' || b == b'\r' || b == b'\n'
+}
+fn is_boundary_byte(b: u8) -> bool {
+    b == 0 || !is_ascii_printable(b)
+}
+fn is_printable_u16(u: u16) -> bool {
+    // Conservative: ASCII printable + common whitespace
+    (u >= 0x20 && u <= 0x7E) || u == 0x09 || u == 0x0A || u == 0x0D
+}
+
+fn encode_utf16_le(s: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len() * 2);
+    for u in s.encode_utf16() {
+        out.extend_from_slice(&u.to_le_bytes());
+    }
+    out
+}
+
+// Replace/implement string search with alignment + boundary checks
+fn search_string_in_memory(memory_data: &[u8], search_str: &str, base_addr: usize) -> Vec<SearchResult> {
+    let mut results = Vec::new();
+
+    // Minimum length to reduce random matches
+    if search_str.len() < 3 {
+        return results;
+    }
+    // UTF-8 exact substring with boundary checks
+    let utf8_bytes = search_str.as_bytes();
+    if !utf8_bytes.is_empty() {
+        let finder = memmem::Finder::new(utf8_bytes);
+        for pos in finder.find_iter(memory_data) {
+            // Boundary before
+            let ok_prev = if pos == 0 { true } else { is_boundary_byte(memory_data[pos - 1]) };
+            // Boundary after
+            let end = pos + utf8_bytes.len();
+            let ok_next = if end >= memory_data.len() { true } else { is_boundary_byte(memory_data[end]) };
+
+            if ok_prev && ok_next {
+                results.push(SearchResult::new(base_addr + pos, SearchType::String));
+            }
+        }
+    }
+
+    // UTF-16LE exact substring with even alignment and boundary checks
+    let utf16le_bytes = encode_utf16_le(search_str);
+    if utf16le_bytes.len() >= 2 {
+        let finder16 = memmem::Finder::new(&utf16le_bytes);
+        for pos in finder16.find_iter(memory_data) {
+            // Must be even-aligned in the buffer for UTF-16LE
+            if pos % 2 != 0 {
+                continue;
+            }
+
+            // Boundary before (u16)
+            let ok_prev = if pos < 2 {
+                true
+            } else {
+                let prev = u16::from_le_bytes([memory_data[pos - 2], memory_data[pos - 1]]);
+                prev == 0 || !is_printable_u16(prev)
+            };
+
+            // Boundary after (u16)
+            let end = pos + utf16le_bytes.len();
+            let ok_next = if end + 1 >= memory_data.len() {
+                true
+            } else {
+                let next = u16::from_le_bytes([memory_data[end], memory_data[end + 1]]);
+                next == 0 || !is_printable_u16(next)
+            };
+
+            if ok_prev && ok_next {
+                results.push(SearchResult::new(base_addr + pos, SearchType::StringUtf16));
+            }
+        }
+    }
+
+    results
 }
