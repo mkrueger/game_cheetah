@@ -980,7 +980,7 @@ where
                                 let current = f32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
                                 let target = f32::from_le_bytes([search_value.1[0], search_value.1[1], search_value.1[2], search_value.1[3]]);
 
-                                let epsilon = 1.0;
+                                let epsilon = get_epsilon_f32(target);
 
                                 if current.is_finite() && target.is_finite() {
                                     (current - target).abs() <= epsilon
@@ -1005,7 +1005,7 @@ where
                                     search_value.1[7],
                                 ]);
 
-                                let epsilon = 1.0;
+                                let epsilon = get_epsilon_f64(target);
 
                                 if current.is_finite() && target.is_finite() {
                                     (current - target).abs() <= epsilon
@@ -1059,7 +1059,7 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
             if search_data.len() == 4 {
                 let target = f32::from_le_bytes([search_data[0], search_data[1], search_data[2], search_data[3]]);
 
-                let epsilon = 1.0;
+                let epsilon = get_epsilon_f32(target);
 
                 // Scan through memory interpreting each position as a potential float
                 if memory_data.len() >= 4 {
@@ -1098,7 +1098,7 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
                 ]);
 
                 // Similar epsilon strategy for doubles
-                let epsilon = 1.0;
+                let epsilon = get_epsilon_f64(target);
 
                 // Scan through memory interpreting each position as a potential double
                 if memory_data.len() >= 8 {
@@ -1146,6 +1146,14 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
     }
 
     result
+}
+
+fn get_epsilon_f32(_current: f32) -> f32 {
+    0.5
+}
+
+fn get_epsilon_f64(_current: f64) -> f64 {
+    0.5
 }
 
 // Optimized search for aligned integers using SIMD
