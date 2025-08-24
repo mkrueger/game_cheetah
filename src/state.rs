@@ -2,11 +2,13 @@ use crate::{FreezeMessage, MessageCommand, SearchContext, SearchMode, SearchResu
 use crossbeam_channel::{select, tick};
 use i18n_embed_fl::fl;
 use memchr::memmem;
+use once_cell::sync::Lazy;
 use proc_maps::get_process_maps;
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 use rayon::prelude::*;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use std::{
     cmp::min,
     collections::HashMap,
@@ -903,7 +905,64 @@ impl GameCheetahEngine {
             search_complete.store(true, Ordering::SeqCst);
         });
     }
+
+    pub fn is_process_running(&self) -> bool {
+        if self.pid == 0 {
+            return false;
+        }
+        const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+        if let Ok(mut system_guard) = SYSTEM.lock() {
+            let (system, last_refresh) = &mut *system_guard;
+            let now = Instant::now();
+
+            // Only refresh if enough time has passed
+            if now.duration_since(*last_refresh) >= REFRESH_INTERVAL {
+                system.refresh_processes(ProcessesToUpdate::All, true);
+                *last_refresh = now;
+            }
+            system.process(Pid::from(self.pid as usize)).is_some()
+        } else {
+            #[cfg(target_os = "linux")]
+            {
+                std::path::Path::new(&format!("/proc/{}", self.pid)).exists()
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                // On macOS, use kill(pid, 0) to check if process exists
+                // This doesn't actually send a signal, just checks if we could
+                unsafe { libc::kill(self.pid, 0) == 0 }
+            }
+
+            #[cfg(target_os = "windows")]
+            {
+                // On Windows, try to open process handle
+                use winapi::um::handleapi::CloseHandle;
+                use winapi::um::processthreadsapi::OpenProcess;
+                use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;
+
+                unsafe {
+                    let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, self.pid as u32);
+                    if handle.is_null() {
+                        false
+                    } else {
+                        CloseHandle(handle);
+                        true
+                    }
+                }
+            }
+
+            #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+            {
+                // On other platforms, assume process is still running if we can't check
+                // This is safer than incorrectly reporting it as dead
+                true
+            }
+        }
+    }
 }
+
+static SYSTEM: Lazy<Arc<Mutex<(System, Instant)>>> = Lazy::new(|| Arc::new(Mutex::new((System::new(), Instant::now() - Duration::from_secs(1)))));
 
 fn skip_memory_region(map: &proc_maps::MapRange) -> bool {
     if map.start() == 0xffffffffff600000 {
@@ -1149,11 +1208,11 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
 }
 
 fn get_epsilon_f32(_current: f32) -> f32 {
-    0.5
+    1.0 - f32::EPSILON
 }
 
 fn get_epsilon_f64(_current: f64) -> f64 {
-    0.5
+    1.0 - f64::EPSILON
 }
 
 // Optimized search for aligned integers using SIMD

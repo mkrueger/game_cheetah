@@ -105,3 +105,7 @@ changed-button = Geändert
 unchanged-button = Unverändert
 search-type-label = Suchtyp:
 unknown-search-description = Speicherwerte vergleichen ohne den genauen Wert zu kennen
+
+process-exited-title = Prozess beendet
+process-exited-message = Der Zielprozess läuft nicht mehr. Bitte kehren Sie zum Hauptmenü zurück, um einen neuen Prozess auszuwählen.
+back-to-main-button = Zurück zum Hauptmenü

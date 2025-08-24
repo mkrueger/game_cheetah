@@ -48,7 +48,7 @@ impl App {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
-        if SystemTime::now().duration_since(self.state.last_process_update).unwrap().as_millis() > 500 {
+        if self.app_state == AppState::ProcessSelection && SystemTime::now().duration_since(self.state.last_process_update).unwrap().as_millis() > 500 {
             self.state.update_process_data();
         }
         // Check and update search modes for all searches
@@ -58,6 +58,7 @@ impl App {
 
         match message {
             Message::Attach => {
+                self.state.update_process_data();
                 self.app_state = AppState::ProcessSelection;
                 Task::none()
             }

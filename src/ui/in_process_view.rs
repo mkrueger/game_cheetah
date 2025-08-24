@@ -384,6 +384,34 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
 pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
     use iced::widget::{button, column, container, horizontal_rule, row, text};
 
+    if !app.state.is_process_running() {
+        return container(
+            column![
+                container(
+                    text(fl!(crate::LANGUAGE_LOADER, "process-exited-title"))
+                        .size(18)
+                        .style(|theme: &iced::Theme| iced::widget::text::Style {
+                            color: Some(theme.extended_palette().danger.base.color),
+                        })
+                )
+                .padding(10),
+                container(text(fl!(crate::LANGUAGE_LOADER, "process-exited-message")).size(14)).padding(10),
+                container(
+                    button(text(fl!(crate::LANGUAGE_LOADER, "back-to-main-button")))
+                        .on_press(Message::MainMenu)
+                        .padding(10)
+                        .style(|theme: &iced::Theme, status| button::primary(theme, status))
+                )
+                .padding(10)
+            ]
+            .spacing(10)
+            .align_x(iced::alignment::Horizontal::Center),
+        )
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into();
+    }
+
     let searches = &app.state.searches;
     let current_search = app.state.current_search;
 

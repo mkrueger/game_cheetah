@@ -104,3 +104,6 @@ unchanged-button = Unchanged
 search-type-label = Search Type:
 unknown-search-description = Compare memory values without knowing the exact value
 
+process-exited-title = Process has exited
+process-exited-message = The target process is no longer running. Please return to the main menu to select a new process.
+back-to-main-button = Back to Main Menu
