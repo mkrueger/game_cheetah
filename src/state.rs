@@ -927,32 +927,7 @@ impl GameCheetahEngine {
                 std::path::Path::new(&format!("/proc/{}", self.pid)).exists()
             }
 
-            #[cfg(target_os = "macos")]
-            {
-                // On macOS, use kill(pid, 0) to check if process exists
-                // This doesn't actually send a signal, just checks if we could
-                unsafe { libc::kill(self.pid, 0) == 0 }
-            }
-
-            #[cfg(target_os = "windows")]
-            {
-                // On Windows, try to open process handle
-                use winapi::um::handleapi::CloseHandle;
-                use winapi::um::processthreadsapi::OpenProcess;
-                use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;
-
-                unsafe {
-                    let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, self.pid as u32);
-                    if handle.is_null() {
-                        false
-                    } else {
-                        CloseHandle(handle);
-                        true
-                    }
-                }
-            }
-
-            #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+            #[cfg(not(any(target_os = "linux")))]
             {
                 // On other platforms, assume process is still running if we can't check
                 // This is safer than incorrectly reporting it as dead
