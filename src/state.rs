@@ -312,91 +312,81 @@ impl GameCheetahEngine {
             return;
         };
 
-        // Track seen process names and their PIDs
-        let mut seen_processes: HashMap<String, ProcessInfo> = HashMap::new();
+        // Group processes by cmd to identify duplicates
+        let mut process_groups: HashMap<String, Vec<(&Pid, &Process)>> = HashMap::new();
 
-        // First pass: collect all processes
-        let mut all_processes: Vec<ProcessInfo> = Vec::new();
-        for (pid2, process) in sys.processes() {
+        for (pid, process) in sys.processes() {
+            // Skip processes with no memory or different user
             if process.memory() == 0 || process.user_id() != cur_process.user_id() {
                 continue;
             }
 
-            let pid_u32 = pid2.as_u32();
-            let Ok(conv_pid) = pid_u32.try_into() else {
+            // Skip kernel threads (they usually have no exe)
+            if process.exe().is_none() || process.exe() == Some(std::path::Path::new("")) {
+                continue;
+            }
+
+            // Group by cmd to identify process groups
+            let key = if let Some(cmd) = process.cmd().first() {
+                cmd.to_string_lossy().to_string()
+            } else {
                 continue;
             };
 
-            let user = process.user_id().map(|u| u.to_string()).unwrap_or_default();
-            all_processes.push(ProcessInfo {
-                pid: conv_pid,
-                name: process.name().to_string_lossy().to_string(),
-                cmd: format!("{:?} ", process.cmd()),
-                user,
-                memory: process.memory() as usize,
+            process_groups.entry(key).or_insert_with(Vec::new).push((pid, process));
+        }
+
+        // For each group, pick the best representative
+        // For each group, pick the best representative
+        for (_cmd, mut group) in process_groups {
+            if group.is_empty() {
+                continue;
+            }
+
+            // Calculate total memory for the entire process group
+            let largest_group_memory: u64 = group.iter().map(|(_, p)| p.memory()).max().unwrap_or(0);
+
+            // Sort by criteria to pick the main process:
+            // 1. Lowest PID in the group (usually the parent/main process)
+            // 2. Highest memory usage (main process usually uses more)
+            group.sort_by(|a, b| {
+                // First by PID (ascending - older processes have lower PIDs)
+                match a.0.as_u32().cmp(&b.0.as_u32()) {
+                    std::cmp::Ordering::Equal => {
+                        // Then by memory (descending)
+                        b.1.memory().cmp(&a.1.memory())
+                    }
+                    other => other,
+                }
             });
-        }
 
-        // Build parent-child relationships
-        let mut parent_map: HashMap<Pid, Vec<Pid>> = HashMap::new();
-        for (pid, process) in sys.processes() {
-            if let Some(parent_pid) = process.parent() {
-                parent_map.entry(parent_pid).or_insert_with(Vec::new).push(*pid);
-            }
-        }
+            // Take the first (best) process from the group
+            if let Some((pid, process)) = group.first() {
+                let pid_u32 = pid.as_u32();
+                if let Ok(conv_pid) = pid_u32.try_into() {
+                    let user = process.user_id().map(|u| u.to_string()).unwrap_or_default();
 
-        // Filter strategy: Keep only the parent process if multiple processes have the same name
-        for proc_info in all_processes {
-            let base_name = proc_info.name.clone();
+                    // Get the process name
+                    let name = process.name().to_string_lossy().to_string();
 
-            // Check if this is a child process of something we already have
-            let pid_sysinfo = Pid::from_u32(proc_info.pid as u32);
-            let is_child_of_existing = sys
-                .process(pid_sysinfo)
-                .and_then(|p| p.parent())
-                .map(|parent_pid| seen_processes.values().any(|seen| Pid::from_u32(seen.pid as u32) == parent_pid))
-                .unwrap_or(false);
-
-            if is_child_of_existing {
-                continue; // Skip child processes
-            }
-
-            // For processes with the same name, keep the one with:
-            // 1. The most children (likely the main process)
-            // 2. If tie, the one with more memory
-            // 3. If still tie, the one with lower PID (started first)
-            match seen_processes.get_mut(&base_name) {
-                Some(existing) => {
-                    let existing_children = parent_map.get(&Pid::from_u32(existing.pid as u32)).map(|c| c.len()).unwrap_or(0);
-                    let current_children = parent_map.get(&pid_sysinfo).map(|c| c.len()).unwrap_or(0);
-
-                    let should_replace = if current_children > existing_children {
-                        true // This one has more children
-                    } else if current_children == existing_children {
-                        if proc_info.memory > existing.memory {
-                            true // This one uses more memory
-                        } else if proc_info.memory == existing.memory {
-                            proc_info.pid < existing.pid // This one started first
-                        } else {
-                            false
-                        }
+                    // Build command line, and note if there are multiple instances
+                    let instance_count = group.len();
+                    let cmd = if instance_count > 1 {
+                        format!("{:?} [{} processes]", process.cmd(), instance_count)
                     } else {
-                        false
+                        format!("{:?}", process.cmd())
                     };
 
-                    if should_replace {
-                        *existing = proc_info;
-                    }
-                }
-                None => {
-                    seen_processes.insert(base_name, proc_info);
+                    self.processes.push(ProcessInfo {
+                        pid: conv_pid,
+                        name,
+                        cmd,
+                        user,
+                        memory: largest_group_memory as usize, // Use total group memory instead
+                    });
                 }
             }
         }
-
-        // Convert to final list
-        self.processes = seen_processes.into_values().collect();
-        self.processes.sort_by(|a, b| b.pid.cmp(&a.pid));
     }
 
     fn spawn_update_search(&mut self, search_index: usize, old_results: Arc<Vec<SearchResult>>, chunks: Vec<(usize, usize)>) {
