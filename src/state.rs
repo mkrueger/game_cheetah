@@ -53,7 +53,7 @@ impl Default for GameCheetahEngine {
         thread::spawn(move || {
             let mut freezed_values: HashMap<usize, SearchValue> = HashMap::new();
             let mut pid: i32 = 0;
-            let ticker = tick(Duration::from_millis(500));
+            let ticker = tick(Duration::from_millis(125));
             loop {
                 // Drain all pending messages quickly
                 while let Ok(msg) = rx.try_recv() {
