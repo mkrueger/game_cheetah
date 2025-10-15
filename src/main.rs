@@ -4,7 +4,7 @@
 fn main() {
     use game_cheetah::app::App;
 
-    iced::application(App::title, App::update, App::view)
+    iced::application(App::default, App::update, App::view)
         .theme(App::theme)
         .subscription(App::subscription) // Add this line
         .run()

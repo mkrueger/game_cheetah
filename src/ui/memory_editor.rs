@@ -1,7 +1,7 @@
 use iced::{
     Element, Length, alignment,
     border::Radius,
-    widget::{column, horizontal_rule, row, text_input},
+    widget::{column, row, rule, text_input},
 };
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 
@@ -385,7 +385,7 @@ impl MemoryEditor {
                 ]
                 .spacing(20)
                 .align_y(alignment::Alignment::Center),
-                horizontal_rule(1),
+                rule::horizontal(1),
                 // Header row with column labels
                 container(header).style(|theme: &iced::Theme| {
                     container::Style {

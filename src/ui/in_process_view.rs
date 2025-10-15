@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use i18n_embed_fl::fl;
 use iced::{
     Element, Length, alignment,
-    widget::{button, checkbox, column, container, horizontal_rule, pick_list, progress_bar, row, scrollable, text, text_input, vertical_rule},
+    widget::{button, checkbox, column, container, pick_list, progress_bar, row, rule, scrollable, text, text_input},
 };
 use process_memory::{TryIntoProcessHandle, copy_address};
 
@@ -49,7 +49,7 @@ fn search_ui(app: &App) -> Element<'_, Message> {
                     color: Some(theme.palette().primary),
                 })
         ),
-        horizontal_rule(1),
+        rule::horizontal(1),
         // Conditionally show value input or unknown search info
         if selected_type == SearchType::Unknown {
             row![
@@ -86,7 +86,7 @@ fn search_ui(app: &App) -> Element<'_, Message> {
             let current_bytes = current_search_context.current_bytes.load(Ordering::Acquire);
             column![
                 row![
-                    progress_bar(0.0..=current_search_context.total_bytes as f32, current_bytes as f32).width(Length::Fill),
+                    progress_bar(0.0..=current_search_context.total_bytes as f32, current_bytes as f32), //.width(Length::Fill),
                     if current_search_context.searching == SearchMode::Percent {
                         text(
                             fl!(
@@ -171,7 +171,7 @@ fn search_ui(app: &App) -> Element<'_, Message> {
                                     b
                                 }
                             },
-                            container(vertical_rule(1)).height(Length::Fixed(24.0)),
+                            container(rule::vertical(1)).height(Length::Fixed(24.0)),
                             button(text(fl!(crate::LANGUAGE_LOADER, "clear-button"))).on_press(Message::ClearResults),
                             {
                                 let b = button(text(fl!(crate::LANGUAGE_LOADER, "undo-button")));
@@ -382,7 +382,7 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
 }
 
 pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
-    use iced::widget::{button, column, container, horizontal_rule, row, text};
+    use iced::widget::{button, column, container, row, rule, text};
 
     if !app.state.is_process_running() {
         return container(
@@ -426,7 +426,7 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
         )
         .padding(5)
         .width(140.0),
-        container(horizontal_rule(1)).width(120.0),
+        container(rule::horizontal(1)).width(120.0),
         // Table body
         scrollable(
             column(
@@ -536,10 +536,10 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
         .spacing(10)
         .padding(crate::DIALOG_PADDING)
         .align_y(alignment::Alignment::Center),
-        horizontal_rule(1),
+        rule::horizontal(1),
         row![
             column![search_table, column![add_button, rename_button].spacing(5).padding(10)].height(Length::Fill),
-            vertical_rule(1),
+            rule::vertical(1),
             search_ui(app)
         ]
         .spacing(5)

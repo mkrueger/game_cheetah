@@ -89,7 +89,7 @@ impl App {
                 }
                 Task::none()
             }
-            Message::Exit => window::get_latest().and_then(window::close),
+            Message::Exit => window::latest().and_then(window::close),
             Message::FilterChanged(filter) => {
                 self.state.process_filter = filter;
                 Task::none()

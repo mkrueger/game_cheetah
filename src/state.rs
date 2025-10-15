@@ -332,11 +332,9 @@ impl GameCheetahEngine {
             } else {
                 continue;
             };
-
             process_groups.entry(key).or_insert_with(Vec::new).push((pid, process));
         }
 
-        // For each group, pick the best representative
         // For each group, pick the best representative
         for (_cmd, mut group) in process_groups {
             if group.is_empty() {

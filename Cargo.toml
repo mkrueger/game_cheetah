@@ -20,9 +20,9 @@ Allows to alter values in computer games or freeze them to certain values.
 """
 
 [dependencies]
-iced = "0.13.1"
+iced = { git = "https://github.com/iced-rs/iced.git", branch = "master" }
 process-memory = "0.5.0"
-sysinfo = "0.37.0"
+sysinfo = "0.37.2"
 threadpool = "1.8.1"
 sudo = "0.6.0"
 gabi = "0.2.6"
@@ -34,13 +34,13 @@ boyer-moore-magiclen = "0.2.20"
 proc-maps = "0.4.0"
 webbrowser = "1.0.5"
 rayon = "1.11.0"
-memchr = "2.7.5"
+memchr = "2.7.6"
 crossbeam = "0.8.4"
 crossbeam-channel = "0.5"
 
 # native:
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tracing-subscriber = "0.3"
+tracing-subscriber = "0.3.20"
 
 # web:
 [target.'cfg(target_arch = "wasm32")'.dependencies]
