@@ -39,7 +39,7 @@ fn search_ui(app: &App) -> Element<'_, Message> {
 
     column![
         container(
-            text(format!("{}", current_search_name))
+            text(current_search_name.to_string())
                 .size(18)
                 .font(iced::Font {
                     weight: iced::font::Weight::Bold,
@@ -54,7 +54,7 @@ fn search_ui(app: &App) -> Element<'_, Message> {
         if selected_type == SearchType::Unknown {
             row![
                 text(fl!(crate::LANGUAGE_LOADER, "search-type-label")),
-                pick_list(search_types.clone(), Some(selected_type), |t| Message::SwitchSearchType(t)),
+                pick_list(search_types.clone(), Some(selected_type), Message::SwitchSearchType),
                 text(fl!(crate::LANGUAGE_LOADER, "unknown-search-description"))
             ]
             .spacing(10)
@@ -66,14 +66,14 @@ fn search_ui(app: &App) -> Element<'_, Message> {
                     &fl!(crate::LANGUAGE_LOADER, "search-value-label", valuetype = selected_type.get_description_text()),
                     value_text
                 )
-                .on_input(|v| Message::SearchValueChanged(v))
+                .on_input(Message::SearchValueChanged)
                 .on_submit(Message::Search)
                 .padding(10)
                 .width(Length::Fill),
-                pick_list(search_types.clone(), Some(selected_type), |t| Message::SwitchSearchType(t)),
+                pick_list(search_types.clone(), Some(selected_type), Message::SwitchSearchType),
                 if show_error {
                     text(fl!(crate::LANGUAGE_LOADER, "invalid-number-error")).style(|theme: &iced::Theme| iced::widget::text::Style {
-                        color: Some(theme.palette().danger.into()),
+                        color: Some(theme.palette().danger),
                     })
                 } else {
                     text("")
@@ -119,118 +119,116 @@ fn search_ui(app: &App) -> Element<'_, Message> {
                 .spacing(10.0)
                 .align_y(alignment::Alignment::Center)
             ]
+        } else if !is_search_complete {
+            column![
+                row![{
+                    let b = button(text(fl!(crate::LANGUAGE_LOADER, "initial-search-button")));
+                    if show_error && selected_type != SearchType::Unknown {
+                        b
+                    } else {
+                        b.on_press(Message::Search)
+                    }
+                }]
+                .spacing(10.0)
+            ]
         } else {
-            if !is_search_complete {
+            // Different buttons for Unknown search type
+            if selected_type == SearchType::String {
                 column![
-                    row![{
-                        let b = button(text(fl!(crate::LANGUAGE_LOADER, "initial-search-button")));
-                        if show_error && selected_type != SearchType::Unknown {
-                            b
-                        } else {
-                            b.on_press(Message::Search)
-                        }
-                    }]
-                    .spacing(10.0)
-                ]
-            } else {
-                // Different buttons for Unknown search type
-                if selected_type == SearchType::String {
-                    column![
-                        row![
-                            button(text(fl!(crate::LANGUAGE_LOADER, "initial-search-button"))).on_press(Message::Search),
-                            if search_results >= auto_show_treshold {
-                                if app.state.show_results {
-                                    button(text(fl!(crate::LANGUAGE_LOADER, "hide-results-button"))).on_press(Message::ToggleShowResult)
-                                } else {
-                                    button(text(fl!(crate::LANGUAGE_LOADER, "show-results-button"))).on_press(Message::ToggleShowResult)
-                                }
+                    row![
+                        button(text(fl!(crate::LANGUAGE_LOADER, "initial-search-button"))).on_press(Message::Search),
+                        if search_results >= auto_show_treshold {
+                            if app.state.show_results {
+                                button(text(fl!(crate::LANGUAGE_LOADER, "hide-results-button"))).on_press(Message::ToggleShowResult)
                             } else {
-                                button("").style(|_, _| button::Style::default())
-                            },
-                            text(
-                                fl!(crate::LANGUAGE_LOADER, "found-results-label", results = search_results)
-                                    .chars()
-                                    .filter(|c| c.is_ascii())
-                                    .collect::<String>()
-                            )
-                        ]
-                        .align_y(alignment::Alignment::Center)
-                        .spacing(10.0)
-                    ]
-                } else if selected_type == SearchType::Unknown {
-                    column![
-                        row![
-                            button(text(fl!(crate::LANGUAGE_LOADER, "decreased-button"))).on_press(Message::UnknownSearchDecrease),
-                            button(text(fl!(crate::LANGUAGE_LOADER, "increased-button"))).on_press(Message::UnknownSearchIncrease),
-                            button(text(fl!(crate::LANGUAGE_LOADER, "changed-button"))).on_press(Message::UnknownSearchChanged),
-                            {
-                                let b = button(text(fl!(crate::LANGUAGE_LOADER, "unchanged-button")));
-                                if search_results > 0 || can_undo {
-                                    b.on_press(Message::UnknownSearchUnchanged)
-                                } else {
-                                    b
-                                }
-                            },
-                            container(rule::vertical(1)).height(Length::Fixed(24.0)),
-                            button(text(fl!(crate::LANGUAGE_LOADER, "clear-button"))).on_press(Message::ClearResults),
-                            {
-                                let b = button(text(fl!(crate::LANGUAGE_LOADER, "undo-button")));
-                                if can_undo { b.on_press(Message::Undo) } else { b }
-                            },
-                            if search_results >= auto_show_treshold {
-                                if app.state.show_results {
-                                    button(text(fl!(crate::LANGUAGE_LOADER, "hide-results-button"))).on_press(Message::ToggleShowResult)
-                                } else {
-                                    button(text(fl!(crate::LANGUAGE_LOADER, "show-results-button"))).on_press(Message::ToggleShowResult)
-                                }
-                            } else {
-                                button("").style(|_, _| button::Style::default())
+                                button(text(fl!(crate::LANGUAGE_LOADER, "show-results-button"))).on_press(Message::ToggleShowResult)
                             }
-                        ]
-                        .align_y(alignment::Alignment::Center)
-                        .spacing(10.0),
-                        row![text(if search_results > 0 || can_undo {
+                        } else {
+                            button("").style(|_, _| button::Style::default())
+                        },
+                        text(
                             fl!(crate::LANGUAGE_LOADER, "found-results-label", results = search_results)
                                 .chars()
                                 .filter(|c| c.is_ascii())
                                 .collect::<String>()
-                        } else {
-                            String::new()
-                        })]
+                        )
                     ]
-                } else {
-                    // Normal search buttons
-                    column![
-                        row![
-                            {
-                                let b = button(text(fl!(crate::LANGUAGE_LOADER, "update-button")));
-                                if show_error { b } else { b.on_press(Message::Search) }
-                            },
-                            button(text(fl!(crate::LANGUAGE_LOADER, "clear-button"))).on_press(Message::ClearResults),
-                            {
-                                let b = button(text(fl!(crate::LANGUAGE_LOADER, "undo-button")));
-                                if can_undo { b.on_press(Message::Undo) } else { b }
-                            },
-                            if search_results >= auto_show_treshold {
-                                if app.state.show_results {
-                                    button(text(fl!(crate::LANGUAGE_LOADER, "hide-results-button"))).on_press(Message::ToggleShowResult)
-                                } else {
-                                    button(text(fl!(crate::LANGUAGE_LOADER, "show-results-button"))).on_press(Message::ToggleShowResult)
-                                }
+                    .align_y(alignment::Alignment::Center)
+                    .spacing(10.0)
+                ]
+            } else if selected_type == SearchType::Unknown {
+                column![
+                    row![
+                        button(text(fl!(crate::LANGUAGE_LOADER, "decreased-button"))).on_press(Message::UnknownSearchDecrease),
+                        button(text(fl!(crate::LANGUAGE_LOADER, "increased-button"))).on_press(Message::UnknownSearchIncrease),
+                        button(text(fl!(crate::LANGUAGE_LOADER, "changed-button"))).on_press(Message::UnknownSearchChanged),
+                        {
+                            let b = button(text(fl!(crate::LANGUAGE_LOADER, "unchanged-button")));
+                            if search_results > 0 || can_undo {
+                                b.on_press(Message::UnknownSearchUnchanged)
                             } else {
-                                button("").style(|_, _| button::Style::default())
-                            },
-                            text(
-                                fl!(crate::LANGUAGE_LOADER, "found-results-label", results = search_results)
-                                    .chars()
-                                    .filter(|c| c.is_ascii())
-                                    .collect::<String>()
-                            )
-                        ]
-                        .align_y(alignment::Alignment::Center)
-                        .spacing(10.0)
+                                b
+                            }
+                        },
+                        container(rule::vertical(1)).height(Length::Fixed(24.0)),
+                        button(text(fl!(crate::LANGUAGE_LOADER, "clear-button"))).on_press(Message::ClearResults),
+                        {
+                            let b = button(text(fl!(crate::LANGUAGE_LOADER, "undo-button")));
+                            if can_undo { b.on_press(Message::Undo) } else { b }
+                        },
+                        if search_results >= auto_show_treshold {
+                            if app.state.show_results {
+                                button(text(fl!(crate::LANGUAGE_LOADER, "hide-results-button"))).on_press(Message::ToggleShowResult)
+                            } else {
+                                button(text(fl!(crate::LANGUAGE_LOADER, "show-results-button"))).on_press(Message::ToggleShowResult)
+                            }
+                        } else {
+                            button("").style(|_, _| button::Style::default())
+                        }
                     ]
-                }
+                    .align_y(alignment::Alignment::Center)
+                    .spacing(10.0),
+                    row![text(if search_results > 0 || can_undo {
+                        fl!(crate::LANGUAGE_LOADER, "found-results-label", results = search_results)
+                            .chars()
+                            .filter(|c| c.is_ascii())
+                            .collect::<String>()
+                    } else {
+                        String::new()
+                    })]
+                ]
+            } else {
+                // Normal search buttons
+                column![
+                    row![
+                        {
+                            let b = button(text(fl!(crate::LANGUAGE_LOADER, "update-button")));
+                            if show_error { b } else { b.on_press(Message::Search) }
+                        },
+                        button(text(fl!(crate::LANGUAGE_LOADER, "clear-button"))).on_press(Message::ClearResults),
+                        {
+                            let b = button(text(fl!(crate::LANGUAGE_LOADER, "undo-button")));
+                            if can_undo { b.on_press(Message::Undo) } else { b }
+                        },
+                        if search_results >= auto_show_treshold {
+                            if app.state.show_results {
+                                button(text(fl!(crate::LANGUAGE_LOADER, "hide-results-button"))).on_press(Message::ToggleShowResult)
+                            } else {
+                                button(text(fl!(crate::LANGUAGE_LOADER, "show-results-button"))).on_press(Message::ToggleShowResult)
+                            }
+                        } else {
+                            button("").style(|_, _| button::Style::default())
+                        },
+                        text(
+                            fl!(crate::LANGUAGE_LOADER, "found-results-label", results = search_results)
+                                .chars()
+                                .filter(|c| c.is_ascii())
+                                .collect::<String>()
+                        )
+                    ]
+                    .align_y(alignment::Alignment::Center)
+                    .spacing(10.0)
+                ]
             }
         },
         if search_results > 0 && search_results < auto_show_treshold || app.state.show_results {
@@ -271,6 +269,8 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
             container(text(fl!(crate::LANGUAGE_LOADER, "value-heading")).size(14)).width(Length::Fixed(120.0)),
         ]
     } else {
+        // Check if all results are frozen for toggle button state
+        let all_frozen = !results.is_empty() && results.iter().all(|r| current_search_context.freezed_addresses.contains(&r.addr));
         row![
             container(text(fl!(crate::LANGUAGE_LOADER, "address-heading")).size(14)).width(Length::Fixed(120.0)),
             container(text(fl!(crate::LANGUAGE_LOADER, "value-heading")).size(14)).width(Length::Fixed(120.0)),
@@ -279,7 +279,15 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
             } else {
                 container(text("")).width(Length::Fixed(0.0))
             },
-            container(text(fl!(crate::LANGUAGE_LOADER, "freezed-heading")).size(14)).width(Length::Fill)
+            container(
+                row![
+                    checkbox("", all_frozen).on_toggle(|_| Message::ToggleFreezeAll).size(14),
+                    text(fl!(crate::LANGUAGE_LOADER, "freezed-heading")).size(14)
+                ]
+                .spacing(5)
+                .align_y(alignment::Alignment::Center)
+            )
+            .width(Length::Fill)
         ]
     }
     .padding(2)
@@ -314,11 +322,17 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                 button(text(fl!(crate::LANGUAGE_LOADER, "remove-button"))).on_press(Message::RemoveResult(i))
             ]
         } else {
+            let is_frozen = current_search_context.freezed_addresses.contains(&result.addr);
             row![
                 container(text(format!("0x{:X}", result.addr)).size(14)).width(Length::Fixed(120.0)),
-                text_input("", &value_text)
-                    .on_input(move |v| Message::ResultValueChanged(i, v))
-                    .width(Length::Fixed(120.0)),
+                {
+                    let input = text_input("", &value_text).width(Length::Fixed(120.0));
+                    if is_frozen {
+                        input // frozen: no on_input handler = disabled
+                    } else {
+                        input.on_input(move |v| Message::ResultValueChanged(i, v))
+                    }
+                },
                 if show_search_types {
                     container(text(result.search_type.get_description_text()).size(14)).width(Length::Fixed(120.0))
                 } else {

@@ -11,7 +11,7 @@ impl Display for SearchValue {
             if self.1.len() >= needed { Some(convert(&self.1[..needed])) } else { None }
         };
         let s = match self.0 {
-            SearchType::Byte => self.1.get(0).map(|b| b.to_string()),
+            SearchType::Byte => self.1.first().map(|b| b.to_string()),
             SearchType::Short => to_str(2, &|b| {
                 let arr: [u8; 2] = b.try_into().unwrap();
                 i16::from_le_bytes(arr).to_string()

@@ -9,6 +9,9 @@ use std::{
 use crate::{FreezeMessage, GameCheetahEngine, SearchResult, SearchType, UnknownComparison};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 
+/// Type alias for memory snapshot storage to reduce type complexity
+pub type MemorySnapshot = Arc<RwLock<Vec<(usize, Arc<[u8]>)>>>;
+
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum SearchMode {
     None,
@@ -37,7 +40,7 @@ pub struct SearchContext {
     pub cache_valid: Arc<AtomicBool>,
 
     // For unknown searches - store memory snapshots
-    pub memory_snapshot: Arc<RwLock<Vec<(usize, Arc<[u8]>)>>>,
+    pub memory_snapshot: MemorySnapshot,
     pub unknown_comparison: Option<UnknownComparison>,
 }
 
@@ -115,22 +118,21 @@ impl SearchContext {
 
     pub fn collect_results(&self) -> Arc<Vec<SearchResult>> {
         // Check if cache is valid - return Arc clone (cheap!)
-        if self.cache_valid.load(Ordering::Acquire) {
-            if let Ok(cache) = self.cached_results.read() {
-                if let Some(ref results) = *cache {
-                    return Arc::clone(results); // Only clones the Arc, not the Vec!
-                }
-            }
+        if self.cache_valid.load(Ordering::Acquire)
+            && let Ok(cache) = self.cached_results.read()
+            && let Some(ref results) = *cache
+        {
+            return Arc::clone(results); // Only clones the Arc, not the Vec!
         }
 
         let mut all_results = Vec::new();
 
         // Get existing cached results in a separate scope to ensure lock is dropped
         {
-            if let Ok(cache) = self.cached_results.read() {
-                if let Some(ref cached) = *cache {
-                    all_results.extend_from_slice(cached);
-                }
+            if let Ok(cache) = self.cached_results.read()
+                && let Some(ref cached) = *cache
+            {
+                all_results.extend_from_slice(cached);
             }
         } // Read lock definitely dropped here
 

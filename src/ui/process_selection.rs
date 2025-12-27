@@ -194,8 +194,7 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
                 column(
                     filtered_processes
                         .iter()
-                        .enumerate()
-                        .map(|(_index, process)| {
+                        .map(|process| {
                             let process_clone = process.clone();
                             let bb = gabi::BytesConfig::default();
                             let memory = bb.bytes(process.memory as u64).to_string();

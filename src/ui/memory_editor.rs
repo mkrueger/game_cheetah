@@ -1,7 +1,7 @@
 use iced::{
     Element, Length, alignment,
     border::Radius,
-    widget::{column, row, rule, text_input},
+    widget::{rule, text_input},
 };
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 
@@ -30,10 +30,10 @@ impl MemoryEditor {
         let total_bytes = BYTES_PER_ROW * MAX_ROWS;
         let mut memory = vec![0u8; total_bytes];
 
-        if let Ok(handle) = (app.state.pid as process_memory::Pid).try_into_process_handle() {
-            if let Ok(buf) = copy_address(address, total_bytes, &handle) {
-                memory[..buf.len().min(total_bytes)].copy_from_slice(&buf[..buf.len().min(total_bytes)]);
-            }
+        if let Ok(handle) = (app.state.pid as process_memory::Pid).try_into_process_handle()
+            && let Ok(buf) = copy_address(address, total_bytes, &handle)
+        {
+            memory[..buf.len().min(total_bytes)].copy_from_slice(&buf[..buf.len().min(total_bytes)]);
         }
 
         // Calculate which bytes to highlight
@@ -191,7 +191,7 @@ impl MemoryEditor {
 
             rows.push(
                 row![
-                    container(text(format!("{:08X}", address + offset as usize)).size(14).font(iced::Font::MONOSPACE))
+                    container(text(format!("{:08X}", address + offset)).size(14).font(iced::Font::MONOSPACE))
                         .width(Length::Fixed(100.0))
                         .padding(0),
                     container(hex_cells).width(Length::Fixed(480.0)).padding(0),
@@ -207,7 +207,7 @@ impl MemoryEditor {
             let cursor_address = address + cursor_offset;
 
             // Get enough bytes for the largest type (8 bytes for u64/double)
-            let mut value_bytes = vec![0u8; 8];
+            let mut value_bytes = [0u8; 8];
             let bytes_available = memory.len().saturating_sub(cursor_offset).min(8);
             if bytes_available > 0 {
                 value_bytes[..bytes_available].copy_from_slice(&memory[cursor_offset..cursor_offset + bytes_available]);

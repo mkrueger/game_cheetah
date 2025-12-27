@@ -7,7 +7,11 @@ use std::{
 use i18n_embed_fl::fl;
 use iced::{
     Element, Length, Task, Theme, alignment, keyboard,
-    widget::{button, column, container, text},
+    widget::{
+        button, column, container,
+        operation::{focus_next, focus_previous},
+        text,
+    },
     window,
 };
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
@@ -139,10 +143,10 @@ impl App {
                 Task::none()
             }
             Message::ConfirmRenameSearch => {
-                if let Some(index) = self.renaming_search_index {
-                    if let Some(search) = self.state.searches.get_mut(index) {
-                        search.description = self.rename_search_text.clone();
-                    }
+                if let Some(index) = self.renaming_search_index
+                    && let Some(search) = self.state.searches.get_mut(index)
+                {
+                    search.description = self.rename_search_text.clone();
                 }
                 self.renaming_search_index = None;
                 self.rename_search_text.clear();
@@ -229,10 +233,10 @@ impl App {
                 Task::none()
             }
             Message::Undo => {
-                if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
-                    if let Some(old) = search_context.old_results.pop() {
-                        search_context.set_cached_results(old);
-                    }
+                if let Some(search_context) = self.state.searches.get_mut(self.state.current_search)
+                    && let Some(old) = search_context.old_results.pop()
+                {
+                    search_context.set_cached_results(old);
                 }
                 Task::none()
             }
@@ -247,29 +251,29 @@ impl App {
                 Task::none()
             }
             Message::ResultValueChanged(index, value_text) => {
-                if let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle() {
-                    if let Some(current_search) = self.state.searches.get_mut(self.state.current_search) {
-                        // Collect all results
-                        let results = current_search.collect_results();
+                if let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle()
+                    && let Some(current_search) = self.state.searches.get_mut(self.state.current_search)
+                {
+                    // Collect all results
+                    let results = current_search.collect_results();
 
-                        if index < results.len() {
-                            let result = &results[index];
-                            if let Ok(value) = result.search_type.from_string(&value_text) {
-                                handle.put_address(result.addr, &value.1).unwrap_or_default();
-                                if current_search.freezed_addresses.contains(&result.addr) {
-                                    self.state
-                                        .freeze_sender
-                                        .send(FreezeMessage {
-                                            msg: crate::MessageCommand::Freeze,
-                                            addr: result.addr,
-                                            value,
-                                        })
-                                        .unwrap_or_default();
-                                }
+                    if index < results.len() {
+                        let result = &results[index];
+                        if let Ok(value) = result.search_type.from_string(&value_text) {
+                            handle.put_address(result.addr, &value.1).unwrap_or_default();
+                            if current_search.freezed_addresses.contains(&result.addr) {
+                                self.state
+                                    .freeze_sender
+                                    .send(FreezeMessage {
+                                        msg: crate::MessageCommand::Freeze,
+                                        addr: result.addr,
+                                        value,
+                                    })
+                                    .unwrap_or_default();
                             }
-                        } else {
-                            println!("Invalid value for result at index {}: {}", index, value_text);
                         }
+                    } else {
+                        println!("Invalid value for result at index {}: {}", index, value_text);
                     }
                 }
                 Task::none()
@@ -284,17 +288,17 @@ impl App {
                         let b = !search_context.freezed_addresses.contains(&result.addr);
                         if b {
                             search_context.freezed_addresses.insert(result.addr);
-                            if let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle() {
-                                if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
-                                    self.state
-                                        .freeze_sender
-                                        .send(FreezeMessage {
-                                            msg: MessageCommand::Freeze,
-                                            addr: result.addr,
-                                            value: SearchValue(result.search_type, buf),
-                                        })
-                                        .unwrap_or_default();
-                                }
+                            if let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle()
+                                && let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle)
+                            {
+                                self.state
+                                    .freeze_sender
+                                    .send(FreezeMessage {
+                                        msg: MessageCommand::Freeze,
+                                        addr: result.addr,
+                                        value: SearchValue(result.search_type, buf),
+                                    })
+                                    .unwrap_or_default();
                             }
                         } else {
                             search_context.freezed_addresses.remove(&(result.addr));
@@ -302,6 +306,49 @@ impl App {
                                 .freeze_sender
                                 .send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
                                 .unwrap_or_default();
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Message::ToggleFreezeAll => {
+                if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
+                    let results = search_context.collect_results();
+                    if results.is_empty() {
+                        return Task::none();
+                    }
+
+                    // Check if all are frozen - if so, unfreeze all; otherwise freeze all
+                    let all_frozen = results.iter().all(|r| search_context.freezed_addresses.contains(&r.addr));
+
+                    if all_frozen {
+                        // Unfreeze all
+                        for result in results.iter() {
+                            if search_context.freezed_addresses.remove(&result.addr) {
+                                self.state
+                                    .freeze_sender
+                                    .send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
+                                    .unwrap_or_default();
+                            }
+                        }
+                    } else {
+                        // Freeze all
+                        if let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle() {
+                            for result in results.iter() {
+                                if !search_context.freezed_addresses.contains(&result.addr) {
+                                    search_context.freezed_addresses.insert(result.addr);
+                                    if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
+                                        self.state
+                                            .freeze_sender
+                                            .send(FreezeMessage {
+                                                msg: MessageCommand::Freeze,
+                                                addr: result.addr,
+                                                value: SearchValue(result.search_type, buf),
+                                            })
+                                            .unwrap_or_default();
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -373,13 +420,12 @@ impl App {
 
             Message::MemoryEditorCellChanged(offset, value) => {
                 // Validate and update the byte at the given offset
-                if value.len() <= 2 {
-                    if let Ok(byte_value) = u8::from_str_radix(&value, 16) {
-                        if let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle() {
-                            let address = self.state.edit_address + offset;
-                            handle.put_address(address, &[byte_value]).unwrap_or_default();
-                        }
-                    }
+                if value.len() <= 2
+                    && let Ok(byte_value) = u8::from_str_radix(&value, 16)
+                    && let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle()
+                {
+                    let address = self.state.edit_address + offset;
+                    handle.put_address(address, &[byte_value]).unwrap_or_default();
                 }
                 Task::none()
             }
@@ -473,6 +519,8 @@ impl App {
                 self.state.unknown_search_compare(self.state.current_search, UnknownComparison::Unchanged);
                 Task::none()
             }
+            Message::FocusNext => focus_next(),
+            Message::FocusPrevious => focus_previous(),
         }
     }
 
@@ -550,7 +598,17 @@ impl App {
                 _ => None,
             })
         } else {
-            iced::Subscription::none()
+            // Tab/Shift+Tab for focus navigation in normal mode
+            keyboard::on_key_press(|key, modifiers| match key {
+                keyboard::Key::Named(keyboard::key::Named::Tab) => {
+                    if modifiers.shift() {
+                        Some(Message::FocusPrevious)
+                    } else {
+                        Some(Message::FocusNext)
+                    }
+                }
+                _ => None,
+            })
         }
     }
 }

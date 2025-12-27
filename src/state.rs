@@ -71,7 +71,7 @@ impl ProcessMemReader {
 #[cfg(target_os = "linux")]
 fn fast_read_memory(pid: process_memory::Pid, address: usize, size: usize) -> Result<Vec<u8>, std::io::Error> {
     use std::fs::OpenOptions;
-    use std::io::{Error, ErrorKind};
+    use std::io::Error;
     use std::os::unix::io::AsRawFd;
 
     // Try process_vm_readv first (fastest based on benchmarks: ~670 MB/s vs ~540 MB/s)
@@ -114,8 +114,8 @@ fn fast_read_memory(pid: process_memory::Pid, address: usize, size: usize) -> Re
 
     // Final fallback to copy_address
     match pid.try_into_process_handle() {
-        Ok(handle) => copy_address(address, size, &handle).map_err(|e| Error::new(ErrorKind::Other, e.to_string())),
-        Err(e) => Err(Error::new(ErrorKind::Other, e.to_string())),
+        Ok(handle) => copy_address(address, size, &handle).map_err(|e| Error::other(e.to_string())),
+        Err(e) => Err(Error::other(e.to_string())),
     }
 }
 
@@ -188,13 +188,12 @@ impl Default for GameCheetahEngine {
                 // Wait either for next tick or a new message
                 select! {
                     recv(ticker) -> _ => {
-                        if pid != 0 {
-                            if let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle() {
+                        if pid != 0
+                            && let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle() {
                                 for (addr, value) in &freezed_values {
                                     let _ = handle.put_address(*addr, &value.1);
                                 }
                             }
-                        }
                     },
                     recv(rx) -> msg => {
                         if let Ok(msg) = msg {
@@ -445,7 +444,7 @@ impl GameCheetahEngine {
             } else {
                 continue;
             };
-            process_groups.entry(key).or_insert_with(Vec::new).push((pid, process));
+            process_groups.entry(key).or_default().push((pid, process));
         }
 
         // For each group, pick the best representative
@@ -1101,10 +1100,10 @@ fn skip_memory_region(map: &proc_maps::MapRange) -> bool {
     // Skip regions that are likely to cause issues
 
     if cfg!(target_os = "windows") {
-        if let Some(file_name) = map.filename() {
-            if file_name.starts_with("C:\\WINDOWS\\") {
-                return true;
-            }
+        if let Some(file_name) = map.filename()
+            && file_name.starts_with("C:\\WINDOWS\\")
+        {
+            return true;
         }
     } else if cfg!(target_os = "linux") {
         if !map.is_write() {
@@ -1140,10 +1139,10 @@ fn skip_memory_region(map: &proc_maps::MapRange) -> bool {
         if !map.is_write() || map.filename().is_none() || map.size() < 1024 * 1024 {
             return true;
         }
-        if let Some(file_name) = map.filename() {
-            if file_name.starts_with("/usr/lib") || file_name.starts_with("/System/") {
-                return true;
-            }
+        if let Some(file_name) = map.filename()
+            && (file_name.starts_with("/usr/lib") || file_name.starts_with("/System/"))
+        {
+            return true;
         }
     }
     false
@@ -1208,7 +1207,7 @@ where
                     };
 
                     if matches {
-                        results.push(result.clone());
+                        results.push(*result);
                     }
                 }
             }
@@ -1972,13 +1971,11 @@ fn search_f64_simd(memory_data: &[u8], target: f64, epsilon: f64, start: usize) 
 // Helper function to compare values based on type and comparison
 fn float_eps(old: f32) -> f32 {
     // 0.1% relative or 1e-4 absolute minimum
-    let rel = (old.abs() * 1e-3).max(1e-4);
-    rel
+    (old.abs() * 1e-3).max(1e-4)
 }
 fn double_eps(old: f64) -> f64 {
     // 0.01% relative or 1e-6 absolute minimum
-    let rel = (old.abs() * 1e-4).max(1e-6);
-    rel
+    (old.abs() * 1e-4).max(1e-6)
 }
 
 // Helper function to compare values based on type and comparison
@@ -2103,14 +2100,14 @@ pub fn compare_values(old_bytes: &[u8], new_bytes: &[u8], search_type: SearchTyp
 }
 
 fn is_ascii_printable(b: u8) -> bool {
-    (b >= 0x20 && b <= 0x7E) || b == b'\t' || b == b'\r' || b == b'\n'
+    (0x20..=0x7E).contains(&b) || b == b'\t' || b == b'\r' || b == b'\n'
 }
 fn is_boundary_byte(b: u8) -> bool {
     b == 0 || !is_ascii_printable(b)
 }
 fn is_printable_u16(u: u16) -> bool {
     // Conservative: ASCII printable + common whitespace
-    (u >= 0x20 && u <= 0x7E) || u == 0x09 || u == 0x0A || u == 0x0D
+    (0x20..=0x7E).contains(&u) || u == 0x09 || u == 0x0A || u == 0x0D
 }
 
 fn encode_utf16_le(s: &str) -> Vec<u8> {

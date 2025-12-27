@@ -29,6 +29,7 @@ pub enum Message {
     Undo,
     ResultValueChanged(usize, String),
     ToggleFreeze(usize),
+    ToggleFreezeAll,
     OpenEditor(usize),
     RemoveResult(usize),
     CloseMemoryEditor,
@@ -49,4 +50,7 @@ pub enum Message {
     UnknownSearchIncrease,
     UnknownSearchChanged,
     UnknownSearchUnchanged,
+
+    FocusNext,
+    FocusPrevious,
 }
