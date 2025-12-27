@@ -406,7 +406,7 @@ impl MemoryEditor {
         .into()
     }
 
-    pub fn initalize(&mut self, addr: usize, search_type: SearchType) {
+    pub fn initialize(&mut self, addr: usize, search_type: SearchType) {
         self.address_text = format!("{:X}", addr);
         self.editor_initial_address = addr;
         self.editor_initial_size = if search_type == SearchType::String || search_type == SearchType::StringUtf16 {

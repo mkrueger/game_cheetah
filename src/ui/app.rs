@@ -345,7 +345,7 @@ impl App {
                     if index < results.len() {
                         let result = &results[index];
                         self.state.edit_address = result.addr;
-                        self.memory_editor.initalize(result.addr, result.search_type);
+                        self.memory_editor.initialize(result.addr, result.search_type);
                         self.app_state = AppState::MemoryEditor;
                     }
                 }

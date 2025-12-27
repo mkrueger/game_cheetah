@@ -178,9 +178,78 @@ fn test_simd_search_performance() {
     let results = search_memory(&memory, &search_value, SearchType::Int, 0x10000000);
     let duration = start.elapsed();
 
-    println!("SIMD search took: {:?} for 1MB", duration);
+    println!("SIMD Int32 search took: {:?} for 1MB", duration);
     assert_eq!(results.len(), 1024);
     assert!(duration.as_millis() < 100); // Should be fast
+}
+
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn test_simd_float_search_performance() {
+    use std::time::Instant;
+
+    let mut memory = vec![0x00; 1024 * 1024]; // 1MB
+    let target: f32 = 3.14159;
+
+    for i in (0..memory.len()).step_by(1024) {
+        memory[i..i + 4].copy_from_slice(&target.to_le_bytes());
+    }
+
+    let search_value = target.to_le_bytes().to_vec();
+
+    let start = Instant::now();
+    let results = search_memory(&memory, &search_value, SearchType::Float, 0x10000000);
+    let duration = start.elapsed();
+
+    println!("SIMD Float32 search took: {:?} for 1MB", duration);
+    assert_eq!(results.len(), 1024);
+    assert!(duration.as_millis() < 100);
+}
+
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn test_simd_short_search_performance() {
+    use std::time::Instant;
+
+    let mut memory = vec![0x00; 1024 * 1024]; // 1MB
+    let target: u16 = 0x1234;
+
+    for i in (0..memory.len()).step_by(1024) {
+        memory[i..i + 2].copy_from_slice(&target.to_le_bytes());
+    }
+
+    let search_value = target.to_le_bytes().to_vec();
+
+    let start = Instant::now();
+    let results = search_memory(&memory, &search_value, SearchType::Short, 0x10000000);
+    let duration = start.elapsed();
+
+    println!("SIMD Int16 search took: {:?} for 1MB", duration);
+    assert_eq!(results.len(), 1024);
+    assert!(duration.as_millis() < 100);
+}
+
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn test_simd_double_search_performance() {
+    use std::time::Instant;
+
+    let mut memory = vec![0x00; 1024 * 1024]; // 1MB
+    let target: f64 = 3.141592653589793;
+
+    for i in (0..memory.len()).step_by(1024) {
+        memory[i..i + 8].copy_from_slice(&target.to_le_bytes());
+    }
+
+    let search_value = target.to_le_bytes().to_vec();
+
+    let start = Instant::now();
+    let results = search_memory(&memory, &search_value, SearchType::Double, 0x10000000);
+    let duration = start.elapsed();
+
+    println!("SIMD Float64 search took: {:?} for 1MB", duration);
+    assert_eq!(results.len(), 1024);
+    assert!(duration.as_millis() < 100);
 }
 
 #[test]

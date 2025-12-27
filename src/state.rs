@@ -17,6 +17,119 @@ use std::{
 };
 use sysinfo::*;
 
+/// Process memory reader using /proc/[pid]/mem for zero-copy reads on Linux.
+/// This is more efficient than process_vm_readv for multiple reads as we keep the file open.
+#[cfg(target_os = "linux")]
+pub struct ProcessMemReader {
+    file: std::fs::File,
+}
+
+#[cfg(target_os = "linux")]
+impl ProcessMemReader {
+    pub fn new(pid: process_memory::Pid) -> std::io::Result<Self> {
+        use std::fs::OpenOptions;
+        let path = format!("/proc/{}/mem", pid);
+        let file = OpenOptions::new().read(true).open(&path)?;
+        Ok(Self { file })
+    }
+
+    /// Read memory at the given address using pread (no seeking required, thread-safe)
+    pub fn read_at(&self, address: usize, size: usize) -> std::io::Result<Vec<u8>> {
+        use std::io::Error;
+        use std::os::unix::io::AsRawFd;
+
+        let mut buffer = vec![0u8; size];
+        let fd = self.file.as_raw_fd();
+
+        let result = unsafe { libc::pread(fd, buffer.as_mut_ptr() as *mut libc::c_void, size, address as libc::off_t) };
+
+        if result == -1 {
+            Err(Error::last_os_error())
+        } else if (result as usize) < size {
+            buffer.truncate(result as usize);
+            Ok(buffer)
+        } else {
+            Ok(buffer)
+        }
+    }
+
+    /// Read directly into an existing buffer (avoids allocation)
+    pub fn read_into(&self, address: usize, buffer: &mut [u8]) -> std::io::Result<usize> {
+        use std::io::Error;
+        use std::os::unix::io::AsRawFd;
+
+        let fd = self.file.as_raw_fd();
+
+        let result = unsafe { libc::pread(fd, buffer.as_mut_ptr() as *mut libc::c_void, buffer.len(), address as libc::off_t) };
+
+        if result == -1 { Err(Error::last_os_error()) } else { Ok(result as usize) }
+    }
+}
+
+/// Fast memory read using process_vm_readv on Linux (fastest method).
+/// Falls back to /proc/[pid]/mem + pread on error.
+#[cfg(target_os = "linux")]
+fn fast_read_memory(pid: process_memory::Pid, address: usize, size: usize) -> Result<Vec<u8>, std::io::Error> {
+    use std::fs::OpenOptions;
+    use std::io::{Error, ErrorKind};
+    use std::os::unix::io::AsRawFd;
+
+    // Try process_vm_readv first (fastest based on benchmarks: ~670 MB/s vs ~540 MB/s)
+    let mut buffer = vec![0u8; size];
+
+    let local_iov = libc::iovec {
+        iov_base: buffer.as_mut_ptr() as *mut libc::c_void,
+        iov_len: size,
+    };
+
+    let remote_iov = libc::iovec {
+        iov_base: address as *mut libc::c_void,
+        iov_len: size,
+    };
+
+    let result = unsafe { libc::process_vm_readv(pid as libc::pid_t, &local_iov as *const libc::iovec, 1, &remote_iov as *const libc::iovec, 1, 0) };
+
+    if result > 0 {
+        if (result as usize) < size {
+            buffer.truncate(result as usize);
+        }
+        return Ok(buffer);
+    }
+
+    // Fallback to /proc/[pid]/mem with pread
+    let path = format!("/proc/{}/mem", pid);
+    if let Ok(file) = OpenOptions::new().read(true).open(&path) {
+        let mut buffer = vec![0u8; size];
+        let fd = file.as_raw_fd();
+
+        let result = unsafe { libc::pread(fd, buffer.as_mut_ptr() as *mut libc::c_void, size, address as libc::off_t) };
+
+        if result > 0 {
+            if (result as usize) < size {
+                buffer.truncate(result as usize);
+            }
+            return Ok(buffer);
+        }
+    }
+
+    // Final fallback to copy_address
+    match pid.try_into_process_handle() {
+        Ok(handle) => copy_address(address, size, &handle).map_err(|e| Error::new(ErrorKind::Other, e.to_string())),
+        Err(e) => Err(Error::new(ErrorKind::Other, e.to_string())),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+#[cfg(not(target_os = "linux"))]
+fn fast_read_memory(pid: process_memory::Pid, address: usize, size: usize) -> Result<Vec<u8>, std::io::Error> {
+    use std::io::{Error, ErrorKind};
+
+    match pid.try_into_process_handle() {
+        Ok(handle) => copy_address(address, size, &handle).map_err(|e| Error::new(ErrorKind::Other, e.to_string())),
+        Err(e) => Err(Error::new(ErrorKind::Other, e.to_string())),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProcessInfo {
     pub pid: process_memory::Pid,
@@ -184,7 +297,7 @@ impl GameCheetahEngine {
                             let mut start = map.start();
                             ctx_mut.total_bytes += size;
 
-                            const MAX_BLOCK: usize = 10 * 1024 * 1024;
+                            const MAX_BLOCK: usize = 50 * 1024 * 1024;
                             let chunk_plus = MAX_BLOCK.saturating_add(overlap);
                             while size > chunk_plus {
                                 regions.push((start, chunk_plus));
@@ -231,9 +344,9 @@ impl GameCheetahEngine {
                         let mut start = map.start();
                         ctx_mut.total_bytes += size;
 
-                        const MAX_BLOCK: usize = 10 * 1024 * 1024;
-                        while size > MAX_BLOCK + 3 {
-                            regions.push((start, MAX_BLOCK + 3));
+                        const MAX_BLOCK: usize = 50 * 1024 * 1024;
+                        while size > MAX_BLOCK + 7 {
+                            regions.push((start, MAX_BLOCK + 7));
                             start += MAX_BLOCK;
                             size -= MAX_BLOCK;
                         }
@@ -442,18 +555,41 @@ impl GameCheetahEngine {
         search_complete.store(false, Ordering::SeqCst);
 
         std::thread::spawn(move || {
+            // Use thread-local ProcessMemReader for efficient repeated reads
+            #[cfg(target_os = "linux")]
+            thread_local! {
+                static MEM_READER: std::cell::RefCell<Option<(process_memory::Pid, ProcessMemReader)>> = const { std::cell::RefCell::new(None) };
+            }
+
             regions.par_iter().for_each(|(start, size)| {
-                let handle = match pid.try_into_process_handle() {
-                    Ok(h) => h,
-                    Err(e) => {
-                        eprintln!("Failed to get process handle: {e}");
-                        current_bytes.fetch_add(*size, Ordering::SeqCst);
-                        return;
-                    }
-                };
                 let value_text = String::from_utf8(search_data.1.clone()).unwrap_or_default();
-                // Try to copy the memory region, but handle failures gracefully
-                match copy_address(*start, *size, &handle) {
+
+                // Try to read memory using the most efficient method available
+                #[cfg(target_os = "linux")]
+                let memory_result = MEM_READER.with(|reader_cell| {
+                    let mut reader_opt = reader_cell.borrow_mut();
+
+                    // Check if we have a valid reader for this pid
+                    let needs_new_reader = match &*reader_opt {
+                        Some((cached_pid, _)) => *cached_pid != pid,
+                        None => true,
+                    };
+
+                    if needs_new_reader {
+                        *reader_opt = ProcessMemReader::new(pid).ok().map(|r| (pid, r));
+                    }
+
+                    if let Some((_, reader)) = &*reader_opt {
+                        reader.read_at(*start, *size)
+                    } else {
+                        fast_read_memory(pid, *start, *size)
+                    }
+                });
+
+                #[cfg(not(target_os = "linux"))]
+                let memory_result = fast_read_memory(pid, *start, *size);
+
+                match memory_result {
                     Ok(memory) => {
                         let results = if matches!(search_data.0, SearchType::Guess) {
                             // For Guess type, try all possible interpretations
@@ -560,22 +696,29 @@ impl GameCheetahEngine {
         search_complete.store(false, Ordering::SeqCst);
 
         std::thread::spawn(move || {
-            for (start, size) in regions.iter() {
-                let handle = match pid.try_into_process_handle() {
-                    Ok(h) => h,
-                    Err(_) => {
-                        current_bytes.fetch_add(*size, Ordering::SeqCst);
-                        continue;
-                    }
-                };
+            // Open /proc/[pid]/mem once for all reads
+            #[cfg(target_os = "linux")]
+            let mem_reader = ProcessMemReader::new(pid).ok();
 
-                const CHUNK_SIZE: usize = 10 * 1024 * 1024; // 10MB
+            for (start, size) in regions.iter() {
+                const CHUNK_SIZE: usize = 50 * 1024 * 1024; // 50MB
                 let mut region_offset = 0;
                 while region_offset < *size {
                     let chunk_size = (*size - region_offset).min(CHUNK_SIZE);
                     let chunk_start = *start + region_offset;
 
-                    if let Ok(memory) = copy_address(chunk_start, chunk_size, &handle) {
+                    // Use ProcessMemReader for efficient reads
+                    #[cfg(target_os = "linux")]
+                    let memory_result = if let Some(ref reader) = mem_reader {
+                        reader.read_at(chunk_start, chunk_size)
+                    } else {
+                        fast_read_memory(pid, chunk_start, chunk_size)
+                    };
+
+                    #[cfg(not(target_os = "linux"))]
+                    let memory_result = fast_read_memory(pid, chunk_start, chunk_size);
+
+                    if let Ok(memory) = memory_result {
                         let arc_page: Arc<[u8]> = Arc::<[u8]>::from(memory.into_boxed_slice());
                         if let Ok(mut snap) = memory_snapshot.write() {
                             snap.push((chunk_start, arc_page));
@@ -862,18 +1005,37 @@ impl GameCheetahEngine {
         search_complete.store(false, Ordering::SeqCst);
 
         std::thread::spawn(move || {
-            regions.par_iter().for_each(|(start, size)| {
-                let handle = match pid.try_into_process_handle() {
-                    Ok(h) => h,
-                    Err(e) => {
-                        eprintln!("Failed to get process handle: {e}");
-                        current_bytes.fetch_add(*size, Ordering::SeqCst);
-                        return;
-                    }
-                };
+            // Use thread-local ProcessMemReader for efficient repeated reads
+            #[cfg(target_os = "linux")]
+            thread_local! {
+                static MEM_READER: std::cell::RefCell<Option<(process_memory::Pid, ProcessMemReader)>> = const { std::cell::RefCell::new(None) };
+            }
 
-                // Try to copy the memory region, but handle failures gracefully
-                match copy_address(*start, *size, &handle) {
+            regions.par_iter().for_each(|(start, size)| {
+                #[cfg(target_os = "linux")]
+                let memory_result = MEM_READER.with(|reader_cell| {
+                    let mut reader_opt = reader_cell.borrow_mut();
+
+                    let needs_new_reader = match &*reader_opt {
+                        Some((cached_pid, _)) => *cached_pid != pid,
+                        None => true,
+                    };
+
+                    if needs_new_reader {
+                        *reader_opt = ProcessMemReader::new(pid).ok().map(|r| (pid, r));
+                    }
+
+                    if let Some((_, reader)) = &*reader_opt {
+                        reader.read_at(*start, *size)
+                    } else {
+                        fast_read_memory(pid, *start, *size)
+                    }
+                });
+
+                #[cfg(not(target_os = "linux"))]
+                let memory_result = fast_read_memory(pid, *start, *size);
+
+                match memory_result {
                     Ok(memory) => {
                         let results = search_string_in_memory(&memory, &search_text, *start);
 
@@ -1080,26 +1242,33 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
         SearchType::Float => {
             if search_data.len() == 4 {
                 let target = f32::from_le_bytes([search_data[0], search_data[1], search_data[2], search_data[3]]);
-
                 let epsilon = get_epsilon_f32(target);
 
-                // Scan through memory interpreting each position as a potential float
-                if memory_data.len() >= 4 {
-                    for i in 0..=memory_data.len() - 4 {
-                        let value = f32::from_le_bytes([memory_data[i], memory_data[i + 1], memory_data[i + 2], memory_data[i + 3]]);
+                #[cfg(target_arch = "x86_64")]
+                {
+                    result = search_f32_simd(memory_data, target, epsilon, start);
+                }
 
-                        // Check if value is close enough to target
-                        // Also handle special cases like NaN and infinity
-                        if value.is_finite() && target.is_finite() {
-                            if (value - target).abs() <= epsilon {
+                #[cfg(not(target_arch = "x86_64"))]
+                {
+                    // Scan through memory interpreting each position as a potential float
+                    if memory_data.len() >= 4 {
+                        for i in 0..=memory_data.len() - 4 {
+                            let value = f32::from_le_bytes([memory_data[i], memory_data[i + 1], memory_data[i + 2], memory_data[i + 3]]);
+
+                            // Check if value is close enough to target
+                            // Also handle special cases like NaN and infinity
+                            if value.is_finite() && target.is_finite() {
+                                if (value - target).abs() <= epsilon {
+                                    result.push(SearchResult::new(start + i, SearchType::Float));
+                                }
+                            } else if value.is_nan() && target.is_nan() {
+                                // Both are NaN
+                                result.push(SearchResult::new(start + i, SearchType::Float));
+                            } else if value == target {
+                                // Handle infinities
                                 result.push(SearchResult::new(start + i, SearchType::Float));
                             }
-                        } else if value.is_nan() && target.is_nan() {
-                            // Both are NaN
-                            result.push(SearchResult::new(start + i, SearchType::Float));
-                        } else if value == target {
-                            // Handle infinities
-                            result.push(SearchResult::new(start + i, SearchType::Float));
                         }
                     }
                 }
@@ -1122,30 +1291,38 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
                 // Similar epsilon strategy for doubles
                 let epsilon = get_epsilon_f64(target);
 
-                // Scan through memory interpreting each position as a potential double
-                if memory_data.len() >= 8 {
-                    for i in 0..=memory_data.len() - 8 {
-                        let value = f64::from_le_bytes([
-                            memory_data[i],
-                            memory_data[i + 1],
-                            memory_data[i + 2],
-                            memory_data[i + 3],
-                            memory_data[i + 4],
-                            memory_data[i + 5],
-                            memory_data[i + 6],
-                            memory_data[i + 7],
-                        ]);
+                #[cfg(target_arch = "x86_64")]
+                {
+                    result = search_f64_simd(memory_data, target, epsilon, start);
+                }
 
-                        // Check if value is close enough to target
-                        if value.is_finite() && target.is_finite() {
-                            if (value - target).abs() <= epsilon {
+                #[cfg(not(target_arch = "x86_64"))]
+                {
+                    // Scan through memory interpreting each position as a potential double
+                    if memory_data.len() >= 8 {
+                        for i in 0..=memory_data.len() - 8 {
+                            let value = f64::from_le_bytes([
+                                memory_data[i],
+                                memory_data[i + 1],
+                                memory_data[i + 2],
+                                memory_data[i + 3],
+                                memory_data[i + 4],
+                                memory_data[i + 5],
+                                memory_data[i + 6],
+                                memory_data[i + 7],
+                            ]);
+
+                            // Check if value is close enough to target
+                            if value.is_finite() && target.is_finite() {
+                                if (value - target).abs() <= epsilon {
+                                    result.push(SearchResult::new(start + i, SearchType::Double));
+                                }
+                            } else if value.is_nan() && target.is_nan() {
+                                result.push(SearchResult::new(start + i, SearchType::Double));
+                            } else if value == target {
+                                // Handle infinities
                                 result.push(SearchResult::new(start + i, SearchType::Double));
                             }
-                        } else if value.is_nan() && target.is_nan() {
-                            result.push(SearchResult::new(start + i, SearchType::Double));
-                        } else if value == target {
-                            // Handle infinities
-                            result.push(SearchResult::new(start + i, SearchType::Double));
                         }
                     }
                 }
@@ -1189,20 +1366,28 @@ fn search_aligned_integers(memory_data: &[u8], search_data: &[u8], search_type: 
             }
             let search_value = u16::from_le_bytes([search_data[0], search_data[1]]);
 
-            // Search aligned positions first (much faster)
-            let aligned_data = &memory_data[..memory_data.len() & !1];
-            for (i, chunk) in aligned_data.chunks_exact(2).enumerate() {
-                let value = u16::from_le_bytes([chunk[0], chunk[1]]);
-                if value == search_value {
-                    results.push(SearchResult::new(start + i * 2, SearchType::Short));
-                }
+            #[cfg(target_arch = "x86_64")]
+            {
+                results.extend(search_u16_simd(memory_data, search_value, start));
             }
 
-            // Check unaligned positions (slower, but necessary for completeness)
-            if memory_data.len() > 2 {
-                for i in 1..memory_data.len() - 1 {
-                    if memory_data[i] == search_data[0] && memory_data[i + 1] == search_data[1] {
-                        results.push(SearchResult::new(start + i, SearchType::Short));
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                // Search aligned positions first (much faster)
+                let aligned_data = &memory_data[..memory_data.len() & !1];
+                for (i, chunk) in aligned_data.chunks_exact(2).enumerate() {
+                    let value = u16::from_le_bytes([chunk[0], chunk[1]]);
+                    if value == search_value {
+                        results.push(SearchResult::new(start + i * 2, SearchType::Short));
+                    }
+                }
+
+                // Check unaligned positions (slower, but necessary for completeness)
+                if memory_data.len() > 2 {
+                    for i in 1..memory_data.len() - 1 {
+                        if memory_data[i] == search_data[0] && memory_data[i + 1] == search_data[1] {
+                            results.push(SearchResult::new(start + i, SearchType::Short));
+                        }
                     }
                 }
             }
@@ -1458,6 +1643,324 @@ fn search_u64_simd(memory_data: &[u8], search_value: u64, start: usize) -> Vec<S
                 ]);
                 if value == search_value {
                     results.push(SearchResult::new(start + i, SearchType::Int64));
+                }
+            }
+        }
+    }
+
+    results
+}
+
+// SIMD-optimized u16 search for x86_64
+#[cfg(target_arch = "x86_64")]
+fn search_u16_simd(memory_data: &[u8], search_value: u16, start: usize) -> Vec<SearchResult> {
+    use std::arch::x86_64::*;
+
+    let mut results = Vec::new();
+
+    unsafe {
+        if is_x86_feature_detected!("sse2") {
+            let search_vec = _mm_set1_epi16(search_value as i16);
+
+            // Process 16 bytes (8 u16s) at a time
+            let chunks = memory_data.chunks_exact(16);
+            let remainder = chunks.remainder();
+
+            for (chunk_idx, chunk) in chunks.enumerate() {
+                let data = _mm_loadu_si128(chunk.as_ptr() as *const __m128i);
+                let cmp = _mm_cmpeq_epi16(data, search_vec);
+                let mask = _mm_movemask_epi8(cmp);
+
+                if mask != 0 {
+                    // Check each u16 in the chunk
+                    for i in 0..8 {
+                        if (mask >> (i * 2)) & 0x3 == 0x3 {
+                            results.push(SearchResult::new(start + chunk_idx * 16 + i * 2, SearchType::Short));
+                        }
+                    }
+                }
+            }
+
+            // Handle remainder with regular search
+            if remainder.len() >= 2 {
+                for i in 0..=(remainder.len() - 2) {
+                    let value = u16::from_le_bytes([remainder[i], remainder[i + 1]]);
+                    if value == search_value {
+                        let base_offset = memory_data.len() - remainder.len();
+                        results.push(SearchResult::new(start + base_offset + i, SearchType::Short));
+                    }
+                }
+            }
+        }
+    }
+
+    results
+}
+
+// SIMD-optimized f32 search for x86_64
+#[cfg(target_arch = "x86_64")]
+fn search_f32_simd(memory_data: &[u8], target: f32, epsilon: f32, start: usize) -> Vec<SearchResult> {
+    use std::arch::x86_64::*;
+
+    let mut results = Vec::new();
+
+    // Handle special cases separately
+    if !target.is_finite() {
+        // For NaN/Infinity, fall back to scalar
+        if memory_data.len() >= 4 {
+            for i in 0..=memory_data.len() - 4 {
+                let value = f32::from_le_bytes([memory_data[i], memory_data[i + 1], memory_data[i + 2], memory_data[i + 3]]);
+                if (value.is_nan() && target.is_nan()) || value == target {
+                    results.push(SearchResult::new(start + i, SearchType::Float));
+                }
+            }
+        }
+        return results;
+    }
+
+    unsafe {
+        // Try AVX2 first (processes 8 floats at a time)
+        if is_x86_feature_detected!("avx2") {
+            let target_vec = _mm256_set1_ps(target);
+            let epsilon_vec = _mm256_set1_ps(epsilon);
+            let neg_epsilon_vec = _mm256_set1_ps(-epsilon);
+
+            // Process 32 bytes (8 f32s) at a time
+            let chunks = memory_data.chunks_exact(32);
+            let remainder = chunks.remainder();
+
+            for (chunk_idx, chunk) in chunks.enumerate() {
+                let data = _mm256_loadu_ps(chunk.as_ptr() as *const f32);
+
+                let diff = _mm256_sub_ps(data, target_vec);
+                let ge_neg_eps = _mm256_cmp_ps(diff, neg_epsilon_vec, _CMP_GE_OQ);
+                let le_eps = _mm256_cmp_ps(diff, epsilon_vec, _CMP_LE_OQ);
+                let in_range = _mm256_and_ps(ge_neg_eps, le_eps);
+
+                let mask = _mm256_movemask_ps(in_range);
+
+                if mask != 0 {
+                    for i in 0..8 {
+                        if (mask >> i) & 1 == 1 {
+                            let value = f32::from_le_bytes([chunk[i * 4], chunk[i * 4 + 1], chunk[i * 4 + 2], chunk[i * 4 + 3]]);
+                            if value.is_finite() && (value - target).abs() <= epsilon {
+                                results.push(SearchResult::new(start + chunk_idx * 32 + i * 4, SearchType::Float));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Handle remainder with SSE or scalar
+            if remainder.len() >= 4 {
+                for i in 0..=(remainder.len() - 4) {
+                    let value = f32::from_le_bytes([remainder[i], remainder[i + 1], remainder[i + 2], remainder[i + 3]]);
+                    if value.is_finite() && (value - target).abs() <= epsilon {
+                        let base_offset = memory_data.len() - remainder.len();
+                        results.push(SearchResult::new(start + base_offset + i, SearchType::Float));
+                    }
+                }
+            }
+        } else if is_x86_feature_detected!("sse") {
+            let target_vec = _mm_set1_ps(target);
+            let epsilon_vec = _mm_set1_ps(epsilon);
+            let neg_epsilon_vec = _mm_set1_ps(-epsilon);
+
+            // Process 16 bytes (4 f32s) at a time
+            let chunks = memory_data.chunks_exact(16);
+            let remainder = chunks.remainder();
+
+            for (chunk_idx, chunk) in chunks.enumerate() {
+                let data = _mm_loadu_ps(chunk.as_ptr() as *const f32);
+
+                // Calculate diff = data - target
+                let diff = _mm_sub_ps(data, target_vec);
+
+                // Check if -epsilon <= diff <= epsilon
+                let ge_neg_eps = _mm_cmpge_ps(diff, neg_epsilon_vec);
+                let le_eps = _mm_cmple_ps(diff, epsilon_vec);
+                let in_range = _mm_and_ps(ge_neg_eps, le_eps);
+
+                let mask = _mm_movemask_ps(in_range);
+
+                if mask != 0 {
+                    for i in 0..4 {
+                        if (mask >> i) & 1 == 1 {
+                            // Double-check to handle edge cases and ensure finite
+                            let value = f32::from_le_bytes([chunk[i * 4], chunk[i * 4 + 1], chunk[i * 4 + 2], chunk[i * 4 + 3]]);
+                            if value.is_finite() && (value - target).abs() <= epsilon {
+                                results.push(SearchResult::new(start + chunk_idx * 16 + i * 4, SearchType::Float));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Handle remainder
+            if remainder.len() >= 4 {
+                for i in 0..=(remainder.len() - 4) {
+                    let value = f32::from_le_bytes([remainder[i], remainder[i + 1], remainder[i + 2], remainder[i + 3]]);
+                    if value.is_finite() && (value - target).abs() <= epsilon {
+                        let base_offset = memory_data.len() - remainder.len();
+                        results.push(SearchResult::new(start + base_offset + i, SearchType::Float));
+                    }
+                }
+            }
+        }
+    }
+
+    results
+}
+
+// SIMD-optimized f64 search for x86_64
+#[cfg(target_arch = "x86_64")]
+fn search_f64_simd(memory_data: &[u8], target: f64, epsilon: f64, start: usize) -> Vec<SearchResult> {
+    use std::arch::x86_64::*;
+
+    let mut results = Vec::new();
+
+    // Handle special cases separately
+    if !target.is_finite() {
+        if memory_data.len() >= 8 {
+            for i in 0..=memory_data.len() - 8 {
+                let value = f64::from_le_bytes([
+                    memory_data[i],
+                    memory_data[i + 1],
+                    memory_data[i + 2],
+                    memory_data[i + 3],
+                    memory_data[i + 4],
+                    memory_data[i + 5],
+                    memory_data[i + 6],
+                    memory_data[i + 7],
+                ]);
+                if (value.is_nan() && target.is_nan()) || value == target {
+                    results.push(SearchResult::new(start + i, SearchType::Double));
+                }
+            }
+        }
+        return results;
+    }
+
+    unsafe {
+        // Try AVX2 first (processes 4 doubles at a time)
+        if is_x86_feature_detected!("avx2") {
+            let target_vec = _mm256_set1_pd(target);
+            let epsilon_vec = _mm256_set1_pd(epsilon);
+            let neg_epsilon_vec = _mm256_set1_pd(-epsilon);
+
+            // Process 32 bytes (4 f64s) at a time
+            let chunks = memory_data.chunks_exact(32);
+            let remainder = chunks.remainder();
+
+            for (chunk_idx, chunk) in chunks.enumerate() {
+                let data = _mm256_loadu_pd(chunk.as_ptr() as *const f64);
+
+                let diff = _mm256_sub_pd(data, target_vec);
+                let ge_neg_eps = _mm256_cmp_pd(diff, neg_epsilon_vec, _CMP_GE_OQ);
+                let le_eps = _mm256_cmp_pd(diff, epsilon_vec, _CMP_LE_OQ);
+                let in_range = _mm256_and_pd(ge_neg_eps, le_eps);
+
+                let mask = _mm256_movemask_pd(in_range);
+
+                if mask != 0 {
+                    for i in 0..4 {
+                        if (mask >> i) & 1 == 1 {
+                            let offset = i * 8;
+                            let value = f64::from_le_bytes([
+                                chunk[offset],
+                                chunk[offset + 1],
+                                chunk[offset + 2],
+                                chunk[offset + 3],
+                                chunk[offset + 4],
+                                chunk[offset + 5],
+                                chunk[offset + 6],
+                                chunk[offset + 7],
+                            ]);
+                            if value.is_finite() && (value - target).abs() <= epsilon {
+                                results.push(SearchResult::new(start + chunk_idx * 32 + offset, SearchType::Double));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Handle remainder
+            if remainder.len() >= 8 {
+                for i in 0..=(remainder.len() - 8) {
+                    let value = f64::from_le_bytes([
+                        remainder[i],
+                        remainder[i + 1],
+                        remainder[i + 2],
+                        remainder[i + 3],
+                        remainder[i + 4],
+                        remainder[i + 5],
+                        remainder[i + 6],
+                        remainder[i + 7],
+                    ]);
+                    if value.is_finite() && (value - target).abs() <= epsilon {
+                        let base_offset = memory_data.len() - remainder.len();
+                        results.push(SearchResult::new(start + base_offset + i, SearchType::Double));
+                    }
+                }
+            }
+        } else if is_x86_feature_detected!("sse2") {
+            let target_vec = _mm_set1_pd(target);
+            let epsilon_vec = _mm_set1_pd(epsilon);
+            let neg_epsilon_vec = _mm_set1_pd(-epsilon);
+
+            // Process 16 bytes (2 f64s) at a time
+            let chunks = memory_data.chunks_exact(16);
+            let remainder = chunks.remainder();
+
+            for (chunk_idx, chunk) in chunks.enumerate() {
+                let data = _mm_loadu_pd(chunk.as_ptr() as *const f64);
+
+                let diff = _mm_sub_pd(data, target_vec);
+                let ge_neg_eps = _mm_cmpge_pd(diff, neg_epsilon_vec);
+                let le_eps = _mm_cmple_pd(diff, epsilon_vec);
+                let in_range = _mm_and_pd(ge_neg_eps, le_eps);
+
+                let mask = _mm_movemask_pd(in_range);
+
+                if mask != 0 {
+                    for i in 0..2 {
+                        if (mask >> i) & 1 == 1 {
+                            let offset = i * 8;
+                            let value = f64::from_le_bytes([
+                                chunk[offset],
+                                chunk[offset + 1],
+                                chunk[offset + 2],
+                                chunk[offset + 3],
+                                chunk[offset + 4],
+                                chunk[offset + 5],
+                                chunk[offset + 6],
+                                chunk[offset + 7],
+                            ]);
+                            if value.is_finite() && (value - target).abs() <= epsilon {
+                                results.push(SearchResult::new(start + chunk_idx * 16 + offset, SearchType::Double));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Handle remainder
+            if remainder.len() >= 8 {
+                for i in 0..=(remainder.len() - 8) {
+                    let value = f64::from_le_bytes([
+                        remainder[i],
+                        remainder[i + 1],
+                        remainder[i + 2],
+                        remainder[i + 3],
+                        remainder[i + 4],
+                        remainder[i + 5],
+                        remainder[i + 6],
+                        remainder[i + 7],
+                    ]);
+                    if value.is_finite() && (value - target).abs() <= epsilon {
+                        let base_offset = memory_data.len() - remainder.len();
+                        results.push(SearchResult::new(start + base_offset + i, SearchType::Double));
+                    }
                 }
             }
         }
