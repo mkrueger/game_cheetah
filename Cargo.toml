@@ -1,6 +1,6 @@
 [package]
 name = "game-cheetah"
-version = "0.5.1"
+version = "0.5.2"
 authors = ["Mike Krüger <mkrueger@posteo.de>"]
 edition = "2024"
 rust-version = "1.88"
@@ -29,27 +29,18 @@ gabi = "0.2.6"
 i18n-embed = { version = "0.16.0", features = ["fluent-system", "desktop-requester"]} 
 i18n-embed-fl = "0.10.0"
 once_cell = "1.21.3"
-rust-embed = "8.7.2"
-boyer-moore-magiclen = "0.2.20"
+rust-embed = "8.9.0"
+boyer-moore-magiclen = "0.2.22"
 proc-maps = "0.4.0"
 webbrowser = "1.0.5"
 rayon = "1.11.0"
 memchr = "2.7.6"
 crossbeam = "0.8.4"
-crossbeam-channel = "0.5"
+crossbeam-channel = "0.5.15"
 
 # Linux: libc for process_vm_readv
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
-
-# native:
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tracing-subscriber = "0.3.20"
-
-# web:
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-console_error_panic_hook = "0.1.6"
-tracing-wasm = "0.2"
 
 [build-dependencies]
 winres = "0.1"

@@ -47,8 +47,6 @@ Keep in mind that altering a game memory contents may lead to game and/or comput
 
 # Installing 
 
-ARCH LINUX: ``` yay -S game-cheetah ```
-
 All other OSes: Easiest way is to use cargo or grab a binary. 
 
 See: 

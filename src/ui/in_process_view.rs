@@ -281,7 +281,7 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
             },
             container(
                 row![
-                    checkbox("", all_frozen).on_toggle(|_| Message::ToggleFreezeAll).size(14),
+                    checkbox(all_frozen).on_toggle(|_| Message::ToggleFreezeAll).size(14),
                     text(fl!(crate::LANGUAGE_LOADER, "freezed-heading")).size(14)
                 ]
                 .spacing(5)
@@ -338,7 +338,7 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                 } else {
                     container(text("")).width(Length::Fixed(0.0))
                 },
-                checkbox("", current_search_context.freezed_addresses.contains(&result.addr))
+                checkbox(current_search_context.freezed_addresses.contains(&result.addr))
                     .on_toggle(move |_| Message::ToggleFreeze(i))
                     .size(14)
                     .width(Length::Fill),

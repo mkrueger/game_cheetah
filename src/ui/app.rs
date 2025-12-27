@@ -560,54 +560,69 @@ impl App {
     pub fn subscription(&self) -> iced::Subscription<Message> {
         // Only subscribe to keyboard events when in memory editor mode
         if matches!(self.app_state, AppState::MemoryEditor) {
-            keyboard::on_key_press(|key, _modifiers| match key {
-                keyboard::Key::Named(keyboard::key::Named::ArrowUp) => Some(Message::MemoryEditorMoveCursor(-1, 0)),
-                keyboard::Key::Named(keyboard::key::Named::ArrowDown) => Some(Message::MemoryEditorMoveCursor(1, 0)),
-                keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => Some(Message::MemoryEditorMoveCursor(0, -1)),
-                keyboard::Key::Named(keyboard::key::Named::ArrowRight) => Some(Message::MemoryEditorMoveCursor(0, 1)),
-                keyboard::Key::Named(keyboard::key::Named::PageUp) => Some(Message::MemoryEditorPageUp),
-                keyboard::Key::Named(keyboard::key::Named::PageDown) => Some(Message::MemoryEditorPageDown),
-                keyboard::Key::Named(keyboard::key::Named::Tab) => Some(Message::MemoryEditorMoveCursor(0, 1)),
-                keyboard::Key::Named(keyboard::key::Named::Enter) => Some(Message::MemoryEditorBeginEdit),
-                keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::MemoryEditorEndEdit),
-                keyboard::Key::Character(c) => match c.as_str() {
-                    "0" => Some(Message::MemoryEditorEditHex(0)),
-                    "1" => Some(Message::MemoryEditorEditHex(1)),
-                    "2" => Some(Message::MemoryEditorEditHex(2)),
-                    "3" => Some(Message::MemoryEditorEditHex(3)),
-                    "4" => Some(Message::MemoryEditorEditHex(4)),
-                    "5" => Some(Message::MemoryEditorEditHex(5)),
-                    "6" => Some(Message::MemoryEditorEditHex(6)),
-                    "7" => Some(Message::MemoryEditorEditHex(7)),
-                    "8" => Some(Message::MemoryEditorEditHex(8)),
-                    "9" => Some(Message::MemoryEditorEditHex(9)),
-                    "a" | "A" => Some(Message::MemoryEditorEditHex(10)),
-                    "b" | "B" => Some(Message::MemoryEditorEditHex(11)),
-                    "c" | "C" => Some(Message::MemoryEditorEditHex(12)),
-                    "d" | "D" => Some(Message::MemoryEditorEditHex(13)),
-                    "e" | "E" => Some(Message::MemoryEditorEditHex(14)),
-                    "f" | "F" => Some(Message::MemoryEditorEditHex(15)),
+            keyboard::listen().filter_map(|event| {
+                let keyboard::Event::KeyPressed { key, .. } = event else {
+                    return None;
+                };
+                match key {
+                    keyboard::Key::Named(keyboard::key::Named::ArrowUp) => Some(Message::MemoryEditorMoveCursor(-1, 0)),
+                    keyboard::Key::Named(keyboard::key::Named::ArrowDown) => Some(Message::MemoryEditorMoveCursor(1, 0)),
+                    keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => Some(Message::MemoryEditorMoveCursor(0, -1)),
+                    keyboard::Key::Named(keyboard::key::Named::ArrowRight) => Some(Message::MemoryEditorMoveCursor(0, 1)),
+                    keyboard::Key::Named(keyboard::key::Named::PageUp) => Some(Message::MemoryEditorPageUp),
+                    keyboard::Key::Named(keyboard::key::Named::PageDown) => Some(Message::MemoryEditorPageDown),
+                    keyboard::Key::Named(keyboard::key::Named::Tab) => Some(Message::MemoryEditorMoveCursor(0, 1)),
+                    keyboard::Key::Named(keyboard::key::Named::Enter) => Some(Message::MemoryEditorBeginEdit),
+                    keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::MemoryEditorEndEdit),
+                    keyboard::Key::Character(c) => match c.as_str() {
+                        "0" => Some(Message::MemoryEditorEditHex(0)),
+                        "1" => Some(Message::MemoryEditorEditHex(1)),
+                        "2" => Some(Message::MemoryEditorEditHex(2)),
+                        "3" => Some(Message::MemoryEditorEditHex(3)),
+                        "4" => Some(Message::MemoryEditorEditHex(4)),
+                        "5" => Some(Message::MemoryEditorEditHex(5)),
+                        "6" => Some(Message::MemoryEditorEditHex(6)),
+                        "7" => Some(Message::MemoryEditorEditHex(7)),
+                        "8" => Some(Message::MemoryEditorEditHex(8)),
+                        "9" => Some(Message::MemoryEditorEditHex(9)),
+                        "a" | "A" => Some(Message::MemoryEditorEditHex(10)),
+                        "b" | "B" => Some(Message::MemoryEditorEditHex(11)),
+                        "c" | "C" => Some(Message::MemoryEditorEditHex(12)),
+                        "d" | "D" => Some(Message::MemoryEditorEditHex(13)),
+                        "e" | "E" => Some(Message::MemoryEditorEditHex(14)),
+                        "f" | "F" => Some(Message::MemoryEditorEditHex(15)),
+                        _ => None,
+                    },
                     _ => None,
-                },
-                _ => None,
+                }
             })
         } else if self.renaming_search_index.is_some() {
             // Only subscribe to ESC when renaming
-            keyboard::on_key_press(|key, _modifiers| match key {
-                keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::CancelRenameSearch),
-                _ => None,
+            keyboard::listen().filter_map(|event| {
+                let keyboard::Event::KeyPressed { key, .. } = event else {
+                    return None;
+                };
+                match key {
+                    keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::CancelRenameSearch),
+                    _ => None,
+                }
             })
         } else {
             // Tab/Shift+Tab for focus navigation in normal mode
-            keyboard::on_key_press(|key, modifiers| match key {
-                keyboard::Key::Named(keyboard::key::Named::Tab) => {
-                    if modifiers.shift() {
-                        Some(Message::FocusPrevious)
-                    } else {
-                        Some(Message::FocusNext)
+            keyboard::listen().filter_map(|event| {
+                let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
+                    return None;
+                };
+                match key {
+                    keyboard::Key::Named(keyboard::key::Named::Tab) => {
+                        if modifiers.shift() {
+                            Some(Message::FocusPrevious)
+                        } else {
+                            Some(Message::FocusNext)
+                        }
                     }
+                    _ => None,
                 }
-                _ => None,
             })
         }
     }
