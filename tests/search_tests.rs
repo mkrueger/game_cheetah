@@ -189,7 +189,7 @@ fn test_simd_float_search_performance() {
     use std::time::Instant;
 
     let mut memory = vec![0x00; 1024 * 1024]; // 1MB
-    let target: f32 = 3.14159;
+    let target: f32 = 42.125;
 
     for i in (0..memory.len()).step_by(1024) {
         memory[i..i + 4].copy_from_slice(&target.to_le_bytes());
@@ -235,7 +235,7 @@ fn test_simd_double_search_performance() {
     use std::time::Instant;
 
     let mut memory = vec![0x00; 1024 * 1024]; // 1MB
-    let target: f64 = 3.141592653589793;
+    let target: f64 = 42.12345678;
 
     for i in (0..memory.len()).step_by(1024) {
         memory[i..i + 8].copy_from_slice(&target.to_le_bytes());
