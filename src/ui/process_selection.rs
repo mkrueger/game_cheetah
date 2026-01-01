@@ -1,5 +1,5 @@
 use i18n_embed_fl::fl;
-use iced::{
+use icy_ui::{
     Element, Length, alignment,
     widget::{button, column, container, row, scrollable, text, text_input},
 };
@@ -111,10 +111,10 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
                     .padding(5)
                 )
                 .on_press(Message::SortProcesses(ProcessSortColumn::Pid))
-                .style(|theme: &iced::Theme, _status| button::Style {
-                    background: Some(theme.extended_palette().background.weak.color.into()),
-                    border: iced::Border::default(),
-                    text_color: theme.palette().text,
+                .style(|theme: &icy_ui::Theme, _status| button::Style {
+                    background: Some(theme.primary.base.into()),
+                    border: icy_ui::Border::default(),
+                    text_color: theme.background.on,
                     ..Default::default()
                 })
                 .width(Length::Fixed(80.0))
@@ -132,10 +132,10 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
                     .padding(5)
                 )
                 .on_press(Message::SortProcesses(ProcessSortColumn::Name))
-                .style(|theme: &iced::Theme, _status| button::Style {
-                    background: Some(theme.extended_palette().background.weak.color.into()),
-                    border: iced::Border::default(),
-                    text_color: theme.palette().text,
+                .style(|theme: &icy_ui::Theme, _status| button::Style {
+                    background: Some(theme.primary.base.into()),
+                    border: icy_ui::Border::default(),
+                    text_color: theme.background.on,
                     ..Default::default()
                 })
                 .width(Length::Fixed(250.0))
@@ -153,10 +153,10 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
                     .padding(5)
                 )
                 .on_press(Message::SortProcesses(ProcessSortColumn::Memory))
-                .style(|theme: &iced::Theme, _status| button::Style {
-                    background: Some(theme.extended_palette().background.weak.color.into()),
-                    border: iced::Border::default(),
-                    text_color: theme.palette().text,
+                .style(|theme: &icy_ui::Theme, _status| button::Style {
+                    background: Some(theme.primary.base.into()),
+                    border: icy_ui::Border::default(),
+                    text_color: theme.background.on,
                     ..Default::default()
                 })
                 .width(Length::Fixed(200.0))
@@ -174,18 +174,18 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
                     .padding(5)
                 )
                 .on_press(Message::SortProcesses(ProcessSortColumn::Command))
-                .style(|theme: &iced::Theme, _status| button::Style {
-                    background: Some(theme.extended_palette().background.weak.color.into()),
-                    border: iced::Border::default(),
-                    text_color: theme.palette().text,
+                .style(|theme: &icy_ui::Theme, _status| button::Style {
+                    background: Some(theme.primary.base.into()),
+                    border: icy_ui::Border::default(),
+                    text_color: theme.background.on,
                     ..Default::default()
                 })
                 .width(Length::Fill)
                 .padding(0),
             ])
-            .style(|theme: &iced::Theme| {
+            .style(|theme: &icy_ui::Theme| {
                 container::Style {
-                    background: Some(theme.extended_palette().background.weak.color.into()),
+                    background: Some(theme.primary.base.into()),
                     ..Default::default()
                 }
             }),
@@ -206,19 +206,19 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
                                     container(text(memory).size(14)).width(Length::Fixed(200.0)).padding(5),
                                     container(text(process.cmd.clone()).size(14)).width(Length::Fill).padding(5),
                                 ])
-                                .style(|theme: &iced::Theme, status: iced::widget::button::Status| {
-                                    use iced::widget::button::Status;
+                                .style(|theme: &icy_ui::Theme, status: icy_ui::widget::button::Status| {
+                                    use icy_ui::widget::button::Status;
                                     match status {
                                         Status::Hovered => button::Style {
-                                            background: Some(theme.palette().primary.into()),
-                                            border: iced::Border::default(),
-                                            text_color: theme.palette().text,
+                                            background: Some(theme.accent.base.into()),
+                                            border: icy_ui::Border::default(),
+                                            text_color: theme.background.on,
                                             ..Default::default()
                                         },
                                         _ => button::Style {
-                                            background: Some(iced::Color::TRANSPARENT.into()),
-                                            border: iced::Border::default(),
-                                            text_color: theme.palette().text,
+                                            background: Some(icy_ui::Color::TRANSPARENT.into()),
+                                            border: icy_ui::Border::default(),
+                                            text_color: theme.background.on,
                                             ..Default::default()
                                         },
                                     }
@@ -227,7 +227,7 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
                                 .width(Length::Fill)
                                 .padding(0),
                             )
-                            .style(move |_theme: &iced::Theme| container::Style::default())
+                            .style(move |_theme: &icy_ui::Theme| container::Style::default())
                             .into()
                         })
                         .collect::<Vec<Element<'_, Message>>>()

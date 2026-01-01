@@ -5,7 +5,7 @@ use std::{
 };
 
 use i18n_embed_fl::fl;
-use iced::{
+use icy_ui::{
     Element, Length, Task, Theme, alignment, keyboard,
     widget::{
         button, column, container,
@@ -102,14 +102,14 @@ impl App {
                 self.state.select_process(&process);
                 self.app_state = AppState::InProcess;
                 self.state.process_filter.clear();
-                iced::Task::perform(
+                icy_ui::Task::perform(
                     async {
                         sleep(Duration::from_millis(2000));
                     },
                     |_| Message::TickProcess,
                 )
             }
-            Message::TickProcess => iced::Task::perform(
+            Message::TickProcess => icy_ui::Task::perform(
                 async {
                     sleep(Duration::from_millis(2000));
                 },
@@ -487,7 +487,7 @@ impl App {
                     self.process_sort_column = column;
                     self.process_sort_direction = SortDirection::Ascending;
                 }
-                iced::Task::none()
+                icy_ui::Task::none()
             }
 
             Message::UnknownSearchDecrease => {
@@ -525,7 +525,7 @@ impl App {
     }
 
     pub fn theme(&self) -> Theme {
-        Theme::Dracula.clone()
+        Theme::dark().clone()
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -557,7 +557,7 @@ impl App {
         }
     }
 
-    pub fn subscription(&self) -> iced::Subscription<Message> {
+    pub fn subscription(&self) -> icy_ui::Subscription<Message> {
         // Only subscribe to keyboard events when in memory editor mode
         if matches!(self.app_state, AppState::MemoryEditor) {
             keyboard::listen().filter_map(|event| {

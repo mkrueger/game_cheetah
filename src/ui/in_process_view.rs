@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use i18n_embed_fl::fl;
-use iced::{
+use icy_ui::{
     Element, Length, alignment,
     widget::{button, checkbox, column, container, pick_list, progress_bar, row, rule, scrollable, text, text_input},
 };
@@ -41,12 +41,12 @@ fn search_ui(app: &App) -> Element<'_, Message> {
         container(
             text(current_search_name.to_string())
                 .size(18)
-                .font(iced::Font {
-                    weight: iced::font::Weight::Bold,
-                    ..iced::Font::default()
+                .font(icy_ui::Font {
+                    weight: icy_ui::font::Weight::Bold,
+                    ..icy_ui::Font::default()
                 })
-                .style(|theme: &iced::Theme| iced::widget::text::Style {
-                    color: Some(theme.palette().primary),
+                .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                    color: Some(theme.accent.base),
                 })
         ),
         rule::horizontal(1),
@@ -72,8 +72,8 @@ fn search_ui(app: &App) -> Element<'_, Message> {
                 .width(Length::Fill),
                 pick_list(search_types.clone(), Some(selected_type), Message::SwitchSearchType),
                 if show_error {
-                    text(fl!(crate::LANGUAGE_LOADER, "invalid-number-error")).style(|theme: &iced::Theme| iced::widget::text::Style {
-                        color: Some(theme.palette().danger),
+                    text(fl!(crate::LANGUAGE_LOADER, "invalid-number-error")).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                        color: Some(theme.destructive.base),
                     })
                 } else {
                     text("")
@@ -294,7 +294,7 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
     .spacing(5)
     .align_y(alignment::Alignment::Center);
 
-    let table_rows = displayed_results.enumerate().map(|(i, result)| -> iced::Element<'_, Message> {
+    let table_rows = displayed_results.enumerate().map(|(i, result)| -> icy_ui::Element<'_, Message> {
         let value_text = if is_string {
             let utf16_hint = result.search_type == SearchType::StringUtf16;
             read_string_from_process(
@@ -354,8 +354,8 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
 
     let mut table_content = vec![
         container(table_header)
-            .style(|theme: &iced::Theme| container::Style {
-                background: Some(theme.extended_palette().background.weak.color.into()),
+            .style(|theme: &icy_ui::Theme| container::Style {
+                background: Some(theme.primary.base.into()),
                 ..Default::default()
             })
             .into(),
@@ -377,8 +377,8 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                     .collect::<String>(),
                 )
                 .size(12)
-                .style(|theme: &iced::Theme| iced::widget::text::Style {
-                    color: Some(theme.extended_palette().danger.base.color),
+                .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                    color: Some(theme.destructive.base),
                 }),
             )
             .padding(5)
@@ -396,7 +396,7 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
 }
 
 pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
-    use iced::widget::{button, column, container, row, rule, text};
+    use icy_ui::widget::{button, column, container, row, rule, text};
 
     if !app.state.is_process_running() {
         return container(
@@ -404,8 +404,8 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
                 container(
                     text(fl!(crate::LANGUAGE_LOADER, "process-exited-title"))
                         .size(18)
-                        .style(|theme: &iced::Theme| iced::widget::text::Style {
-                            color: Some(theme.extended_palette().danger.base.color),
+                        .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                            color: Some(theme.destructive.base),
                         })
                 )
                 .padding(10),
@@ -414,12 +414,12 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
                     button(text(fl!(crate::LANGUAGE_LOADER, "back-to-main-button")))
                         .on_press(Message::MainMenu)
                         .padding(10)
-                        .style(|theme: &iced::Theme, status| button::primary(theme, status))
+                        .style(|theme: &icy_ui::Theme, status| button::primary(theme, status))
                 )
                 .padding(10)
             ]
             .spacing(10)
-            .align_x(iced::alignment::Horizontal::Center),
+            .align_x(icy_ui::alignment::Horizontal::Center),
         )
         .center_x(Length::Fill)
         .center_y(Length::Fill)
@@ -434,8 +434,8 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
         container(
             text(fl!(crate::LANGUAGE_LOADER, "searches-heading"))
                 .size(14)
-                .style(|theme: &iced::Theme| iced::widget::text::Style {
-                    color: Some(theme.palette().primary),
+                .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                    color: Some(theme.accent.base),
                 })
         )
         .padding(5)
@@ -460,15 +460,15 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
                                     .width(Length::Fixed(120.0))
                                     .padding(5),
                             )
-                            .style(move |_theme: &iced::Theme| container::Style::default())
+                            .style(move |_theme: &icy_ui::Theme| container::Style::default())
                             .into()
                         } else {
-                            let mut close_button = button(text("×")).padding(2).style(move |theme: &iced::Theme, _| button::Style {
-                                background: Some(iced::Color::TRANSPARENT.into()),
+                            let mut close_button = button(text("×")).padding(2).style(move |theme: &icy_ui::Theme, _| button::Style {
+                                background: Some(icy_ui::Color::TRANSPARENT.into()),
                                 text_color: if i == 0 {
-                                    iced::Color::from_rgb(0.5, 0.5, 0.5)
+                                    icy_ui::Color::from_rgb(0.5, 0.5, 0.5)
                                 } else {
-                                    theme.palette().danger
+                                    theme.destructive.base
                                 },
                                 ..Default::default()
                             });
@@ -481,30 +481,30 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
                                 // Show normal button
                                 button(
                                     row![container(text(search.description.to_string()).size(14)).width(Length::Fixed(120.0)).padding(5)]
-                                        as iced::widget::Row<'_, Message>,
+                                        as icy_ui::widget::Row<'_, Message>,
                                 )
-                                .style(move |theme: &iced::Theme, status: iced::widget::button::Status| {
-                                    use iced::widget::button::Status;
+                                .style(move |theme: &icy_ui::Theme, status: icy_ui::widget::button::Status| {
+                                    use icy_ui::widget::button::Status;
                                     match status {
                                         Status::Hovered => button::Style {
-                                            background: Some(theme.palette().primary.into()),
-                                            border: iced::Border::default(),
-                                            text_color: theme.palette().text,
+                                            background: Some(theme.accent.base.into()),
+                                            border: icy_ui::Border::default(),
+                                            text_color: theme.background.on,
                                             ..Default::default()
                                         },
                                         _ => {
                                             if is_selected {
                                                 button::Style {
-                                                    background: Some(theme.palette().primary.into()),
-                                                    border: iced::Border::default(),
-                                                    text_color: theme.palette().text,
+                                                    background: Some(theme.accent.base.into()),
+                                                    border: icy_ui::Border::default(),
+                                                    text_color: theme.background.on,
                                                     ..Default::default()
                                                 }
                                             } else {
                                                 button::Style {
-                                                    background: Some(iced::Color::TRANSPARENT.into()),
-                                                    border: iced::Border::default(),
-                                                    text_color: theme.palette().text,
+                                                    background: Some(icy_ui::Color::TRANSPARENT.into()),
+                                                    border: icy_ui::Border::default(),
+                                                    text_color: theme.background.on,
                                                     ..Default::default()
                                                 }
                                             }
@@ -540,8 +540,8 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
         row![
             text(fl!(crate::LANGUAGE_LOADER, "process-label")),
             container(
-                text(format!("{} ({})", app.state.process_name, app.state.pid)).style(|theme: &iced::Theme| iced::widget::text::Style {
-                    color: Some(theme.palette().primary)
+                text(format!("{} ({})", app.state.process_name, app.state.pid)).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                    color: Some(theme.accent.base)
                 })
             )
             .width(Length::Fill),

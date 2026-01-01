@@ -1,5 +1,5 @@
 use i18n_embed_fl::fl;
-use iced::{
+use icy_ui::{
     Element, Length, alignment,
     widget::{button, column, container, text},
 };
@@ -15,25 +15,25 @@ pub fn view_main_window(_app: &App) -> Element<'_, Message> {
                     text(crate::APP_NAME).size(32),
                     text(format!("v{} © Mike Krüger 2023-2025", crate::VERSION))
                         .size(16)
-                        .style(|theme: &iced::Theme| {
-                            iced::widget::text::Style {
-                                color: Some(theme.extended_palette().secondary.base.color),
+                        .style(|theme: &icy_ui::Theme| {
+                            icy_ui::widget::text::Style {
+                                color: Some(theme.secondary.on),
                             }
                         }),
                     button(text("github.com/mkrueger/game_cheetah").size(14))
-                        .style(|theme: &iced::Theme, status: iced::widget::button::Status| {
-                            use iced::widget::button::Status;
+                        .style(|theme: &icy_ui::Theme, status: icy_ui::widget::button::Status| {
+                            use icy_ui::widget::button::Status;
                             match status {
                                 Status::Hovered => button::Style {
-                                    background: Some(iced::Color::TRANSPARENT.into()),
-                                    border: iced::Border::default(),
-                                    text_color: theme.palette().primary,
+                                    background: Some(icy_ui::Color::TRANSPARENT.into()),
+                                    border: icy_ui::Border::default(),
+                                    text_color: theme.accent.base,
                                     ..Default::default()
                                 },
                                 _ => button::Style {
-                                    background: Some(iced::Color::TRANSPARENT.into()),
-                                    border: iced::Border::default(),
-                                    text_color: theme.extended_palette().secondary.base.color,
+                                    background: Some(icy_ui::Color::TRANSPARENT.into()),
+                                    border: icy_ui::Border::default(),
+                                    text_color: theme.secondary.on,
                                     ..Default::default()
                                 },
                             }

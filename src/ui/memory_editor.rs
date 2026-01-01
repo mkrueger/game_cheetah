@@ -1,4 +1,4 @@
-use iced::{
+use icy_ui::{
     Element, Length, alignment,
     border::Radius,
     widget::{rule, text_input},
@@ -21,7 +21,7 @@ pub struct MemoryEditor {
 impl MemoryEditor {
     // Update the show_memory_editor function to highlight the initial bytes:
     pub fn show_memory_editor(&self, app: &App) -> Element<'_, Message> {
-        use iced::widget::{button, column, container, mouse_area, row, scrollable, text};
+        use icy_ui::widget::{button, column, container, mouse_area, row, scrollable, text};
 
         const BYTES_PER_ROW: usize = 16;
         const MAX_ROWS: usize = 24;
@@ -42,14 +42,14 @@ impl MemoryEditor {
 
         // Build header row (unchanged)
         let header = row![
-            container(text("Address").size(14).font(iced::Font::MONOSPACE))
+            container(text("Address").size(14).font(icy_ui::Font::MONOSPACE))
                 .width(Length::Fixed(95.0))
                 .padding(0),
             container({
                 let mut hex_headers = row![];
                 for i in 0..BYTES_PER_ROW {
                     hex_headers = hex_headers.push(
-                        container(text(format!("{:02X}", i)).size(14).font(iced::Font::MONOSPACE))
+                        container(text(format!("{:02X}", i)).size(14).font(icy_ui::Font::MONOSPACE))
                             .width(Length::Fixed(30.0))
                             .align_x(alignment::Alignment::Center),
                     );
@@ -58,14 +58,14 @@ impl MemoryEditor {
             })
             .width(Length::Fixed(480.0))
             .padding(0),
-            container(text("ASCII").size(14).font(iced::Font::MONOSPACE))
+            container(text("ASCII").size(14).font(icy_ui::Font::MONOSPACE))
                 .width(Length::Fixed(140.0))
                 .padding(0),
         ]
         .spacing(0);
 
         // Build hex rows
-        let mut rows: Vec<iced::widget::Row<'_, Message>> = Vec::new();
+        let mut rows: Vec<icy_ui::widget::Row<'_, Message>> = Vec::new();
         let actual_rows = memory.len() / BYTES_PER_ROW;
 
         for row_idx in 0..actual_rows {
@@ -86,29 +86,29 @@ impl MemoryEditor {
                     row![
                         text(format!("{:X}", high_nibble))
                             .size(14)
-                            .font(iced::Font::MONOSPACE)
-                            .style(move |theme: &iced::Theme| {
+                            .font(icy_ui::Font::MONOSPACE)
+                            .style(move |theme: &icy_ui::Theme| {
                                 if self.cursor_nibble == 0 {
-                                    iced::widget::text::Style {
-                                        color: Some(theme.palette().primary),
+                                    icy_ui::widget::text::Style {
+                                        color: Some(theme.accent.base),
                                     }
                                 } else {
-                                    iced::widget::text::Style {
-                                        color: Some(theme.palette().text),
+                                    icy_ui::widget::text::Style {
+                                        color: Some(theme.background.on),
                                     }
                                 }
                             }),
                         text(format!("{:X}", low_nibble))
                             .size(14)
-                            .font(iced::Font::MONOSPACE)
-                            .style(move |theme: &iced::Theme| {
+                            .font(icy_ui::Font::MONOSPACE)
+                            .style(move |theme: &icy_ui::Theme| {
                                 if self.cursor_nibble == 1 {
-                                    iced::widget::text::Style {
-                                        color: Some(theme.palette().primary),
+                                    icy_ui::widget::text::Style {
+                                        color: Some(theme.accent.base),
                                     }
                                 } else {
-                                    iced::widget::text::Style {
-                                        color: Some(theme.palette().text),
+                                    icy_ui::widget::text::Style {
+                                        color: Some(theme.background.on),
                                     }
                                 }
                             }),
@@ -116,20 +116,20 @@ impl MemoryEditor {
                     .spacing(0)
                 } else {
                     row![
-                        text(format!("{:X}", high_nibble)).size(14).font(iced::Font::MONOSPACE),
-                        text(format!("{:X}", low_nibble)).size(14).font(iced::Font::MONOSPACE),
+                        text(format!("{:X}", high_nibble)).size(14).font(icy_ui::Font::MONOSPACE),
+                        text(format!("{:X}", low_nibble)).size(14).font(icy_ui::Font::MONOSPACE),
                     ]
                     .spacing(0)
                 };
 
                 hex_cells = hex_cells.push(
-                    mouse_area(container(hex_display).width(Length::Fixed(30.0)).padding(2).style(move |theme: &iced::Theme| {
+                    mouse_area(container(hex_display).width(Length::Fixed(30.0)).padding(2).style(move |theme: &icy_ui::Theme| {
                         if is_selected_byte {
                             container::Style {
-                                background: Some(theme.palette().background.into()),
-                                text_color: Some(theme.palette().text),
-                                border: iced::Border {
-                                    color: theme.palette().primary,
+                                background: Some(theme.background.base.into()),
+                                text_color: Some(theme.background.on),
+                                border: icy_ui::Border {
+                                    color: theme.accent.base,
                                     width: 2.0,
                                     radius: Radius::new(4.0),
                                 },
@@ -138,10 +138,10 @@ impl MemoryEditor {
                         } else if is_initial_location {
                             // Highlight initial location with a different background
                             container::Style {
-                                background: Some(theme.extended_palette().primary.weak.color.into()),
-                                text_color: Some(theme.palette().text),
-                                border: iced::Border {
-                                    color: theme.extended_palette().primary.weak.color,
+                                background: Some(theme.accent.hover.into()),
+                                text_color: Some(theme.background.on),
+                                border: icy_ui::Border {
+                                    color: theme.accent.hover,
                                     width: 1.0,
                                     radius: Radius::new(0.0),
                                 },
@@ -166,20 +166,20 @@ impl MemoryEditor {
                     let current_address = address + offset + i;
                     let is_initial_location = current_address >= highlight_start && current_address < highlight_end;
 
-                    container(text(display_char).size(14).font(iced::Font::MONOSPACE))
+                    container(text(display_char).size(14).font(icy_ui::Font::MONOSPACE))
                         .width(Length::Fixed(8.0))
                         .align_x(alignment::Alignment::Center)
-                        .style(move |theme: &iced::Theme| {
+                        .style(move |theme: &icy_ui::Theme| {
                             if is_selected {
                                 container::Style {
-                                    background: Some(theme.palette().primary.into()),
-                                    text_color: Some(theme.palette().background),
+                                    background: Some(theme.accent.base.into()),
+                                    text_color: Some(theme.background.base),
                                     ..Default::default()
                                 }
                             } else if is_initial_location {
                                 container::Style {
-                                    background: Some(theme.extended_palette().success.weak.color.into()),
-                                    text_color: Some(theme.palette().text),
+                                    background: Some(theme.success.hover.into()),
+                                    text_color: Some(theme.background.on),
                                     ..Default::default()
                                 }
                             } else {
@@ -191,7 +191,7 @@ impl MemoryEditor {
 
             rows.push(
                 row![
-                    container(text(format!("{:08X}", address + offset)).size(14).font(iced::Font::MONOSPACE))
+                    container(text(format!("{:08X}", address + offset)).size(14).font(icy_ui::Font::MONOSPACE))
                         .width(Length::Fixed(100.0))
                         .padding(0),
                     container(hex_cells).width(Length::Fixed(480.0)).padding(0),
@@ -263,27 +263,27 @@ impl MemoryEditor {
 
             container(
                 column![
-                    row![text(format!("Cursor: 0x{:08X}", cursor_address)).size(14).font(iced::Font::MONOSPACE),].spacing(20),
+                    row![text(format!("Cursor: 0x{:08X}", cursor_address)).size(14).font(icy_ui::Font::MONOSPACE),].spacing(20),
                     row![
                         column![
-                            text("Byte:").size(14).font(iced::Font::MONOSPACE),
-                            text("U16:").size(14).font(iced::Font::MONOSPACE),
-                            text("U32:").size(14).font(iced::Font::MONOSPACE),
-                            text("U64:").size(14).font(iced::Font::MONOSPACE),
+                            text("Byte:").size(14).font(icy_ui::Font::MONOSPACE),
+                            text("U16:").size(14).font(icy_ui::Font::MONOSPACE),
+                            text("U32:").size(14).font(icy_ui::Font::MONOSPACE),
+                            text("U64:").size(14).font(icy_ui::Font::MONOSPACE),
                         ]
                         .width(Length::Fixed(60.0))
                         .spacing(5),
                         column![
-                            text(format!("{}", byte_val)).size(14).font(iced::Font::MONOSPACE),
-                            text(format!("{}", u16_val)).size(14).font(iced::Font::MONOSPACE),
-                            text(format!("{}", u32_val)).size(14).font(iced::Font::MONOSPACE),
-                            text(format!("{}", u64_val)).size(14).font(iced::Font::MONOSPACE),
+                            text(format!("{}", byte_val)).size(14).font(icy_ui::Font::MONOSPACE),
+                            text(format!("{}", u16_val)).size(14).font(icy_ui::Font::MONOSPACE),
+                            text(format!("{}", u32_val)).size(14).font(icy_ui::Font::MONOSPACE),
+                            text(format!("{}", u64_val)).size(14).font(icy_ui::Font::MONOSPACE),
                         ]
                         .width(Length::Fixed(200.0))
                         .spacing(5),
                         column![
-                            text("Float:").size(14).font(iced::Font::MONOSPACE),
-                            text("Double:").size(14).font(iced::Font::MONOSPACE),
+                            text("Float:").size(14).font(icy_ui::Font::MONOSPACE),
+                            text("Double:").size(14).font(icy_ui::Font::MONOSPACE),
                         ]
                         .width(Length::Fixed(60.0))
                         .spacing(5),
@@ -314,7 +314,7 @@ impl MemoryEditor {
                                 "N/A".to_string()
                             })
                             .size(14)
-                            .font(iced::Font::MONOSPACE),
+                            .font(icy_ui::Font::MONOSPACE),
                             text(if bytes_available >= 8 {
                                 if double_val.is_finite() {
                                     // Format double value more intelligently
@@ -341,7 +341,7 @@ impl MemoryEditor {
                                 "N/A".to_string()
                             })
                             .size(14)
-                            .font(iced::Font::MONOSPACE),
+                            .font(icy_ui::Font::MONOSPACE),
                         ]
                         .spacing(5),
                     ]
@@ -351,10 +351,10 @@ impl MemoryEditor {
                 .padding(10),
             )
             .width(Length::Fill)
-            .style(|theme: &iced::Theme| container::Style {
-                background: Some(theme.extended_palette().background.weak.color.into()),
-                border: iced::Border {
-                    color: theme.extended_palette().background.strong.color,
+            .style(|theme: &icy_ui::Theme| container::Style {
+                background: Some(theme.primary.base.into()),
+                border: icy_ui::Border {
+                    color: theme.secondary.base,
                     width: 1.0,
                     radius: Radius::new(4.0),
                 },
@@ -387,9 +387,9 @@ impl MemoryEditor {
                 .align_y(alignment::Alignment::Center),
                 rule::horizontal(1),
                 // Header row with column labels
-                container(header).style(|theme: &iced::Theme| {
+                container(header).style(|theme: &icy_ui::Theme| {
                     container::Style {
-                        background: Some(theme.extended_palette().background.weak.color.into()),
+                        background: Some(theme.primary.base.into()),
                         ..Default::default()
                     }
                 }),
