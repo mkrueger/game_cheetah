@@ -29,6 +29,21 @@ use simd::{get_epsilon_f32, get_epsilon_f64, search_f32_simd, search_f64_simd, s
 pub use string_search::search_string_in_memory;
 pub use unknown::compare_values;
 
+type UnknownPrevMap = HashMap<(usize, SearchType), [u8; 8]>;
+
+fn collect_next_previous_values(next_prev: Arc<Mutex<UnknownPrevMap>>) -> UnknownPrevMap {
+    match Arc::try_unwrap(next_prev) {
+        Ok(mutex) => match mutex.into_inner() {
+            Ok(map) => map,
+            Err(poisoned) => poisoned.into_inner(),
+        },
+        Err(shared) => match shared.lock() {
+            Ok(map) => map.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        },
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProcessInfo {
     pub pid: process_memory::Pid,
@@ -825,17 +840,19 @@ impl GameCheetahEngine {
 
                 // Survivors and their fresh bytes are gathered into this map and
                 // become the previous-value table for the next pass.
-                type PrevMap = HashMap<(usize, SearchType), [u8; 8]>;
-                let next_prev: Arc<Mutex<PrevMap>> = Arc::new(Mutex::new(HashMap::with_capacity(old_results.len())));
+                let next_prev: Arc<Mutex<UnknownPrevMap>> = Arc::new(Mutex::new(HashMap::with_capacity(old_results.len())));
 
                 per_page_vec.par_iter().for_each(|(_page_base, addrs)| {
                     // Sort addresses within page for better cache locality
                     let mut sorted_addrs = addrs.clone();
                     sorted_addrs.sort_unstable();
+                    let sorted_addrs_len = sorted_addrs.len();
 
                     // Calculate minimal span
-                    let min_addr = *sorted_addrs.first().unwrap();
-                    let sorted_addrs_len = sorted_addrs.len();
+                    let Some(&min_addr) = sorted_addrs.first() else {
+                        current_bytes.fetch_add(sorted_addrs_len, Ordering::Relaxed);
+                        return;
+                    };
                     let max_addr = sorted_addrs
                         .iter()
                         .filter_map(|addr| {
@@ -929,9 +946,8 @@ impl GameCheetahEngine {
                 });
 
                 // Replace the previous-value table with the survivors of this pass.
-                if let Ok(new_map) = Arc::try_unwrap(next_prev).map(|m| m.into_inner().unwrap_or_default())
-                    && let Ok(mut map) = previous_unknown_values.write()
-                {
+                let new_map = collect_next_previous_values(next_prev);
+                if let Ok(mut map) = previous_unknown_values.write() {
                     *map = new_map;
                 }
             }
@@ -1245,4 +1261,29 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collect_next_previous_values_takes_unique_map() {
+        let next_prev = Arc::new(Mutex::new(HashMap::from([((0x1234, SearchType::Int), [1, 2, 3, 4, 0, 0, 0, 0])])));
+
+        let map = collect_next_previous_values(next_prev);
+
+        assert_eq!(map.get(&(0x1234, SearchType::Int)), Some(&[1, 2, 3, 4, 0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn collect_next_previous_values_clones_when_arc_is_shared() {
+        let next_prev = Arc::new(Mutex::new(HashMap::from([((0x5678, SearchType::Float), [5, 6, 7, 8, 0, 0, 0, 0])])));
+        let extra_ref = Arc::clone(&next_prev);
+
+        let map = collect_next_previous_values(next_prev);
+
+        assert_eq!(map.get(&(0x5678, SearchType::Float)), Some(&[5, 6, 7, 8, 0, 0, 0, 0]));
+        assert_eq!(extra_ref.lock().unwrap().len(), 1);
+    }
 }
