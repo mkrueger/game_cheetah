@@ -25,9 +25,7 @@ mod unknown;
 #[cfg(target_os = "linux")]
 pub use memory_reader::ProcessMemReader;
 use memory_reader::fast_read_memory;
-use simd::{get_epsilon_f32, get_epsilon_f64, search_integers};
-#[cfg(target_arch = "x86_64")]
-use simd::{search_f32_simd, search_f64_simd};
+use simd::{get_epsilon_f32, get_epsilon_f64, search_f32_simd, search_f64_simd, search_integers};
 pub use string_search::search_string_in_memory;
 pub use unknown::compare_values;
 
@@ -1208,35 +1206,7 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
             if search_data.len() == 4 {
                 let target = f32::from_le_bytes([search_data[0], search_data[1], search_data[2], search_data[3]]);
                 let epsilon = get_epsilon_f32(target);
-
-                #[cfg(target_arch = "x86_64")]
-                {
-                    result = search_f32_simd(memory_data, target, epsilon, start);
-                }
-
-                #[cfg(not(target_arch = "x86_64"))]
-                {
-                    // Scan through memory interpreting each position as a potential float
-                    if memory_data.len() >= 4 {
-                        for i in 0..=memory_data.len() - 4 {
-                            let value = f32::from_le_bytes([memory_data[i], memory_data[i + 1], memory_data[i + 2], memory_data[i + 3]]);
-
-                            // Check if value is close enough to target
-                            // Also handle special cases like NaN and infinity
-                            if value.is_finite() && target.is_finite() {
-                                if (value - target).abs() <= epsilon {
-                                    result.push(SearchResult::new(start + i, SearchType::Float));
-                                }
-                            } else if value.is_nan() && target.is_nan() {
-                                // Both are NaN
-                                result.push(SearchResult::new(start + i, SearchType::Float));
-                            } else if value == target {
-                                // Handle infinities
-                                result.push(SearchResult::new(start + i, SearchType::Float));
-                            }
-                        }
-                    }
-                }
+                result = search_f32_simd(memory_data, target, epsilon, start);
             }
         }
         // For doubles, search with epsilon tolerance
@@ -1255,42 +1225,7 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
 
                 // Similar epsilon strategy for doubles
                 let epsilon = get_epsilon_f64(target);
-
-                #[cfg(target_arch = "x86_64")]
-                {
-                    result = search_f64_simd(memory_data, target, epsilon, start);
-                }
-
-                #[cfg(not(target_arch = "x86_64"))]
-                {
-                    // Scan through memory interpreting each position as a potential double
-                    if memory_data.len() >= 8 {
-                        for i in 0..=memory_data.len() - 8 {
-                            let value = f64::from_le_bytes([
-                                memory_data[i],
-                                memory_data[i + 1],
-                                memory_data[i + 2],
-                                memory_data[i + 3],
-                                memory_data[i + 4],
-                                memory_data[i + 5],
-                                memory_data[i + 6],
-                                memory_data[i + 7],
-                            ]);
-
-                            // Check if value is close enough to target
-                            if value.is_finite() && target.is_finite() {
-                                if (value - target).abs() <= epsilon {
-                                    result.push(SearchResult::new(start + i, SearchType::Double));
-                                }
-                            } else if value.is_nan() && target.is_nan() {
-                                result.push(SearchResult::new(start + i, SearchType::Double));
-                            } else if value == target {
-                                // Handle infinities
-                                result.push(SearchResult::new(start + i, SearchType::Double));
-                            }
-                        }
-                    }
-                }
+                result = search_f64_simd(memory_data, target, epsilon, start);
             }
         }
         SearchType::Guess => {

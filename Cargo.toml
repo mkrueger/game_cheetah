@@ -37,6 +37,8 @@ rayon = "1.11.0"
 memchr = "2.7.6"
 crossbeam = "0.8.4"
 crossbeam-channel = "0.5.15"
+wide = "0.7"
+bytemuck = "1"
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
