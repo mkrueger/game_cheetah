@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -26,6 +26,12 @@ const CHANGE_FADE: Duration = Duration::from_millis(1500);
 /// Cap on the number of remembered byte observations. Bounded so a long
 /// session that scrolls through many regions can't grow unbounded.
 const CHANGE_TRACKER_CAP: usize = 16384;
+
+/// Map of every recently-observed address to the most recent byte value seen
+/// there and, when known, the timestamp of the last observed transition. The
+/// timestamp is `None` for cells we've only ever observed once — those have
+/// no observed change yet and therefore must not flash.
+type ChangeTracker = HashMap<usize, (u8, Option<Instant>)>;
 
 const SCROLL_ID: &str = "memory-editor-scroll";
 
@@ -100,18 +106,13 @@ pub struct MemoryEditor {
 
     inspector_edit: Option<(InspectorValueKind, String)>,
 
-    /// Last observed byte value and the moment it changed for every address
-    /// that has been on screen recently. The view re-reads the visible rows
-    /// and updates this map so cells that just changed get a brief highlight
-    /// that fades out over [`CHANGE_FADE`]. Wrapped in `Rc<RefCell<...>>`
-    /// because the view function only has `&self` and the row-rendering
-    /// closure must be `'static`.
-    change_tracker: Rc<RefCell<HashMap<usize, (u8, Instant)>>>,
-    /// `true` once the editor has observed every visible cell at least once
-    /// after opening. While `false`, freshly observed addresses are recorded
-    /// without flashing so the initial paint does not light up the entire
-    /// grid in the change color.
-    tracker_primed: Rc<Cell<bool>>,
+    /// Last observed byte value and, when applicable, the moment it last
+    /// transitioned to that value. The view re-reads the visible rows and
+    /// updates this map so cells that just changed get a brief highlight
+    /// that fades out over [`CHANGE_FADE`]. The timestamp is `None` for
+    /// cells we've only ever observed once — those have no observed
+    /// transition and therefore must not flash.
+    change_tracker: Rc<RefCell<ChangeTracker>>,
 }
 
 impl MemoryEditor {
@@ -433,7 +434,6 @@ impl MemoryEditor {
 
         // ---- Virtualized memory rows -----------------------------------------
         let tracker = self.change_tracker.clone();
-        let tracker_primed = self.tracker_primed.clone();
         let memory_view =
             scroll_area()
                 .id(scroll_id())
@@ -442,12 +442,6 @@ impl MemoryEditor {
                     let range_start = range.start;
                     let range_end = range.end;
                     let handle = (pid as process_memory::Pid).try_into_process_handle().ok();
-
-                    // Track whether at least one row was actually observed during
-                    // this render. Once we've recorded any observations, the
-                    // tracker is "primed" and subsequent value changes will flash.
-                    let mut observed_any = false;
-                    let was_primed = tracker_primed.get();
 
                     let make_hex_cell =
                         |absolute_row: usize, col_idx: usize, byte: u8, current_address: usize, is_valid: bool, change_alpha: f32| -> Element<'_, Message> {
@@ -597,34 +591,31 @@ impl MemoryEditor {
 
                                 // Update the change tracker with the bytes we just
                                 // observed and compute a fade alpha for each cell.
-                                // The first observation of any address is silent
-                                // (alpha = 0) so the very first paint after open
-                                // does not light up the entire grid.
+                                // Cells we have only ever observed once are recorded
+                                // with no transition timestamp, so they cannot flash
+                                // until they actually change in the target process.
                                 let mut change_alphas = [0.0f32; BYTES_PER_ROW];
                                 {
                                     let mut tracker_borrow = tracker.borrow_mut();
                                     let now = Instant::now();
                                     for col_idx in 0..bytes_in_region {
-                                        observed_any = true;
                                         let cell_addr = row_addr.saturating_add(col_idx);
                                         let new_byte = row_bytes[col_idx];
                                         match tracker_borrow.get(&cell_addr).copied() {
                                             Some((prev_byte, last_change)) => {
                                                 if prev_byte != new_byte {
-                                                    tracker_borrow.insert(cell_addr, (new_byte, now));
-                                                    if was_primed {
-                                                        change_alphas[col_idx] = 0.55;
-                                                    }
-                                                } else {
+                                                    tracker_borrow.insert(cell_addr, (new_byte, Some(now)));
+                                                    change_alphas[col_idx] = 0.55;
+                                                } else if let Some(last_change) = last_change {
                                                     let elapsed = now.saturating_duration_since(last_change);
-                                                    if was_primed && elapsed < CHANGE_FADE {
+                                                    if elapsed < CHANGE_FADE {
                                                         let frac = elapsed.as_secs_f32() / CHANGE_FADE.as_secs_f32();
                                                         change_alphas[col_idx] = 0.55 * (1.0 - frac);
                                                     }
                                                 }
                                             }
                                             None => {
-                                                tracker_borrow.insert(cell_addr, (new_byte, now));
+                                                tracker_borrow.insert(cell_addr, (new_byte, None));
                                             }
                                         }
                                     }
@@ -723,19 +714,15 @@ impl MemoryEditor {
                     )
                     .spacing(0);
 
-                    // After the first paint that observed any cells, mark the
-                    // tracker as primed so subsequent value differences flash.
-                    if observed_any && !was_primed {
-                        tracker_primed.set(true);
-                    }
                     // Cap the tracker so we never grow it unbounded across long
                     // browsing sessions. When over the cap, drop the oldest
-                    // entries by last-change timestamp.
+                    // entries (by last-change timestamp; entries we've only
+                    // observed once count as oldest).
                     {
                         let mut tracker_borrow = tracker.borrow_mut();
                         if tracker_borrow.len() > CHANGE_TRACKER_CAP {
                             let target = CHANGE_TRACKER_CAP * 3 / 4;
-                            let mut entries: Vec<(usize, Instant)> = tracker_borrow.iter().map(|(&addr, &(_, ts))| (addr, ts)).collect();
+                            let mut entries: Vec<(usize, Option<Instant>)> = tracker_borrow.iter().map(|(&addr, &(_, ts))| (addr, ts)).collect();
                             entries.sort_by_key(|(_, ts)| *ts);
                             let drop_count = tracker_borrow.len().saturating_sub(target);
                             for (addr, _) in entries.into_iter().take(drop_count) {
@@ -1088,7 +1075,6 @@ impl MemoryEditor {
     /// the values seen during the previous session.
     pub fn reset_change_tracker(&mut self) {
         self.change_tracker.borrow_mut().clear();
-        self.tracker_primed.set(false);
     }
 
     /// Moves the cursor within the virtualized window. Returns `true` when the
