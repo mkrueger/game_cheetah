@@ -655,7 +655,7 @@ impl MemoryEditor {
             || "no mapped region".to_string(),
             |region| {
                 let name = if region.name.is_empty() { "<unnamed>" } else { region.name.as_str() };
-                format!("{name}  0x{:X}–0x{:X}  ({})", region.start, region.end(), access_text)
+                format!("{name}   0x{:X}–0x{:X}   ({})", region.start, region.end(), access_text)
             },
         );
         let show_offset = cursor_address.is_some_and(|address| address != self.editor_initial_address) && self.editor_initial_address != 0;
@@ -684,6 +684,24 @@ impl MemoryEditor {
                 .into()
         };
 
+        // Region band: sits between the toolbar and the hex grid header so the
+        // (potentially long) region description gets its own line and never
+        // pushes the address/offset off-screen.
+        let region_strip = container(
+            row![status_label("Region".to_string()), status_value(region_summary_text)]
+                .spacing(8)
+                .align_y(alignment::Alignment::Center),
+        )
+        .width(Length::Fill)
+        .padding([6, 12])
+        .style(|theme: &icy_ui::Theme| container::Style {
+            background: Some(theme.secondary.base.into()),
+            text_color: Some(theme.secondary.on),
+            ..Default::default()
+        });
+
+        // Status strip below the grid: just the things that change when the
+        // cursor moves byte-by-byte.
         let mut status_items: Vec<Element<'_, Message>> = Vec::new();
         status_items.push(
             row![status_label("Address".to_string()), status_value(cursor_address_text)]
@@ -699,12 +717,6 @@ impl MemoryEditor {
                     .into(),
             );
         }
-        status_items.push(
-            row![status_label("Region".to_string()), status_value(region_summary_text)]
-                .spacing(6)
-                .align_y(alignment::Alignment::Center)
-                .into(),
-        );
 
         let status_strip = container(row(status_items).spacing(24).align_y(alignment::Alignment::Center))
             .width(Length::Fill)
@@ -909,6 +921,8 @@ impl MemoryEditor {
         container(
             column![
                 toolbar,
+                rule::horizontal(1),
+                region_strip,
                 rule::horizontal(1),
                 header,
                 container(memory_view).style(|theme: &icy_ui::Theme| container::Style {
