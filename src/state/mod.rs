@@ -25,7 +25,7 @@ mod unknown;
 #[cfg(target_os = "linux")]
 pub use memory_reader::ProcessMemReader;
 use memory_reader::fast_read_memory;
-use simd::{get_epsilon_f32, get_epsilon_f64, search_aligned_integers};
+use simd::{get_epsilon_f32, get_epsilon_f64, search_integers};
 #[cfg(target_arch = "x86_64")]
 use simd::{search_f32_simd, search_f64_simd};
 pub use string_search::search_string_in_memory;
@@ -1200,7 +1200,7 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
         // For aligned integer types, use optimized searching
         SearchType::Short | SearchType::Int | SearchType::Int64 => {
             // Use SIMD-optimized pattern matching for aligned data
-            result = search_aligned_integers(memory_data, search_data, search_type, start);
+            result = search_integers(memory_data, search_data, search_type, start);
         }
         // For floats, search with epsilon tolerance
         SearchType::Float => {
