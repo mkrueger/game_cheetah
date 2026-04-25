@@ -1,4 +1,19 @@
-use game_cheetah::{SearchType, search_memory};
+use game_cheetah::{SearchType, SearchValue, search_memory};
+
+#[test]
+fn test_search_value_display_handles_invalid_lengths() {
+    for search_type in [SearchType::Short, SearchType::Int, SearchType::Int64, SearchType::Float, SearchType::Double] {
+        let value = SearchValue(search_type, vec![0x2A]);
+        assert_eq!(value.to_string(), "<invalid>");
+    }
+}
+
+#[test]
+fn test_search_value_display_uses_little_endian_values() {
+    assert_eq!(SearchValue(SearchType::Short, 0x1234i16.to_le_bytes().to_vec()).to_string(), "4660");
+    assert_eq!(SearchValue(SearchType::Int, 0x12345678i32.to_le_bytes().to_vec()).to_string(), "305419896");
+    assert_eq!(SearchValue(SearchType::Float, 42.5f32.to_le_bytes().to_vec()).to_string(), "42.5");
+}
 
 #[test]
 fn test_search_byte_values() {

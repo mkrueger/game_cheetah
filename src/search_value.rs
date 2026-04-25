@@ -5,38 +5,26 @@ use crate::SearchType;
 #[derive(Debug, PartialEq, Clone)]
 pub struct SearchValue(pub SearchType, pub Vec<u8>);
 
+impl SearchValue {
+    fn fixed_bytes<const N: usize>(&self) -> Option<[u8; N]> {
+        self.1.get(..N)?.try_into().ok()
+    }
+}
+
 impl Display for SearchValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let to_str = |needed: usize, convert: &dyn Fn(&[u8]) -> String| -> Option<String> {
-            if self.1.len() >= needed { Some(convert(&self.1[..needed])) } else { None }
-        };
         let s = match self.0 {
             SearchType::Byte => self.1.first().map(|b| b.to_string()),
-            SearchType::Short => to_str(2, &|b| {
-                let arr: [u8; 2] = b.try_into().unwrap();
-                i16::from_le_bytes(arr).to_string()
-            }),
-            SearchType::Int => to_str(4, &|b| {
-                let arr: [u8; 4] = b.try_into().unwrap();
-                i32::from_le_bytes(arr).to_string()
-            }),
-            SearchType::Int64 => to_str(8, &|b| {
-                let arr: [u8; 8] = b.try_into().unwrap();
-                i64::from_le_bytes(arr).to_string()
-            }),
-            SearchType::Float => to_str(4, &|b| {
-                let arr: [u8; 4] = b.try_into().unwrap();
-                f32::from_le_bytes(arr).to_string()
-            }),
-            SearchType::Double => to_str(8, &|b| {
-                let arr: [u8; 8] = b.try_into().unwrap();
-                f64::from_le_bytes(arr).to_string()
-            }),
+            SearchType::Short => self.fixed_bytes::<2>().map(|arr| i16::from_le_bytes(arr).to_string()),
+            SearchType::Int => self.fixed_bytes::<4>().map(|arr| i32::from_le_bytes(arr).to_string()),
+            SearchType::Int64 => self.fixed_bytes::<8>().map(|arr| i64::from_le_bytes(arr).to_string()),
+            SearchType::Float => self.fixed_bytes::<4>().map(|arr| f32::from_le_bytes(arr).to_string()),
+            SearchType::Double => self.fixed_bytes::<8>().map(|arr| f64::from_le_bytes(arr).to_string()),
             SearchType::Guess => None,
             SearchType::Unknown => None,
             SearchType::String | SearchType::StringUtf16 => None,
         }
-        .ok_or(std::fmt::Error)?;
+        .unwrap_or_else(|| "<invalid>".to_owned());
         f.write_str(&s)
     }
 }
