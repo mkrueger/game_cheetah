@@ -117,13 +117,17 @@ impl App {
                 Task::none()
             }
             Message::CloseSearch(index) => {
-                if self.state.searches.is_empty() {
+                if index >= self.state.searches.len() {
                     return Task::none();
                 }
                 self.state.remove_freezes(index);
                 self.state.searches.remove(index);
-                if self.state.current_search >= index {
+                if self.state.searches.is_empty() {
+                    self.state.current_search = 0;
+                } else if self.state.current_search > index {
                     self.state.current_search -= 1;
+                } else if self.state.current_search >= self.state.searches.len() {
+                    self.state.current_search = self.state.searches.len() - 1;
                 }
                 Task::none()
             }
