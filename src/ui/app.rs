@@ -532,6 +532,32 @@ impl App {
                     Task::none()
                 }
             }
+            Message::MemoryEditorUndo => {
+                match self.memory_editor.undo(self.state.pid) {
+                    Ok(Some(address)) => {
+                        self.state.error_text.clear();
+                        if self.memory_editor.focus_on(address).is_ok() {
+                            return self.memory_editor.snap_to_cursor();
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(err) => self.state.error_text = err,
+                }
+                Task::none()
+            }
+            Message::MemoryEditorRedo => {
+                match self.memory_editor.redo(self.state.pid) {
+                    Ok(Some(address)) => {
+                        self.state.error_text.clear();
+                        if self.memory_editor.focus_on(address).is_ok() {
+                            return self.memory_editor.snap_to_cursor();
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(err) => self.state.error_text = err,
+                }
+                Task::none()
+            }
             Message::SortProcesses(column) => {
                 if self.process_sort_column == column {
                     // Toggle direction if clicking same column
@@ -618,9 +644,22 @@ impl App {
         // Only subscribe to keyboard events when in memory editor mode
         if matches!(self.app_state, AppState::MemoryEditor) {
             keyboard::listen().filter_map(|event| {
-                let keyboard::Event::KeyPressed { key, .. } = event else {
+                let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
                     return None;
                 };
+                // Ctrl/Cmd + Z / Shift+Ctrl/Cmd + Z drive undo / redo. Match
+                // these before plain character handling so a `Z` keystroke
+                // with the modifier doesn't fall through to the hex editor.
+                if modifiers.command()
+                    && let keyboard::Key::Character(c) = &key
+                    && matches!(c.as_str(), "z" | "Z")
+                {
+                    return if modifiers.shift() {
+                        Some(Message::MemoryEditorRedo)
+                    } else {
+                        Some(Message::MemoryEditorUndo)
+                    };
+                }
                 match key {
                     keyboard::Key::Named(keyboard::key::Named::ArrowUp) => Some(Message::MemoryEditorMoveCursor(-1, 0)),
                     keyboard::Key::Named(keyboard::key::Named::ArrowDown) => Some(Message::MemoryEditorMoveCursor(1, 0)),

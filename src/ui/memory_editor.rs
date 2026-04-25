@@ -33,6 +33,22 @@ const CHANGE_TRACKER_CAP: usize = 16384;
 /// no observed change yet and therefore must not flash.
 type ChangeTracker = HashMap<usize, (u8, Option<Instant>)>;
 
+/// Cap on the number of remembered undo/redo entries. Each entry is at most
+/// 8 bytes of payload, so the bound is generous.
+const UNDO_STACK_CAP: usize = 1024;
+
+/// A single user-initiated write that can be undone or redone.
+#[derive(Debug, Clone)]
+struct UndoEntry {
+    address: usize,
+    /// Bytes that were at `address` *before* the write — replaying these
+    /// restores the previous state.
+    before: Vec<u8>,
+    /// Bytes that the user wrote — replaying these reapplies the change on
+    /// redo.
+    after: Vec<u8>,
+}
+
 const SCROLL_ID: &str = "memory-editor-scroll";
 
 fn scroll_id() -> Id {
@@ -105,6 +121,14 @@ pub struct MemoryEditor {
     viewport: Option<Viewport>,
 
     inspector_edit: Option<(InspectorValueKind, String)>,
+
+    /// Stack of recent writes for `Ctrl+Z`. Each entry remembers the bytes
+    /// that were *replaced* by a single user-initiated write so undoing can
+    /// put them back. Bounded to keep memory bounded across long sessions.
+    undo_stack: Vec<UndoEntry>,
+    /// Writes that were undone and can be replayed via `Shift+Ctrl+Z`.
+    /// Cleared whenever a fresh write happens.
+    redo_stack: Vec<UndoEntry>,
 
     /// Last observed byte value and, when applicable, the moment it last
     /// transitioned to that value. The view re-reads the visible rows and
@@ -323,10 +347,70 @@ impl MemoryEditor {
             return Err("Cursor is not in a readable memory region".to_string());
         };
         let bytes = Self::inspector_bytes(kind, input)?;
-        let handle = pid.try_into_process_handle().map_err(|e| format!("Failed to attach to process: {e}"))?;
-        handle.put_address(address, &bytes).map_err(|e| format!("Failed to write 0x{address:X}: {e}"))?;
+        self.write_with_undo(pid, address, &bytes)?;
         self.inspector_edit = None;
         Ok(())
+    }
+
+    /// Performs a write at `address` and records an entry on the undo stack.
+    /// Reads the existing bytes first so undo can restore them. The redo
+    /// stack is cleared because a fresh user write invalidates the redo
+    /// branch.
+    fn write_with_undo(&mut self, pid: process_memory::Pid, address: usize, after: &[u8]) -> Result<(), String> {
+        let handle = pid.try_into_process_handle().map_err(|e| format!("Failed to attach to process: {e}"))?;
+        let before = copy_address(address, after.len(), &handle).map_err(|e| format!("Failed to read 0x{address:X}: {e}"))?;
+        handle.put_address(address, after).map_err(|e| format!("Failed to write 0x{address:X}: {e}"))?;
+
+        // Skip recording no-op writes so redundant submits don't pollute the
+        // history.
+        if before != after {
+            self.push_undo(UndoEntry {
+                address,
+                before,
+                after: after.to_vec(),
+            });
+            self.redo_stack.clear();
+        }
+        Ok(())
+    }
+
+    fn push_undo(&mut self, entry: UndoEntry) {
+        self.undo_stack.push(entry);
+        if self.undo_stack.len() > UNDO_STACK_CAP {
+            // Drop the oldest entries while keeping the newest ones.
+            let drop = self.undo_stack.len() - UNDO_STACK_CAP;
+            self.undo_stack.drain(..drop);
+        }
+    }
+
+    /// Restores the bytes from the most recent undo entry. Returns the
+    /// address that was modified (so the caller can move the cursor / make
+    /// the change visible) or `None` if there's nothing to undo.
+    pub fn undo(&mut self, pid: process_memory::Pid) -> Result<Option<usize>, String> {
+        let Some(entry) = self.undo_stack.pop() else {
+            return Ok(None);
+        };
+        let handle = pid.try_into_process_handle().map_err(|e| format!("Failed to attach to process: {e}"))?;
+        handle
+            .put_address(entry.address, &entry.before)
+            .map_err(|e| format!("Failed to write 0x{:X}: {e}", entry.address))?;
+        let address = entry.address;
+        self.redo_stack.push(entry);
+        Ok(Some(address))
+    }
+
+    /// Re-applies the most recently undone write.
+    pub fn redo(&mut self, pid: process_memory::Pid) -> Result<Option<usize>, String> {
+        let Some(entry) = self.redo_stack.pop() else {
+            return Ok(None);
+        };
+        let handle = pid.try_into_process_handle().map_err(|e| format!("Failed to attach to process: {e}"))?;
+        handle
+            .put_address(entry.address, &entry.after)
+            .map_err(|e| format!("Failed to write 0x{:X}: {e}", entry.address))?;
+        let address = entry.address;
+        self.undo_stack.push(entry);
+        Ok(Some(address))
     }
 
     /// Returns an animated scroll task that brings the cursor row into view if
@@ -1066,6 +1150,8 @@ impl MemoryEditor {
         };
 
         self.reset_change_tracker();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
         self.refresh_regions(pid)?;
         self.focus_on(addr)
     }
@@ -1132,9 +1218,7 @@ impl MemoryEditor {
         } else {
             (current_byte & 0xF0) | hex_digit
         };
-        handle
-            .put_address(address, &[new_byte])
-            .map_err(|e| format!("Failed to write 0x{address:X}: {e}"))?;
+        self.write_with_undo(pid, address, &[new_byte])?;
 
         if self.cursor_nibble == 0 {
             self.cursor_nibble = 1;

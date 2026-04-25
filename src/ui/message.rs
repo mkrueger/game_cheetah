@@ -48,6 +48,8 @@ pub enum Message {
     MemoryEditorInspectorValueChanged(InspectorValueKind, String),
     MemoryEditorInspectorValueSubmit(InspectorValueKind),
     MemoryEditorTick,
+    MemoryEditorUndo,
+    MemoryEditorRedo,
     SortProcesses(ProcessSortColumn),
 
     UnknownSearchDecrease,
