@@ -41,6 +41,11 @@ impl ProcessMemReader {
         let mut buffer = vec![0u8; size];
         let fd = self.file.as_raw_fd();
 
+        // SAFETY: `fd` is a valid file descriptor owned by `self.file` for the
+        // duration of this call (the &self borrow keeps the file alive).
+        // `buffer` is a freshly allocated `Vec<u8>` of length `size`, so the
+        // pointer is valid for `size` bytes of writes. `pread` does not move
+        // the file offset, making concurrent reads from multiple threads safe.
         let result = unsafe { libc::pread(fd, buffer.as_mut_ptr() as *mut libc::c_void, size, address as libc::off_t) };
 
         if result == -1 {
@@ -60,6 +65,10 @@ impl ProcessMemReader {
 
         let fd = self.file.as_raw_fd();
 
+        // SAFETY: `fd` is a valid file descriptor for the lifetime of `&self`.
+        // `buffer` is a unique `&mut [u8]`, so writing `buffer.len()` bytes
+        // through `buffer.as_mut_ptr()` is sound. `pread` is offset-stable
+        // and may be called concurrently on the same fd from multiple threads.
         let result = unsafe { libc::pread(fd, buffer.as_mut_ptr() as *mut libc::c_void, buffer.len(), address as libc::off_t) };
 
         if result == -1 { Err(Error::last_os_error()) } else { Ok(result as usize) }
@@ -87,6 +96,14 @@ fn fast_read_memory(pid: process_memory::Pid, address: usize, size: usize) -> Re
         iov_len: size,
     };
 
+    // SAFETY: Both iovecs describe valid memory:
+    //  * `local_iov` points into `buffer`, which is alive for this call and
+    //    sized to `size` bytes.
+    //  * `remote_iov` describes addresses in the target process; the kernel
+    //    validates them and returns EFAULT/partial-read on bad pages instead
+    //    of dereferencing them in our address space.
+    // `process_vm_readv` is documented as thread-safe and does not retain
+    // pointers past the call.
     let result = unsafe { libc::process_vm_readv(pid as libc::pid_t, &local_iov as *const libc::iovec, 1, &remote_iov as *const libc::iovec, 1, 0) };
 
     if result > 0 {
@@ -102,6 +119,10 @@ fn fast_read_memory(pid: process_memory::Pid, address: usize, size: usize) -> Re
         let mut buffer = vec![0u8; size];
         let fd = file.as_raw_fd();
 
+        // SAFETY: `fd` is a valid file descriptor owned by `file`, which is
+        // kept alive on the next line by the surrounding scope. `buffer` is
+        // freshly allocated and exclusively owned, so writing `size` bytes
+        // into it is sound. `pread` does not move the file offset.
         let result = unsafe { libc::pread(fd, buffer.as_mut_ptr() as *mut libc::c_void, size, address as libc::off_t) };
 
         if result > 0 {
@@ -1498,6 +1519,11 @@ fn search_u32_simd(memory_data: &[u8], search_value: u32, start: usize) -> Vec<S
 
     let mut results = Vec::new();
 
+    // SAFETY: All x86_64 SSE2 intrinsics below are gated by
+    // `is_x86_feature_detected!("sse2")`. `_mm_loadu_si128` performs an
+    // unaligned 16-byte load, and `chunks_exact(16)` guarantees each `chunk`
+    // is exactly 16 readable bytes from `memory_data`. No pointers are
+    // retained beyond the loop body.
     unsafe {
         // Ensure we have SSE2 support
         if is_x86_feature_detected!("sse2") {
@@ -1544,6 +1570,9 @@ fn search_u64_simd(memory_data: &[u8], search_value: u64, start: usize) -> Vec<S
 
     let mut results = Vec::new();
 
+    // SAFETY: Each branch is gated by the appropriate `is_x86_feature_detected!`
+    // check (avx2 / sse2). `chunks_exact(N)` guarantees N readable bytes per
+    // chunk for the unaligned loads (`_mm256_loadu_si256`/`_mm_loadu_si128`).
     unsafe {
         // For u64, we can use different strategies depending on available features
         if is_x86_feature_detected!("avx2") {
@@ -1675,6 +1704,9 @@ fn search_u16_simd(memory_data: &[u8], search_value: u16, start: usize) -> Vec<S
 
     let mut results = Vec::new();
 
+    // SAFETY: Gated by `is_x86_feature_detected!("sse2")`. Each `chunk` from
+    // `chunks_exact(16)` provides 16 readable bytes for the unaligned
+    // `_mm_loadu_si128` load.
     unsafe {
         if is_x86_feature_detected!("sse2") {
             let search_vec = _mm_set1_epi16(search_value as i16);
@@ -1736,6 +1768,10 @@ fn search_f32_simd(memory_data: &[u8], target: f32, epsilon: f32, start: usize) 
     }
 
     unsafe {
+        // SAFETY: Each branch below is gated by `is_x86_feature_detected!`
+        // for avx2 or sse. The unaligned float loads (`_mm256_loadu_ps` /
+        // `_mm_loadu_ps`) read N readable bytes from `chunk`, which
+        // `chunks_exact(N)` guarantees.
         // Try AVX2 first (processes 8 floats at a time)
         if is_x86_feature_detected!("avx2") {
             let target_vec = _mm256_set1_ps(target);
@@ -1859,6 +1895,10 @@ fn search_f64_simd(memory_data: &[u8], target: f64, epsilon: f64, start: usize) 
     }
 
     unsafe {
+        // SAFETY: Each branch below is gated by `is_x86_feature_detected!`
+        // for avx2 or sse2. The unaligned double loads
+        // (`_mm256_loadu_pd` / `_mm_loadu_pd`) read N readable bytes from
+        // `chunk`, which `chunks_exact(N)` guarantees.
         // Try AVX2 first (processes 4 doubles at a time)
         if is_x86_feature_detected!("avx2") {
             let target_vec = _mm256_set1_pd(target);
