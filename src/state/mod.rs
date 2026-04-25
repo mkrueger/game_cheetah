@@ -28,7 +28,7 @@ use memory_reader::fast_read_memory;
 use simd::{get_epsilon_f32, get_epsilon_f64, search_aligned_integers};
 #[cfg(target_arch = "x86_64")]
 use simd::{search_f32_simd, search_f64_simd};
-use string_search::search_string_in_memory;
+pub use string_search::search_string_in_memory;
 pub use unknown::compare_values;
 
 #[derive(Debug, Clone)]

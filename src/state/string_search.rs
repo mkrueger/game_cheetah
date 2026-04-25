@@ -23,7 +23,7 @@ fn encode_utf16_le(s: &str) -> Vec<u8> {
 }
 
 // Replace/implement string search with alignment + boundary checks
-pub(super) fn search_string_in_memory(memory_data: &[u8], search_str: &str, base_addr: usize) -> Vec<SearchResult> {
+pub fn search_string_in_memory(memory_data: &[u8], search_str: &str, base_addr: usize) -> Vec<SearchResult> {
     let mut results = Vec::new();
 
     // Minimum length to reduce random matches

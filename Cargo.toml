@@ -38,6 +38,13 @@ memchr = "2.7.6"
 crossbeam = "0.8.4"
 crossbeam-channel = "0.5.15"
 
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
+
+[[bench]]
+name = "search_scan"
+harness = false
+
 # Linux: libc for process_vm_readv
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
