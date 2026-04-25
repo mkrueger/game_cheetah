@@ -106,12 +106,15 @@ impl App {
                     |_| Message::TickProcess,
                 )
             }
-            Message::TickProcess => icy_ui::Task::perform(
-                async {
-                    sleep(Duration::from_millis(2000));
-                },
-                |_| Message::TickProcess,
-            ),
+            Message::TickProcess => {
+                self.state.detach_if_gone();
+                icy_ui::Task::perform(
+                    async {
+                        sleep(Duration::from_millis(2000));
+                    },
+                    |_| Message::TickProcess,
+                )
+            }
             Message::NewSearch => {
                 self.state.new_search();
                 Task::none()
@@ -301,22 +304,23 @@ impl App {
                             if let Some(byte_len) = result.search_type.fixed_byte_length()
                                 && let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle()
                                 && let Ok(buf) = copy_address(result.addr, byte_len, &handle)
+                                && let Err(e) = self.state.freeze_sender.send(FreezeMessage {
+                                    msg: MessageCommand::Freeze,
+                                    addr: result.addr,
+                                    value: SearchValue(result.search_type, buf),
+                                })
                             {
-                                self.state
-                                    .freeze_sender
-                                    .send(FreezeMessage {
-                                        msg: MessageCommand::Freeze,
-                                        addr: result.addr,
-                                        value: SearchValue(result.search_type, buf),
-                                    })
-                                    .unwrap_or_default();
+                                self.state.error_text = format!("Freeze channel closed: {e}");
                             }
                         } else {
                             search_context.freezed_addresses.remove(&(result.addr));
-                            self.state
+                            if let Err(e) = self
+                                .state
                                 .freeze_sender
                                 .send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
-                                .unwrap_or_default();
+                            {
+                                self.state.error_text = format!("Freeze channel closed: {e}");
+                            }
                         }
                     }
                 }
@@ -335,11 +339,13 @@ impl App {
                     if all_frozen {
                         // Unfreeze all
                         for result in results.iter() {
-                            if search_context.freezed_addresses.remove(&result.addr) {
-                                self.state
+                            if search_context.freezed_addresses.remove(&result.addr)
+                                && let Err(e) = self
+                                    .state
                                     .freeze_sender
                                     .send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
-                                    .unwrap_or_default();
+                            {
+                                self.state.error_text = format!("Freeze channel closed: {e}");
                             }
                         }
                     } else {
@@ -351,15 +357,14 @@ impl App {
                                     let Some(byte_len) = result.search_type.fixed_byte_length() else {
                                         continue;
                                     };
-                                    if let Ok(buf) = copy_address(result.addr, byte_len, &handle) {
-                                        self.state
-                                            .freeze_sender
-                                            .send(FreezeMessage {
-                                                msg: MessageCommand::Freeze,
-                                                addr: result.addr,
-                                                value: SearchValue(result.search_type, buf),
-                                            })
-                                            .unwrap_or_default();
+                                    if let Ok(buf) = copy_address(result.addr, byte_len, &handle)
+                                        && let Err(e) = self.state.freeze_sender.send(FreezeMessage {
+                                            msg: MessageCommand::Freeze,
+                                            addr: result.addr,
+                                            value: SearchValue(result.search_type, buf),
+                                        })
+                                    {
+                                        self.state.error_text = format!("Freeze channel closed: {e}");
                                     }
                                 }
                             }
@@ -378,10 +383,13 @@ impl App {
                         let result = &results[index];
                         if search_context.freezed_addresses.contains(&result.addr) {
                             search_context.freezed_addresses.remove(&result.addr);
-                            self.state
+                            if let Err(e) = self
+                                .state
                                 .freeze_sender
                                 .send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
-                                .unwrap_or_default();
+                            {
+                                self.state.error_text = format!("Freeze channel closed: {e}");
+                            }
                         }
 
                         // Save current results to old_results for undo functionality

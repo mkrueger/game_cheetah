@@ -57,6 +57,11 @@ pub struct ProcessInfo {
 pub struct GameCheetahEngine {
     pub pid: process_memory::Pid,
     pub process_name: String,
+    /// sysinfo `Process::start_time()` of the attached process, captured at
+    /// attach. Used to detect PID recycling — if a process exits and the OS
+    /// hands the same PID to a different process, the start time will differ
+    /// and we treat it as detached instead of writing into the wrong process.
+    pub attached_start_time: u64,
     pub show_process_window: bool,
     pub show_about_dialog: bool,
 
@@ -162,6 +167,7 @@ impl Default for GameCheetahEngine {
         Self {
             pid: 0,
             process_name: "".to_owned(),
+            attached_start_time: 0,
             error_text: String::new(),
             show_process_window: false,
             process_filter: "".to_owned(),
@@ -601,9 +607,9 @@ impl GameCheetahEngine {
 
     pub(crate) fn select_process(&mut self, process: &ProcessInfo) {
         self.pid = process.pid;
-        if let Err(e) = self.freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Pid, process.pid as usize)) {
-            self.error_text = format!("Failed to send pid freeze message: {e}");
-        }
+        // Capture the process start time so we can detect PID recycling later.
+        self.attached_start_time = lookup_start_time(process.pid).unwrap_or(0);
+        self.send_freeze(FreezeMessage::from_addr(MessageCommand::Pid, process.pid as usize));
         self.process_name = process.name.clone();
         self.show_process_window = false;
 
@@ -613,6 +619,45 @@ impl GameCheetahEngine {
         match diagnostics::diagnose_attach(process.pid) {
             Ok(()) => self.error_text.clear(),
             Err(msg) => self.error_text = msg,
+        }
+    }
+
+    /// Send a freeze-thread message and surface a `SendError` through
+    /// `error_text`. A failure here means the freeze thread died, which is
+    /// rare but worth telling the user about instead of silently dropping the
+    /// freeze/unfreeze.
+    pub fn send_freeze(&mut self, msg: FreezeMessage) {
+        if let Err(e) = self.freeze_sender.send(msg) {
+            self.error_text = format!("Freeze channel closed: {e}");
+        }
+    }
+
+    /// Drop the current process attachment without changing the UI state.
+    ///
+    /// Sends `Pid(0)` to the freeze thread (which clears its address table
+    /// and stops writing), clears any per-search freeze sets so stale
+    /// addresses cannot be re-frozen on the next attach, and resets the
+    /// engine's pid / start-time bookkeeping. Keeps `process_name` so the
+    /// "Process exited" panel still has a name to show.
+    pub fn detach(&mut self) {
+        self.send_freeze(FreezeMessage::from_addr(MessageCommand::Pid, 0));
+        for search in &mut self.searches {
+            search.freezed_addresses.clear();
+        }
+        self.pid = 0;
+        self.attached_start_time = 0;
+    }
+
+    /// If the attached process is gone (or its PID was recycled to a
+    /// different process), detach and surface a one-line message.
+    pub fn detach_if_gone(&mut self) {
+        if self.pid == 0 {
+            return;
+        }
+        if !self.is_process_running() {
+            let name = self.process_name.clone();
+            self.detach();
+            self.error_text = format!("Process '{name}' exited; freezes cleared.");
         }
     }
 
@@ -1088,7 +1133,16 @@ impl GameCheetahEngine {
                 system.refresh_processes(ProcessesToUpdate::All, true);
                 *last_refresh = now;
             }
-            system.process(Pid::from(self.pid as usize)).is_some()
+            match system.process(Pid::from(self.pid as usize)) {
+                Some(process) => {
+                    // Reject PID recycling: if a different process now owns
+                    // the same PID its start time will not match what we
+                    // captured at attach. A start_time of 0 means we never
+                    // captured one (platform fallback) — accept the PID then.
+                    self.attached_start_time == 0 || process.start_time() == self.attached_start_time
+                }
+                None => false,
+            }
         } else {
             #[cfg(target_os = "linux")]
             {
@@ -1103,6 +1157,15 @@ impl GameCheetahEngine {
             }
         }
     }
+}
+
+/// Look up `Process::start_time()` for `pid` via the shared sysinfo cache.
+fn lookup_start_time(pid: process_memory::Pid) -> Option<u64> {
+    let mut guard = SYSTEM.lock().ok()?;
+    let (system, last_refresh) = &mut *guard;
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    *last_refresh = Instant::now();
+    system.process(Pid::from(pid as usize)).map(|p| p.start_time())
 }
 
 static SYSTEM: Lazy<Arc<Mutex<(System, Instant)>>> = Lazy::new(|| Arc::new(Mutex::new((System::new(), Instant::now() - Duration::from_secs(1)))));
