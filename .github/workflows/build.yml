@@ -1,15 +1,37 @@
 name: Build
 on:
-  workflow_run:
-    workflows: ["Run Tests"]
-    branches: [main]
-    types:
-      - completed
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
 env:
   APP_NAME: game-cheetah
   CARGO_TERM_COLOR: always
 jobs:
+  run_checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formatting
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+      - run: rustup component add clippy
+      - name: Check clippy
+        uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all-features
+      - name: Run tests
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --all-features
+
   build_linux:
+    needs: run_checks
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -64,6 +86,8 @@ jobs:
             ${{ steps.build-appimage.outputs.app_img }}
 
   build_windows:
+    needs: run_checks
+    if: github.event_name == 'push'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -101,6 +125,8 @@ jobs:
             file_id.diz
 
   build_mac:
+    needs: run_checks
+    if: github.event_name == 'push'
     runs-on: macos-latest  # Removed matrix strategy
     steps:
       - uses: actions/checkout@v4
