@@ -823,26 +823,30 @@ impl MemoryEditor {
                     .into()
             };
             let make_pair = |kind: InspectorValueKind, lbl: &'static str, val: String| -> Element<'_, Message> {
-                let input_value = self
-                    .inspector_edit
-                    .as_ref()
-                    .filter(|(edit_kind, _)| *edit_kind == kind)
-                    .map(|(_, text)| text.clone())
-                    .unwrap_or(val);
+                let edited = self.inspector_edit.as_ref().filter(|(edit_kind, _)| *edit_kind == kind);
+                let input_value = edited.map(|(_, t)| t.clone()).unwrap_or(val);
+                let parse_error = edited.is_some_and(|(_, t)| Self::inspector_bytes(kind, t).is_err());
 
-                row![
-                    container(label(lbl)).width(Length::Fixed(44.0)),
-                    text_input("—", &input_value)
-                        .on_input(move |value| Message::MemoryEditorInspectorValueChanged(kind, value))
-                        .on_submit(Message::MemoryEditorInspectorValueSubmit(kind))
-                        .font(icy_ui::Font::MONOSPACE)
-                        .size(13)
-                        .padding([2, 6])
-                        .width(Length::Fixed(170.0)),
-                ]
-                .spacing(8)
-                .align_y(alignment::Alignment::Center)
-                .into()
+                let mut input = text_input("—", &input_value)
+                    .on_input(move |value| Message::MemoryEditorInspectorValueChanged(kind, value))
+                    .on_submit(Message::MemoryEditorInspectorValueSubmit(kind))
+                    .font(icy_ui::Font::MONOSPACE)
+                    .size(13)
+                    .padding([2, 6])
+                    .width(Length::Fixed(170.0));
+                if parse_error {
+                    input = input.style(|theme: &icy_ui::Theme, status| {
+                        let mut style = icy_ui::widget::text_input::default(theme, status);
+                        style.value = theme.destructive.base;
+                        style.border.color = theme.destructive.base;
+                        style
+                    });
+                }
+
+                row![container(label(lbl)).width(Length::Fixed(44.0)), input]
+                    .spacing(8)
+                    .align_y(alignment::Alignment::Center)
+                    .into()
             };
 
             let unsigned_col = column![
