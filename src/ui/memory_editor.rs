@@ -18,23 +18,6 @@ fn scroll_id() -> Id {
     Id::new(SCROLL_ID)
 }
 
-fn format_size(bytes: usize) -> String {
-    const KIB: f64 = 1024.0;
-    const MIB: f64 = KIB * 1024.0;
-    const GIB: f64 = MIB * 1024.0;
-
-    let bytes_f = bytes as f64;
-    if bytes_f >= GIB {
-        format!("{:.1} GiB", bytes_f / GIB)
-    } else if bytes_f >= MIB {
-        format!("{:.1} MiB", bytes_f / MIB)
-    } else if bytes_f >= KIB {
-        format!("{:.1} KiB", bytes_f / KIB)
-    } else {
-        format!("{bytes} B")
-    }
-}
-
 fn format_relative_offset(origin: usize, address: usize) -> String {
     let delta = address as i128 - origin as i128;
     if delta < 0 { format!("-0x{:X}", -delta) } else { format!("+0x{delta:X}") }
@@ -81,15 +64,6 @@ impl MemoryRegion {
 
     fn row_address(&self, row: usize) -> usize {
         self.start.saturating_add((row - self.row_start) * BYTES_PER_ROW)
-    }
-
-    fn permissions(&self) -> String {
-        format!(
-            "{}{}{}",
-            if self.readable { 'r' } else { '-' },
-            if self.writable { 'w' } else { '-' },
-            if self.executable { 'x' } else { '-' },
-        )
     }
 }
 
@@ -657,26 +631,41 @@ impl MemoryEditor {
             .on_scroll(Message::MemoryEditorScrolled);
 
         // ---- Status strip -----------------------------------------------------
+        // One slim bar showing the things that change as the cursor moves:
+        //   - the absolute address under the cursor,
+        //   - the signed offset from the original search hit (only when the
+        //     editor was opened on a hit and the cursor has moved away),
+        //   - the enclosing region (name, range, access).
         let cursor_address = self.cursor_address();
         let cursor_region = self.region_for_row(cursor_row);
         let cursor_address_text = cursor_address.map_or_else(|| "—".to_string(), |address| format!("0x{address:016X}"));
-        let focus_offset_text = cursor_address.map_or_else(|| "—".to_string(), |address| format_relative_offset(self.editor_initial_address, address));
-        let region_text = cursor_region.map_or_else(|| "—".to_string(), |region| region.name.clone());
-        let region_range_text = cursor_region.map_or_else(|| "—".to_string(), |region| format!("0x{:016X}–0x{:016X}", region.start, region.end()));
-        let permissions_text = cursor_region.map_or_else(|| "---".to_string(), MemoryRegion::permissions);
-        let read_write_text = cursor_region.map_or_else(
+        let access_text = cursor_region.map_or_else(
             || "unmapped".to_string(),
-            |region| match (region.readable, region.writable) {
-                (true, true) => "read/write".to_string(),
-                (true, false) => "read-only".to_string(),
-                (false, true) => "write-only".to_string(),
-                (false, false) => "no access".to_string(),
+            |region| match (region.readable, region.writable, region.executable) {
+                (true, true, true) => "read / write / execute".to_string(),
+                (true, true, false) => "read / write".to_string(),
+                (true, false, true) => "read / execute".to_string(),
+                (true, false, false) => "read-only".to_string(),
+                (false, true, _) => "write-only".to_string(),
+                (false, false, true) => "execute-only".to_string(),
+                (false, false, false) => "no access".to_string(),
             },
         );
-        let mapped_bytes = self.regions.iter().map(|region| region.size).sum::<usize>();
-        let mapped_text = format!("{} regions / {}", self.regions.len(), format_size(mapped_bytes));
+        let region_summary_text = cursor_region.map_or_else(
+            || "no mapped region".to_string(),
+            |region| {
+                let name = if region.name.is_empty() { "<unnamed>" } else { region.name.as_str() };
+                format!("{name}  0x{:X}–0x{:X}  ({})", region.start, region.end(), access_text)
+            },
+        );
+        let show_offset = cursor_address.is_some_and(|address| address != self.editor_initial_address) && self.editor_initial_address != 0;
+        let offset_text = if show_offset {
+            cursor_address.map(|address| format_relative_offset(self.editor_initial_address, address))
+        } else {
+            None
+        };
 
-        let status_label = |s: &'static str| -> Element<'_, Message> {
+        let status_label = |s: String| -> Element<'_, Message> {
             text(s)
                 .size(11)
                 .font(icy_ui::Font::MONOSPACE)
@@ -694,47 +683,37 @@ impl MemoryEditor {
                 })
                 .into()
         };
-        let status_item = |label: &'static str, value: String, width: f32| -> Element<'_, Message> {
-            container(row![status_label(label), status_value(value)].spacing(6).align_y(alignment::Alignment::Center))
-                .width(Length::Fixed(width))
-                .padding([4, 8])
-                .style(|theme: &icy_ui::Theme| container::Style {
-                    background: Some(theme.secondary.on.scale_alpha(0.04).into()),
-                    border: icy_ui::Border {
-                        color: theme.secondary.divider,
-                        width: 1.0,
-                        radius: Radius::new(4.0),
-                    },
-                    ..Default::default()
-                })
-                .into()
-        };
 
-        let status_strip = container(
-            row![
-                status_item("addr", cursor_address_text.clone(), 230.0),
-                status_item("hit", focus_offset_text, 105.0),
-                status_item("sel", "1 byte".to_string(), 95.0),
-                status_item("perm", permissions_text.clone(), 85.0),
-                status_item("access", read_write_text, 120.0),
-                status_item("mapped", mapped_text, 185.0),
-                status_item("region", region_text, 260.0),
-            ]
-            .spacing(8)
-            .align_y(alignment::Alignment::Center),
-        )
-        .width(Length::Fill)
-        .padding([8, 12])
-        .style(|theme: &icy_ui::Theme| container::Style {
-            background: Some(theme.secondary.base.into()),
-            text_color: Some(theme.secondary.on),
-            border: icy_ui::Border {
-                color: theme.primary.divider,
-                width: 1.0,
-                radius: Radius::new(0.0),
-            },
-            ..Default::default()
-        });
+        let mut status_items: Vec<Element<'_, Message>> = Vec::new();
+        status_items.push(
+            row![status_label("Address".to_string()), status_value(cursor_address_text)]
+                .spacing(6)
+                .align_y(alignment::Alignment::Center)
+                .into(),
+        );
+        if let Some(offset) = offset_text {
+            status_items.push(
+                row![status_label("from search hit".to_string()), status_value(offset)]
+                    .spacing(6)
+                    .align_y(alignment::Alignment::Center)
+                    .into(),
+            );
+        }
+        status_items.push(
+            row![status_label("Region".to_string()), status_value(region_summary_text)]
+                .spacing(6)
+                .align_y(alignment::Alignment::Center)
+                .into(),
+        );
+
+        let status_strip = container(row(status_items).spacing(24).align_y(alignment::Alignment::Center))
+            .width(Length::Fill)
+            .padding([6, 12])
+            .style(|theme: &icy_ui::Theme| container::Style {
+                background: Some(theme.secondary.base.into()),
+                text_color: Some(theme.secondary.on),
+                ..Default::default()
+            });
 
         // ---- Info area --------------------------------------------------------
         let info_area = {
@@ -854,29 +833,6 @@ impl MemoryEditor {
                 .into()
             };
 
-            let header_line = row![
-                text("Cursor")
-                    .size(12)
-                    .font(icy_ui::Font::MONOSPACE)
-                    .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                        color: Some(theme.secondary.on.scale_alpha(0.6)),
-                    }),
-                text(cursor_address_text)
-                    .size(14)
-                    .font(icy_ui::Font::MONOSPACE)
-                    .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                        color: Some(theme.accent.base),
-                    }),
-                text(format!("{}  {}", region_range_text, permissions_text))
-                    .size(12)
-                    .font(icy_ui::Font::MONOSPACE)
-                    .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                        color: Some(theme.secondary.on.scale_alpha(0.55)),
-                    }),
-            ]
-            .spacing(10)
-            .align_y(alignment::Alignment::Center);
-
             let unsigned_col = column![
                 make_pair(InspectorValueKind::U8, "u8", byte_str),
                 make_pair(InspectorValueKind::U16, "u16", u16_str),
@@ -897,22 +853,18 @@ impl MemoryEditor {
             ]
             .spacing(4);
 
-            container(
-                column![header_line, row![unsigned_col, signed_col, float_col,].spacing(24),]
-                    .spacing(10)
-                    .padding(12),
-            )
-            .width(Length::Fill)
-            .style(|theme: &icy_ui::Theme| container::Style {
-                background: Some(theme.secondary.base.into()),
-                text_color: Some(theme.secondary.on),
-                border: icy_ui::Border {
-                    color: theme.primary.divider,
-                    width: 1.0,
-                    radius: Radius::new(6.0),
-                },
-                ..Default::default()
-            })
+            container(column![row![unsigned_col, signed_col, float_col,].spacing(24)].spacing(10).padding(12))
+                .width(Length::Fill)
+                .style(|theme: &icy_ui::Theme| container::Style {
+                    background: Some(theme.secondary.base.into()),
+                    text_color: Some(theme.secondary.on),
+                    border: icy_ui::Border {
+                        color: theme.primary.divider,
+                        width: 1.0,
+                        radius: Radius::new(6.0),
+                    },
+                    ..Default::default()
+                })
         };
 
         // ---- Toolbar ----------------------------------------------------------
