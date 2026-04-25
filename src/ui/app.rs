@@ -302,7 +302,7 @@ impl App {
             }
             Message::ResultEditingChanged(index, text) => {
                 self.editing_result = Some((index, text));
-                icy_ui::widget::operation::focus(icy_ui::widget::Id::from(format!("result-value-{index}")))
+                Task::none()
             }
             Message::ResultEditingCommit(index) => {
                 if let Some((i, text)) = self.editing_result.take()

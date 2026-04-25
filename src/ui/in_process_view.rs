@@ -353,9 +353,9 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                             .style(|theme: &icy_ui::Theme, status| {
                                                 let mut style = icy_ui::widget::text_input::default(theme, status);
                                                 if !matches!(status, icy_ui::widget::text_input::Status::Disabled) {
-                                                    style.background = theme.secondary.base.into();
-                                                    style.value = theme.secondary.on;
-                                                    style.placeholder = theme.secondary.on.scale_alpha(0.6);
+                                                    style.background = theme.background.base.into();
+                                                    style.value = theme.accent.base;
+                                                    style.placeholder = theme.background.on.scale_alpha(0.5);
                                                 }
                                                 style
                                             });
