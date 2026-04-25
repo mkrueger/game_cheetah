@@ -318,6 +318,8 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
         for addr in &current_search_context.freezed_addresses {
             addr.hash(&mut hasher);
         }
+        // Bump the cache so live memory re-reads actually surface in the UI.
+        app.refresh_counter.hash(&mut hasher);
         hasher.finish()
     };
 

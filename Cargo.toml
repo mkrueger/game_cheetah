@@ -22,7 +22,9 @@ Allows to alter values in computer games or freeze them to certain values.
 """
 
 [dependencies]
-icy_ui = { git = "https://github.com/mkrueger/icy_ui", branch = "master", features = ["smol"] }
+icy_ui = { git = "https://github.com/mkrueger/icy_ui", branch = "master", features = [
+    "smol",
+] }
 process-memory = "0.5.0"
 sysinfo = "0.37.2"
 threadpool = "1.8.1"

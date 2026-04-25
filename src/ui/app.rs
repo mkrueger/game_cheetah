@@ -42,6 +42,11 @@ pub struct App {
     /// look like the field is losing focus mid-edit.
     pub editing_result: Option<(usize, String)>,
 
+    /// Counter bumped on every periodic Tick while the in-process view is
+    /// shown. Folded into the result table's cache key so the virtualized row
+    /// list rebuilds even when only the live-read values changed.
+    pub refresh_counter: u64,
+
     memory_editor: super::memory_editor::MemoryEditor,
 
     pub process_sort_column: ProcessSortColumn,
@@ -221,6 +226,9 @@ impl App {
                 Task::done(Message::Tick)
             }
             Message::Tick => {
+                if matches!(self.app_state, AppState::InProcess) {
+                    self.refresh_counter = self.refresh_counter.wrapping_add(1);
+                }
                 // If searching, keep scheduling ticks
                 let current_search_context = &mut self.state.searches[self.state.current_search];
 
