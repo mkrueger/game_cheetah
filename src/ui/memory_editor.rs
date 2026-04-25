@@ -11,7 +11,11 @@ pub const BYTES_PER_ROW: usize = 16;
 /// Total navigable rows from the current window base address. The view is
 /// virtualized so only the visible rows are laid out and read from process
 /// memory; the remaining rows are just an empty scroll range.
-pub const WINDOW_ROWS: usize = 65_536; // 1 MB navigable from the base address
+///
+/// 2^20 rows × 16 B = 16 MB navigable. The focus address is centered in this
+/// window so the user can freely scroll both up (to lower addresses) and down
+/// from the search hit.
+pub const WINDOW_ROWS: usize = 1 << 20;
 pub const ROW_HEIGHT: f32 = 22.0;
 pub const PAGE_ROWS: usize = 16;
 
@@ -21,17 +25,12 @@ fn scroll_id() -> Id {
     Id::new(SCROLL_ID)
 }
 
-/// Snaps the editor scroll view back to the top of the window.
-pub fn snap_to_top<T>() -> Task<T>
-where
-    T: 'static,
-{
-    operation::snap_to(scroll_id(), operation::RelativeOffset::START)
-}
-
 #[derive(Default)]
 pub struct MemoryEditor {
     pub address_text: String,
+    /// Address mapped to row 0 of the virtualized window. Centered around the
+    /// focus address so the user can scroll both up and down.
+    base_address: usize,
     cursor_row: usize,
     cursor_col: usize,
     cursor_nibble: usize, // 0 = high nibble, 1 = low nibble
@@ -50,8 +49,35 @@ impl MemoryEditor {
         self.cursor_row
     }
 
+    pub fn base_address(&self) -> usize {
+        self.base_address
+    }
+
     pub fn set_viewport(&mut self, viewport: Viewport) {
         self.viewport = Some(viewport);
+    }
+
+    /// Centers the navigable window on the given focus address and places the
+    /// cursor on it.
+    pub fn focus_on(&mut self, focus_addr: usize) {
+        let half = (WINDOW_ROWS / 2) * BYTES_PER_ROW;
+        self.base_address = focus_addr.saturating_sub(half);
+        let row = (focus_addr - self.base_address) / BYTES_PER_ROW;
+        self.cursor_row = row.min(WINDOW_ROWS - 1);
+        self.cursor_col = 0;
+        self.cursor_nibble = 0;
+        self.viewport = None;
+    }
+
+    /// Animated scroll task that places the cursor row a few lines below the
+    /// top of the viewport. Used right after a jump/open before any viewport
+    /// has been measured.
+    pub fn snap_to_cursor<T>(&self) -> Task<T>
+    where
+        T: 'static,
+    {
+        let target_y = ((self.cursor_row as f32 - 4.0) * ROW_HEIGHT).max(0.0);
+        operation::scroll_to(scroll_id(), operation::AbsoluteOffset { x: None, y: Some(target_y) })
     }
 
     /// Returns an animated scroll task that brings the cursor row into view if
@@ -86,7 +112,7 @@ impl MemoryEditor {
     pub fn show_memory_editor<'a>(&'a self, app: &'a App) -> Element<'a, Message> {
         use icy_ui::widget::{button, column, container, mouse_area, row, scroll_area, text};
 
-        let address = app.state.edit_address;
+        let address = self.base_address;
         let pid = app.state.pid;
         let highlight_start = self.editor_initial_address;
         let highlight_end = highlight_start + self.editor_initial_size;
@@ -451,10 +477,7 @@ impl MemoryEditor {
             search_type.fixed_byte_length().unwrap_or(1)
         };
 
-        self.cursor_row = 0;
-        self.cursor_col = 0;
-        self.cursor_nibble = 0;
-        self.viewport = None;
+        self.focus_on(addr);
     }
 
     /// Moves the cursor within the virtualized window. Returns `true` when the
@@ -490,9 +513,9 @@ impl MemoryEditor {
         self.cursor_nibble = 0;
     }
 
-    pub fn edit_hex(&mut self, edit_address: usize, pid: process_memory::Pid, hex_digit: u8) -> Result<(), String> {
+    pub fn edit_hex(&mut self, pid: process_memory::Pid, hex_digit: u8) -> Result<(), String> {
         let offset = self.cursor_row * BYTES_PER_ROW + self.cursor_col;
-        let address = edit_address.saturating_add(offset);
+        let address = self.base_address.saturating_add(offset);
         let handle = pid.try_into_process_handle().map_err(|e| format!("Failed to attach to process: {e}"))?;
         let buf = copy_address(address, 1, &handle).map_err(|e| format!("Failed to read 0x{address:X}: {e}"))?;
         let current_byte = buf[0];

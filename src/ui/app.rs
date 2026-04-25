@@ -402,7 +402,6 @@ impl App {
 
                     if index < results.len() {
                         let result = &results[index];
-                        self.state.edit_address = result.addr;
                         self.memory_editor.initialize(result.addr, result.search_type);
                         self.app_state = AppState::MemoryEditor;
                     }
@@ -424,10 +423,9 @@ impl App {
                 let stripped = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")).unwrap_or(raw);
                 match u64::from_str_radix(stripped, 16) {
                     Ok(new_address) => {
-                        self.state.edit_address = new_address as usize;
-                        self.memory_editor.reset_cursor();
+                        self.memory_editor.focus_on(new_address as usize);
                         self.state.error_text.clear();
-                        return super::memory_editor::snap_to_top();
+                        return self.memory_editor.snap_to_cursor();
                     }
                     Err(err) => {
                         self.state.error_text = format!("Invalid address '{raw}': {err}");
@@ -442,7 +440,7 @@ impl App {
                     && let Ok(byte_value) = u8::from_str_radix(&value, 16)
                     && let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle()
                 {
-                    let address = self.state.edit_address + offset;
+                    let address = self.memory_editor.base_address() + offset;
                     if let Err(err) = handle.put_address(address, &[byte_value]) {
                         self.state.error_text = format!("Failed to write 0x{address:X}: {err}");
                     }
@@ -485,8 +483,7 @@ impl App {
             Message::MemoryEditorEndEdit => Task::none(),
             Message::MemoryEditorEditHex(hex_digit) => {
                 let cursor_row_before = self.memory_editor.cursor_row();
-                let address_base = self.state.edit_address;
-                if let Err(err) = self.memory_editor.edit_hex(address_base, self.state.pid, hex_digit) {
+                if let Err(err) = self.memory_editor.edit_hex(self.state.pid, hex_digit) {
                     self.state.error_text = err;
                 }
                 if self.memory_editor.cursor_row() != cursor_row_before {

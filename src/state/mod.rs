@@ -76,8 +76,6 @@ pub struct GameCheetahEngine {
     pub error_text: String,
     pub show_results: bool,
     pub set_focus: bool,
-
-    pub(crate) edit_address: usize,
 }
 
 impl Default for GameCheetahEngine {
@@ -179,7 +177,6 @@ impl Default for GameCheetahEngine {
             show_results: false,
             show_about_dialog: false,
             set_focus: true,
-            edit_address: 0,
         }
     }
 }
