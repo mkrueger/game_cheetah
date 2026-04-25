@@ -550,6 +550,11 @@ impl GameCheetahEngine {
         let results_sender = search_context.results_sender.clone();
         let search_complete: Arc<std::sync::atomic::AtomicBool> = search_context.search_complete.clone();
         let cache_valid = search_context.cache_valid.clone();
+        let guess_value_text = if matches!(search_data.0, SearchType::Guess) {
+            Some(String::from_utf8(search_data.1.clone()).unwrap_or_default())
+        } else {
+            None
+        };
 
         search_complete.store(false, Ordering::SeqCst);
 
@@ -561,8 +566,6 @@ impl GameCheetahEngine {
             }
 
             regions.par_iter().for_each(|(start, size)| {
-                let value_text = String::from_utf8(search_data.1.clone()).unwrap_or_default();
-
                 // Try to read memory using the most efficient method available
                 #[cfg(target_os = "linux")]
                 let memory_result = MEM_READER.with(|reader_cell| {
@@ -603,7 +606,7 @@ impl GameCheetahEngine {
                                 SearchType::Float,
                                 SearchType::Double,
                             ] {
-                                match search_type.from_string(&value_text) {
+                                match search_type.from_string(guess_value_text.as_deref().unwrap_or_default()) {
                                     Ok(typed_value) => {
                                         let typed_results: Vec<SearchResult> = search_memory(&memory, &typed_value.1, search_type, *start);
                                         all_results.extend(typed_results);
