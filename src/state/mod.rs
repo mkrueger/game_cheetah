@@ -659,6 +659,7 @@ impl GameCheetahEngine {
         let search_complete = search_context.search_complete.clone();
         let cache_valid = search_context.cache_valid.clone();
         let memory_snapshot = search_context.memory_snapshot.clone();
+        let previous_unknown_values = search_context.previous_unknown_values.clone();
 
         // Progress baseline
         search_context.total_bytes = if old_results.is_empty() {
@@ -713,7 +714,17 @@ impl GameCheetahEngine {
                     };
 
                     if let Ok(new_mem) = copy_address(*base, len, &handle) {
-                        let mut local_out = Vec::with_capacity(BATCH);
+                        let mut local_out: Vec<SearchResult> = Vec::with_capacity(BATCH);
+                        let mut local_prev: Vec<((usize, SearchType), [u8; 8])> = Vec::with_capacity(BATCH);
+
+                        let record = |addr: usize,
+                                      ty: SearchType,
+                                      newb: &[u8],
+                                      local_out: &mut Vec<SearchResult>,
+                                      local_prev: &mut Vec<((usize, SearchType), [u8; 8])>| {
+                            local_out.push(SearchResult::new(addr, ty));
+                            local_prev.push(((addr, ty), pack_bytes(newb)));
+                        };
 
                         // 4-byte aligned
                         for i in (0..=(len.saturating_sub(4))).step_by(4) {
@@ -724,20 +735,20 @@ impl GameCheetahEngine {
                             if matches!(comparison, UnknownComparison::Unchanged | UnknownComparison::Changed) && oldb == newb {
                                 if matches!(comparison, UnknownComparison::Unchanged) {
                                     // For floats we still accept exact-equal as unchanged without decoding
-                                    local_out.push(SearchResult::new_with_bytes(*base + i, SearchType::Int, newb));
-                                    local_out.push(SearchResult::new_with_bytes(*base + i, SearchType::Float, newb));
+                                    record(*base + i, SearchType::Int, newb, &mut local_out, &mut local_prev);
+                                    record(*base + i, SearchType::Float, newb, &mut local_out, &mut local_prev);
                                 }
                             } else {
                                 if compare_values(oldb, newb, SearchType::Int, comparison) {
-                                    local_out.push(SearchResult::new_with_bytes(*base + i, SearchType::Int, newb));
+                                    record(*base + i, SearchType::Int, newb, &mut local_out, &mut local_prev);
                                 }
                                 if compare_values(oldb, newb, SearchType::Float, comparison) {
-                                    local_out.push(SearchResult::new_with_bytes(*base + i, SearchType::Float, newb));
+                                    record(*base + i, SearchType::Float, newb, &mut local_out, &mut local_prev);
                                 }
                             }
 
                             if local_out.len() >= BATCH {
-                                let _ = results_sender.send(std::mem::take(&mut local_out));
+                                let _ = local_tx.send(std::mem::take(&mut local_out));
                             }
                         }
 
@@ -749,19 +760,28 @@ impl GameCheetahEngine {
                             if matches!(comparison, UnknownComparison::Unchanged | UnknownComparison::Changed) && oldb == newb {
                                 if matches!(comparison, UnknownComparison::Unchanged) {
                                     // Exact-equal treat as unchanged, skip decoding
-                                    local_out.push(SearchResult::new_with_bytes(*base + i, SearchType::Double, newb));
+                                    record(*base + i, SearchType::Double, newb, &mut local_out, &mut local_prev);
                                 }
                             } else if compare_values(oldb, newb, SearchType::Double, comparison) {
-                                local_out.push(SearchResult::new_with_bytes(*base + i, SearchType::Double, newb));
+                                record(*base + i, SearchType::Double, newb, &mut local_out, &mut local_prev);
                             }
 
                             if local_out.len() >= BATCH {
-                                let _ = results_sender.send(std::mem::take(&mut local_out));
+                                let _ = local_tx.send(std::mem::take(&mut local_out));
                             }
                         }
 
                         if !local_out.is_empty() {
                             let _ = local_tx.send(local_out);
+                        }
+
+                        if !local_prev.is_empty()
+                            && let Ok(mut map) = previous_unknown_values.write()
+                        {
+                            map.reserve(local_prev.len());
+                            for (k, v) in local_prev {
+                                map.insert(k, v);
+                            }
                         }
                     }
 
@@ -780,17 +800,19 @@ impl GameCheetahEngine {
                 // Subsequent passes: optimize with better data structures
                 const PAGE: usize = 4096;
 
+                // Snapshot the previous-value table once so workers can read
+                // without taking a read-lock per address.
+                let prev_snapshot: HashMap<(usize, SearchType), [u8; 8]> = match previous_unknown_values.read() {
+                    Ok(map) => map.clone(),
+                    Err(_) => HashMap::new(),
+                };
+
                 // Group by address for single-read optimization
                 let mut addr_to_types: std::collections::BTreeMap<usize, Vec<(SearchType, [u8; 8])>> = std::collections::BTreeMap::new();
 
                 for r in old_results.iter() {
-                    if let Some(oldb) = r.stored_bytes() {
-                        let len = oldb.len();
-                        if len <= 8 && oldb.len() >= len {
-                            let mut buf = [0u8; 8];
-                            buf[..len].copy_from_slice(&oldb[..len]);
-                            addr_to_types.entry(r.addr).or_default().push((r.search_type, buf));
-                        }
+                    if let Some(old8) = prev_snapshot.get(&(r.addr, r.search_type)) {
+                        addr_to_types.entry(r.addr).or_default().push((r.search_type, *old8));
                     }
                 }
 
@@ -801,6 +823,11 @@ impl GameCheetahEngine {
                 }
 
                 let per_page_vec: Vec<(usize, Vec<usize>)> = per_page.into_iter().collect();
+
+                // Survivors and their fresh bytes are gathered into this map and
+                // become the previous-value table for the next pass.
+                type PrevMap = HashMap<(usize, SearchType), [u8; 8]>;
+                let next_prev: Arc<Mutex<PrevMap>> = Arc::new(Mutex::new(HashMap::with_capacity(old_results.len())));
 
                 per_page_vec.par_iter().for_each(|(_page_base, addrs)| {
                     // Sort addresses within page for better cache locality
@@ -835,7 +862,8 @@ impl GameCheetahEngine {
                     };
 
                     if let Ok(buf) = copy_address(min_addr, span_len, &handle) {
-                        let mut local_out = Vec::with_capacity(BATCH);
+                        let mut local_out: Vec<SearchResult> = Vec::with_capacity(BATCH);
+                        let mut local_prev: Vec<((usize, SearchType), [u8; 8])> = Vec::with_capacity(BATCH);
 
                         for addr in sorted_addrs {
                             if let Some(types) = addr_to_types.get(&addr) {
@@ -859,19 +887,22 @@ impl GameCheetahEngine {
                                     if matches!(comparison, UnknownComparison::Unchanged | UnknownComparison::Changed) {
                                         if oldb == newb {
                                             if matches!(comparison, UnknownComparison::Unchanged) {
-                                                local_out.push(SearchResult::new_with_bytes(addr, *ty, newb));
+                                                local_out.push(SearchResult::new(addr, *ty));
+                                                local_prev.push(((addr, *ty), pack_bytes(newb)));
                                             }
                                             continue; // equality handled, skip decoding
                                         } else if matches!(comparison, UnknownComparison::Changed) && !matches!(ty, SearchType::Float | SearchType::Double) {
                                             // For integers, byte-inequality is sufficient for "Changed"
-                                            local_out.push(SearchResult::new_with_bytes(addr, *ty, newb));
+                                            local_out.push(SearchResult::new(addr, *ty));
+                                            local_prev.push(((addr, *ty), pack_bytes(newb)));
                                             continue;
                                         }
                                     }
 
                                     // Fallback to typed comparison (needed for floats/doubles or inc/dec)
                                     if compare_values(oldb, newb, *ty, comparison) {
-                                        local_out.push(SearchResult::new_with_bytes(addr, *ty, newb));
+                                        local_out.push(SearchResult::new(addr, *ty));
+                                        local_prev.push(((addr, *ty), pack_bytes(newb)));
                                     }
 
                                     if local_out.len() >= BATCH {
@@ -884,10 +915,26 @@ impl GameCheetahEngine {
                         if !local_out.is_empty() {
                             let _ = results_sender.send(local_out);
                         }
+
+                        if !local_prev.is_empty()
+                            && let Ok(mut map) = next_prev.lock()
+                        {
+                            map.reserve(local_prev.len());
+                            for (k, v) in local_prev {
+                                map.insert(k, v);
+                            }
+                        }
                     }
 
                     current_bytes.fetch_add(sorted_addrs_len, Ordering::Relaxed);
                 });
+
+                // Replace the previous-value table with the survivors of this pass.
+                if let Ok(new_map) = Arc::try_unwrap(next_prev).map(|m| m.into_inner().unwrap_or_default())
+                    && let Ok(mut map) = previous_unknown_values.write()
+                {
+                    *map = new_map;
+                }
             }
 
             cache_valid.store(false, Ordering::Release);
@@ -1052,6 +1099,15 @@ fn skip_memory_region(map: &proc_maps::MapRange) -> bool {
         }
     }
     false
+}
+
+/// Pack up to 8 bytes into a fixed-size buffer suitable for the
+/// unknown-search previous-value table.
+fn pack_bytes(src: &[u8]) -> [u8; 8] {
+    let mut out = [0u8; 8];
+    let n = src.len().min(8);
+    out[..n].copy_from_slice(&src[..n]);
+    out
 }
 
 fn update_results<T>(old_results: &[SearchResult], value_text: &str, handle: &T) -> Vec<SearchResult>

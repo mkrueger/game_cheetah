@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{
         Arc, RwLock,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -13,6 +13,14 @@ const RESULTS_CHANNEL_CAPACITY: usize = 128;
 
 /// Type alias for memory snapshot storage to reduce type complexity
 pub type MemorySnapshot = Arc<RwLock<Vec<(usize, Arc<[u8]>)>>>;
+
+/// Per-(address, type) previous-value table used by unknown-search filtering.
+///
+/// Each entry stores up to 8 bytes that mirror the previous read of memory at
+/// `addr` interpreted as `search_type`. Holding this map in the
+/// [`SearchContext`] keeps the per-hit [`SearchResult`] footprint to two
+/// `usize`-sized fields.
+pub type UnknownPreviousValues = Arc<RwLock<HashMap<(usize, SearchType), [u8; 8]>>>;
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum SearchMode {
@@ -43,6 +51,8 @@ pub struct SearchContext {
 
     // For unknown searches - store memory snapshots
     pub memory_snapshot: MemorySnapshot,
+    /// Previous-value table for unknown-search subsequent passes.
+    pub previous_unknown_values: UnknownPreviousValues,
     pub unknown_comparison: Option<UnknownComparison>,
 }
 
@@ -66,6 +76,7 @@ impl SearchContext {
             cache_valid: Arc::new(AtomicBool::new(false)),
 
             memory_snapshot: Arc::new(RwLock::new(Vec::new())),
+            previous_unknown_values: Arc::new(RwLock::new(HashMap::new())),
             unknown_comparison: None,
         }
     }
@@ -91,10 +102,19 @@ impl SearchContext {
         }
     }
 
+    /// Discard any previous-value bookkeeping accumulated by unknown searches.
+    pub fn clear_previous_unknown_values(&self) {
+        if let Ok(mut map) = self.previous_unknown_values.write() {
+            map.clear();
+            map.shrink_to_fit();
+        }
+    }
+
     pub fn clear_results(&mut self, freeze_sender: &crossbeam_channel::Sender<FreezeMessage>) {
         GameCheetahEngine::remove_freezes_from(freeze_sender, &mut self.freezed_addresses);
         // Clear old results history
         self.old_results.clear();
+        self.clear_previous_unknown_values();
 
         // Create new channel to clear all pending results
         let (tx, rx) = Self::result_channel();

@@ -41,56 +41,22 @@ impl Display for SearchValue {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct StoredBytes {
-    bytes: [u8; 8],
-    len: u8,
-}
-
-impl StoredBytes {
-    pub fn new(search_type: SearchType, bytes: &[u8]) -> Option<Self> {
-        let needed = search_type.fixed_byte_length()?;
-        let len = needed.min(bytes.len()).min(8);
-        if len == 0 {
-            return None;
-        }
-
-        let mut stored = [0u8; 8];
-        stored[..len].copy_from_slice(&bytes[..len]);
-        Some(Self { bytes: stored, len: len as u8 })
-    }
-
-    pub fn as_slice(&self) -> &[u8] {
-        &self.bytes[..usize::from(self.len)]
-    }
-}
-
+/// A single match produced by a search pass.
+///
+/// For most search types `search_type` mirrors [`SearchContext::search_type`],
+/// but `Guess` and `Unknown` searches can yield several typed hits at the same
+/// address, so the type is carried per-result. Previous-value bookkeeping for
+/// the unknown-search filter lives in
+/// [`SearchContext::previous_unknown_values`] rather than in this struct, which
+/// keeps the per-hit footprint to two `usize`-sized fields.
 #[derive(Clone, Copy, Debug)]
 pub struct SearchResult {
     pub addr: usize,
     pub search_type: SearchType,
-    pub stored: Option<StoredBytes>,
 }
 
 impl SearchResult {
     pub fn new(addr: usize, search_type: SearchType) -> Self {
-        Self {
-            addr,
-            search_type,
-            stored: None,
-        }
-    }
-
-    pub fn new_with_bytes(addr: usize, search_type: SearchType, bytes: &[u8]) -> Self {
-        Self {
-            addr,
-            search_type,
-            stored: StoredBytes::new(search_type, bytes),
-        }
-    }
-
-    // Returns a slice to the stored bytes without relying on SearchType length lookups.
-    pub fn stored_bytes(&self) -> Option<&[u8]> {
-        self.stored.as_ref().map(StoredBytes::as_slice)
+        Self { addr, search_type }
     }
 }
