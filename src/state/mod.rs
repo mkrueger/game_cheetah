@@ -17,6 +17,7 @@ use std::{
 };
 use sysinfo::*;
 
+mod diagnostics;
 mod memory_reader;
 mod simd;
 mod string_search;
@@ -605,6 +606,14 @@ impl GameCheetahEngine {
         }
         self.process_name = process.name.clone();
         self.show_process_window = false;
+
+        // Probe read access up front so the user gets a precise error message
+        // (with a platform-specific hint) instead of an empty result list when
+        // the OS denies ptrace / task_for_pid / OpenProcess.
+        match diagnostics::diagnose_attach(process.pid) {
+            Ok(()) => self.error_text.clear(),
+            Err(msg) => self.error_text = msg,
+        }
     }
 
     pub fn take_memory_snapshot(&mut self, search_index: usize) {
