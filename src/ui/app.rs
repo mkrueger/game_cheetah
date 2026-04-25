@@ -36,6 +36,12 @@ pub struct App {
     pub renaming_search_index: Option<usize>,
     pub rename_search_text: String,
 
+    /// In-progress edit of a result row's value field: `(row_index, typed_text)`.
+    /// Buffering keystrokes here keeps the `text_input` from being re-bound to
+    /// the freshly-read memory value on every render, which would otherwise
+    /// look like the field is losing focus mid-edit.
+    pub editing_result: Option<(usize, String)>,
+
     memory_editor: super::memory_editor::MemoryEditor,
 
     pub process_sort_column: ProcessSortColumn,
@@ -166,6 +172,7 @@ impl App {
             Message::SwitchSearch(index) => {
                 if index < self.state.searches.len() {
                     self.state.current_search = index;
+                    self.editing_result = None;
                 }
                 Task::none()
             }
@@ -252,6 +259,7 @@ impl App {
                 if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
                     search_context.clear_results(&self.state.freeze_sender);
                 }
+                self.editing_result = None;
                 Task::none()
             }
             Message::ToggleShowResult => {
@@ -289,6 +297,23 @@ impl App {
                         self.state.error_text = format!("Invalid result index {index}");
                     }
                 }
+                self.editing_result = None;
+                Task::none()
+            }
+            Message::ResultEditingChanged(index, text) => {
+                self.editing_result = Some((index, text));
+                Task::none()
+            }
+            Message::ResultEditingCommit(index) => {
+                if let Some((i, text)) = self.editing_result.take()
+                    && i == index
+                {
+                    return self.update(Message::ResultValueChanged(index, text));
+                }
+                Task::none()
+            }
+            Message::ResultEditingCancel => {
+                self.editing_result = None;
                 Task::none()
             }
             Message::ToggleFreeze(index) => {

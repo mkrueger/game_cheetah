@@ -340,14 +340,20 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                 ]
                             } else {
                                 let is_frozen = current_search_context.freezed_addresses.contains(&result.addr);
+                                let display_text = match &app.editing_result {
+                                    Some((idx, buf)) if *idx == i => buf.clone(),
+                                    _ => value_text.clone(),
+                                };
                                 row![
                                     container(text(format!("0x{:X}", result.addr)).size(14)).width(Length::Fixed(120.0)),
                                     {
-                                        let input = text_input("", &value_text).width(Length::Fixed(120.0));
+                                        let input = text_input("", &display_text).width(Length::Fixed(120.0));
                                         if is_frozen {
                                             input // frozen: no on_input handler = disabled
                                         } else {
-                                            input.on_input(move |v| Message::ResultValueChanged(i, v))
+                                            input
+                                                .on_input(move |v| Message::ResultEditingChanged(i, v))
+                                                .on_submit(Message::ResultEditingCommit(i))
                                         }
                                     },
                                     if show_search_types {

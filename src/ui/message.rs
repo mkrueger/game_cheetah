@@ -28,6 +28,12 @@ pub enum Message {
     ToggleShowResult,
     Undo,
     ResultValueChanged(usize, String),
+    /// Buffered keystroke in a result-row value field. Holding it in state
+    /// instead of writing on every keystroke prevents the input from being
+    /// re-driven from memory mid-edit (which looks like a focus loss).
+    ResultEditingChanged(usize, String),
+    ResultEditingCommit(usize),
+    ResultEditingCancel,
     ToggleFreeze(usize),
     ToggleFreezeAll,
     OpenEditor(usize),
