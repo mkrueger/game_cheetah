@@ -30,10 +30,7 @@ pub fn diagnose_attach(pid: Pid) -> Result<(), String> {
     let probe_region = maps.iter().find(|m| m.is_read() && m.size() > 0);
     let Some(region) = probe_region else {
         // Empty map list is itself a sign the process is gone or restricted.
-        return Err(format!(
-            "PID {pid} reports no readable memory regions.{}",
-            platform_attach_hint()
-        ));
+        return Err(format!("PID {pid} reports no readable memory regions.{}", platform_attach_hint()));
     };
 
     if let Err(e) = copy_address(region.start(), 1, &handle) {

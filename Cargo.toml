@@ -1,6 +1,6 @@
 [package]
 name = "game-cheetah"
-version = "0.5.2"
+version = "0.6.0"
 authors = ["Mike Krüger <mkrueger@posteo.de>"]
 edition = "2024"
 rust-version = "1.88"
@@ -11,7 +11,7 @@ repository = "https://github.com/mkrueger/game_cheetah"
 [package.metadata.bundle]
 name = "GameCheetah"
 identifier = "com.github.game_cheetah"
-icon = [ "build/mac/128x128@2x.png" ]
+icon = ["build/mac/128x128@2x.png"]
 resources = []
 copyright = "Copyright (c) Mike Krüger 2022. All rights reserved."
 short_description = "An in memory trainer for games."
@@ -26,7 +26,10 @@ sysinfo = "0.37.2"
 threadpool = "1.8.1"
 sudo = "0.6.0"
 gabi = "0.2.6"
-i18n-embed = { version = "0.16.0", features = ["fluent-system", "desktop-requester"]} 
+i18n-embed = { version = "0.16.0", features = [
+    "fluent-system",
+    "desktop-requester",
+] }
 i18n-embed-fl = "0.10.0"
 once_cell = "1.21.3"
 rust-embed = "8.9.0"
@@ -41,7 +44,9 @@ wide = "0.7"
 bytemuck = "1"
 
 [dev-dependencies]
-criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
+criterion = { version = "0.5", default-features = false, features = [
+    "html_reports",
+] }
 
 [[bench]]
 name = "search_scan"
@@ -67,7 +72,7 @@ panic = "abort"
 incremental = false
 rpath = false
 overflow-checks = false  # Disable overflow checks in release
-debug = false           # Ensure no debug info
+debug = false            # Ensure no debug info
 debug-assertions = false # Disable debug assertions
 
 [profile.release.package."*"]
@@ -84,12 +89,28 @@ opt-level = 3
 [patch.crates-io]
 
 [package.metadata.deb]
-section="Utility"
+section = "Utility"
 copyright = "Copyright (c) Mike Krüger 2022-25. All rights reserved."
-license-file="build/license.rtf"
+license-file = "build/license.rtf"
 assets = [
-    ["target/release/game-cheetah", "/usr/bin/", "755"],
-    ["build/linux/game-cheetah.desktop", "/usr/share/applications/", "644"],
-    ["build/linux/128x128.png", "/usr/share/icons/hicolor/128x128/apps/game-cheetah.png",     "644"],
-    ["build/linux/256x256.png", "/usr/share/icons/hicolor/256x256/apps/game-cheetah.png",     "644"],
+    [
+        "target/release/game-cheetah",
+        "/usr/bin/",
+        "755",
+    ],
+    [
+        "build/linux/game-cheetah.desktop",
+        "/usr/share/applications/",
+        "644",
+    ],
+    [
+        "build/linux/128x128.png",
+        "/usr/share/icons/hicolor/128x128/apps/game-cheetah.png",
+        "644",
+    ],
+    [
+        "build/linux/256x256.png",
+        "/usr/share/icons/hicolor/256x256/apps/game-cheetah.png",
+        "644",
+    ],
 ]

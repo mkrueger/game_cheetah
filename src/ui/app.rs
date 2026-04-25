@@ -314,11 +314,7 @@ impl App {
                             }
                         } else {
                             search_context.freezed_addresses.remove(&(result.addr));
-                            if let Err(e) = self
-                                .state
-                                .freeze_sender
-                                .send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
-                            {
+                            if let Err(e) = self.state.freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr)) {
                                 self.state.error_text = format!("Freeze channel closed: {e}");
                             }
                         }
@@ -340,10 +336,7 @@ impl App {
                         // Unfreeze all
                         for result in results.iter() {
                             if search_context.freezed_addresses.remove(&result.addr)
-                                && let Err(e) = self
-                                    .state
-                                    .freeze_sender
-                                    .send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
+                                && let Err(e) = self.state.freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
                             {
                                 self.state.error_text = format!("Freeze channel closed: {e}");
                             }
@@ -383,11 +376,7 @@ impl App {
                         let result = &results[index];
                         if search_context.freezed_addresses.contains(&result.addr) {
                             search_context.freezed_addresses.remove(&result.addr);
-                            if let Err(e) = self
-                                .state
-                                .freeze_sender
-                                .send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
-                            {
+                            if let Err(e) = self.state.freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr)) {
                                 self.state.error_text = format!("Freeze channel closed: {e}");
                             }
                         }
