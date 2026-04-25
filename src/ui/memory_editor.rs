@@ -123,34 +123,39 @@ impl MemoryEditor {
                 };
 
                 hex_cells = hex_cells.push(
-                    mouse_area(container(hex_display).width(Length::Fixed(30.0)).padding(2).style(move |theme: &icy_ui::Theme| {
-                        if is_selected_byte {
-                            container::Style {
-                                background: Some(theme.background.base.into()),
-                                text_color: Some(theme.background.on),
-                                border: icy_ui::Border {
-                                    color: theme.accent.base,
-                                    width: 2.0,
-                                    radius: Radius::new(4.0),
-                                },
-                                ..Default::default()
-                            }
-                        } else if is_initial_location {
-                            // Highlight initial location with a different background
-                            container::Style {
-                                background: Some(theme.accent.hover.into()),
-                                text_color: Some(theme.background.on),
-                                border: icy_ui::Border {
-                                    color: theme.accent.hover,
-                                    width: 1.0,
-                                    radius: Radius::new(0.0),
-                                },
-                                ..Default::default()
-                            }
-                        } else {
-                            container::Style::default()
-                        }
-                    }))
+                    mouse_area(
+                        container(hex_display)
+                            .width(Length::Fixed(30.0))
+                            .padding(2)
+                            .style(move |theme: &icy_ui::Theme| {
+                                if is_selected_byte {
+                                    container::Style {
+                                        background: Some(theme.background.base.into()),
+                                        text_color: Some(theme.background.on),
+                                        border: icy_ui::Border {
+                                            color: theme.accent.base,
+                                            width: 2.0,
+                                            radius: Radius::new(4.0),
+                                        },
+                                        ..Default::default()
+                                    }
+                                } else if is_initial_location {
+                                    // Highlight initial location with a different background
+                                    container::Style {
+                                        background: Some(theme.accent.hover.into()),
+                                        text_color: Some(theme.background.on),
+                                        border: icy_ui::Border {
+                                            color: theme.accent.hover,
+                                            width: 1.0,
+                                            radius: Radius::new(0.0),
+                                        },
+                                        ..Default::default()
+                                    }
+                                } else {
+                                    container::Style::default()
+                                }
+                            }),
+                    )
                     .on_press(Message::MemoryEditorSetCursor(row_idx, col_idx)),
                 );
             }
