@@ -37,6 +37,7 @@ pub enum Message {
     MemoryEditorJumpToAddress,
     MemoryEditorCellChanged(usize, String), // offset, new hex value
     MemoryEditorScroll(i32),                // scroll by n rows (positive = down, negative = up)
+    MemoryEditorScrolled(icy_ui::widget::scrollable::Viewport),
     MemoryEditorPageUp,
     MemoryEditorPageDown,
     MemoryEditorMoveCursor(i32, i32), // (row_delta, col_delta)

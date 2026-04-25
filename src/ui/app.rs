@@ -425,7 +425,9 @@ impl App {
                 match u64::from_str_radix(stripped, 16) {
                     Ok(new_address) => {
                         self.state.edit_address = new_address as usize;
+                        self.memory_editor.reset_cursor();
                         self.state.error_text.clear();
+                        return super::memory_editor::snap_to_top();
                     }
                     Err(err) => {
                         self.state.error_text = format!("Invalid address '{raw}': {err}");
@@ -449,49 +451,52 @@ impl App {
             }
 
             Message::MemoryEditorScroll(rows) => {
-                const BYTES_PER_ROW: usize = 16;
-                let offset = (rows * BYTES_PER_ROW as i32) as isize;
-                let new_address = (self.state.edit_address as isize + offset).max(0) as usize;
-                self.state.edit_address = new_address;
-                self.memory_editor.address_text = format!("{new_address:X}");
-                Task::none()
+                let offset = icy_ui::widget::operation::AbsoluteOffset {
+                    x: 0.0,
+                    y: rows as f32 * super::memory_editor::ROW_HEIGHT,
+                };
+                icy_ui::widget::operation::scroll_by(icy_ui::widget::Id::new("memory-editor-scroll"), offset)
             }
 
             Message::MemoryEditorPageUp => {
-                const BYTES_PER_ROW: usize = 16;
-                const ROWS_PER_PAGE: usize = 16;
-                let page_size = BYTES_PER_ROW * ROWS_PER_PAGE;
-                let new_address = self.state.edit_address.saturating_sub(page_size);
-                self.state.edit_address = new_address;
-                self.memory_editor.address_text = format!("{new_address:X}");
-                Task::none()
+                self.memory_editor.move_cursor(-(super::memory_editor::PAGE_ROWS as i32), 0);
+                self.memory_editor.ensure_cursor_visible()
             }
 
             Message::MemoryEditorPageDown => {
-                const BYTES_PER_ROW: usize = 16;
-                const ROWS_PER_PAGE: usize = 16;
-                let page_size = BYTES_PER_ROW * ROWS_PER_PAGE;
-                let new_address = self.state.edit_address.saturating_add(page_size);
-                self.state.edit_address = new_address;
-                self.memory_editor.address_text = format!("{new_address:X}");
-                Task::none()
+                self.memory_editor.move_cursor(super::memory_editor::PAGE_ROWS as i32, 0);
+                self.memory_editor.ensure_cursor_visible()
             }
 
             Message::MemoryEditorMoveCursor(row_delta, col_delta) => {
-                self.state.edit_address = self.memory_editor.move_cursor(self.state.edit_address, row_delta, col_delta);
-                Task::none()
+                let row_changed = self.memory_editor.move_cursor(row_delta, col_delta);
+                if row_changed {
+                    self.memory_editor.ensure_cursor_visible()
+                } else {
+                    Task::none()
+                }
             }
 
             Message::MemoryEditorSetCursor(row, col) => {
                 self.memory_editor.set_cursor(row, col);
-                Task::none()
+                self.memory_editor.ensure_cursor_visible()
             }
             Message::MemoryEditorBeginEdit => Task::none(),
             Message::MemoryEditorEndEdit => Task::none(),
             Message::MemoryEditorEditHex(hex_digit) => {
-                if let Err(err) = self.memory_editor.edit_hex(self.state.edit_address, self.state.pid, hex_digit) {
+                let cursor_row_before = self.memory_editor.cursor_row();
+                let address_base = self.state.edit_address;
+                if let Err(err) = self.memory_editor.edit_hex(address_base, self.state.pid, hex_digit) {
                     self.state.error_text = err;
                 }
+                if self.memory_editor.cursor_row() != cursor_row_before {
+                    self.memory_editor.ensure_cursor_visible()
+                } else {
+                    Task::none()
+                }
+            }
+            Message::MemoryEditorScrolled(viewport) => {
+                self.memory_editor.set_viewport(viewport);
                 Task::none()
             }
             Message::SortProcesses(column) => {
