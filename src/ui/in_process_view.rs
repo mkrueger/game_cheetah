@@ -367,6 +367,18 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                             let editor: Element<'_, Message> = text_input("", &display_text)
                                                 .id(icy_ui::widget::Id::from(format!("result-value-{i}")))
                                                 .width(Length::Fixed(120.0))
+                                                .style(|theme: &icy_ui::Theme, _status| icy_ui::widget::text_input::Style {
+                                                    background: theme.background.base.into(),
+                                                    border: icy_ui::Border {
+                                                        radius: 2.0.into(),
+                                                        width: 1.0,
+                                                        color: theme.accent.base,
+                                                    },
+                                                    icon: theme.background.on,
+                                                    placeholder: theme.background.on.scale_alpha(0.5),
+                                                    value: theme.background.on,
+                                                    selection: theme.accent.base.scale_alpha(0.3),
+                                                })
                                                 .on_input(move |v| Message::ResultEditingChanged(i, v))
                                                 .on_submit(Message::ResultEditingCommit(i))
                                                 .into();
