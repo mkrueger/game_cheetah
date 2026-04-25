@@ -15,6 +15,7 @@ value-label = Wert:
 search-description-label = Suchbeschreibung
 search-value-label = Suche nach { $valuetype }
 truncated-results-warning = Zeige erste {$shown} von {$total} Ergebnissen. Verwenden Sie 'Aktualisieren' um die Ergebnisse einzugrenzen.
+results-page-indicator = Seite {$page}/{$pages}  ({$from}-{$to} von {$total})
 
 found-results-label =
     { $results ->

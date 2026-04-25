@@ -412,6 +412,35 @@ impl App {
                 }
                 Task::none()
             }
+            Message::NextResultPage => {
+                if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
+                    let total = search_context.collect_results().len();
+                    let max_page = total.saturating_sub(1) / crate::ui::in_process_view::RESULTS_PAGE_SIZE;
+                    if search_context.result_page < max_page {
+                        search_context.result_page += 1;
+                    }
+                }
+                Task::none()
+            }
+            Message::PrevResultPage => {
+                if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
+                    search_context.result_page = search_context.result_page.saturating_sub(1);
+                }
+                Task::none()
+            }
+            Message::FirstResultPage => {
+                if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
+                    search_context.result_page = 0;
+                }
+                Task::none()
+            }
+            Message::LastResultPage => {
+                if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
+                    let total = search_context.collect_results().len();
+                    search_context.result_page = total.saturating_sub(1) / crate::ui::in_process_view::RESULTS_PAGE_SIZE;
+                }
+                Task::none()
+            }
             Message::CloseMemoryEditor => {
                 self.app_state = AppState::InProcess;
                 Task::none()

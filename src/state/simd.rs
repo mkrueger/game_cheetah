@@ -200,4 +200,3 @@ pub(super) fn search_f64_simd(memory_data: &[u8], target: f64, epsilon: f64, sta
 
     results
 }
-

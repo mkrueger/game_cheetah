@@ -474,9 +474,7 @@ impl MemoryEditor {
     pub fn edit_hex(&mut self, edit_address: usize, pid: process_memory::Pid, hex_digit: u8) -> Result<(), String> {
         let offset = self.cursor_row * 16 + self.cursor_col;
         let address = edit_address + offset;
-        let handle = pid
-            .try_into_process_handle()
-            .map_err(|e| format!("Failed to attach to process: {e}"))?;
+        let handle = pid.try_into_process_handle().map_err(|e| format!("Failed to attach to process: {e}"))?;
         let buf = copy_address(address, 1, &handle).map_err(|e| format!("Failed to read 0x{address:X}: {e}"))?;
         let current_byte = buf[0];
         let new_byte = if self.cursor_nibble == 0 {

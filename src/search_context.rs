@@ -49,6 +49,11 @@ pub struct SearchContext {
     pub cached_results: Arc<RwLock<Option<Arc<Vec<SearchResult>>>>>,
     pub cache_valid: Arc<AtomicBool>,
 
+    /// Current page index for the result table (0-based). Pagination is a
+    /// view-layer concern but lives here so each search tab keeps its own
+    /// position.
+    pub result_page: usize,
+
     // For unknown searches - store memory snapshots
     pub memory_snapshot: MemorySnapshot,
     /// Previous-value table for unknown-search subsequent passes.
@@ -74,6 +79,8 @@ impl SearchContext {
 
             cached_results: Arc::new(RwLock::new(None)),
             cache_valid: Arc::new(AtomicBool::new(false)),
+
+            result_page: 0,
 
             memory_snapshot: Arc::new(RwLock::new(Vec::new())),
             previous_unknown_values: Arc::new(RwLock::new(HashMap::new())),
@@ -127,6 +134,9 @@ impl SearchContext {
 
         // Reset search mode
         self.searching = SearchMode::None;
+
+        // Reset pagination
+        self.result_page = 0;
 
         // Invalidate any cached results
         self.invalidate_cache();
