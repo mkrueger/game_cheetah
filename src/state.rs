@@ -884,7 +884,7 @@ impl GameCheetahEngine {
 
                 for r in old_results.iter() {
                     if let Some(oldb) = r.stored_bytes() {
-                        let len = r.search_type.get_byte_length();
+                        let len = oldb.len();
                         if len <= 8 && oldb.len() >= len {
                             let mut buf = [0u8; 8];
                             buf[..len].copy_from_slice(&oldb[..len]);
@@ -914,7 +914,7 @@ impl GameCheetahEngine {
                         .filter_map(|addr| {
                             addr_to_types
                                 .get(addr)
-                                .and_then(|types| types.iter().map(|(ty, _)| *addr + ty.get_byte_length()).max())
+                                .and_then(|types| types.iter().filter_map(|(ty, _)| ty.fixed_byte_length().map(|len| *addr + len)).max())
                         })
                         .max()
                         .unwrap_or(min_addr + 8); // Default to at least 8 bytes
@@ -941,14 +941,16 @@ impl GameCheetahEngine {
                                 let offset = addr - min_addr;
 
                                 // Read once per address for the largest type
-                                let max_len = types.iter().map(|(ty, _)| ty.get_byte_length()).max().unwrap_or(0);
+                                let max_len = types.iter().filter_map(|(ty, _)| ty.fixed_byte_length()).max().unwrap_or(0);
                                 if offset + max_len > buf.len() {
                                     continue;
                                 }
                                 let new_max = &buf[offset..offset + max_len];
 
                                 for (ty, old8) in types {
-                                    let len = ty.get_byte_length();
+                                    let Some(len) = ty.fixed_byte_length() else {
+                                        continue;
+                                    };
                                     let oldb = &old8[..len];
                                     let newb = &new_max[..len];
 

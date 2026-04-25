@@ -42,11 +42,34 @@ impl Display for SearchValue {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct StoredBytes {
+    bytes: [u8; 8],
+    len: u8,
+}
+
+impl StoredBytes {
+    pub fn new(search_type: SearchType, bytes: &[u8]) -> Option<Self> {
+        let needed = search_type.fixed_byte_length()?;
+        let len = needed.min(bytes.len()).min(8);
+        if len == 0 {
+            return None;
+        }
+
+        let mut stored = [0u8; 8];
+        stored[..len].copy_from_slice(&bytes[..len]);
+        Some(Self { bytes: stored, len: len as u8 })
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.bytes[..usize::from(self.len)]
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct SearchResult {
     pub addr: usize,
     pub search_type: SearchType,
-    // Inline 0..=8 bytes. Actual logical length is determined by search_type.get_byte_length().
-    pub stored: Option<[u8; 8]>,
+    pub stored: Option<StoredBytes>,
 }
 
 impl SearchResult {
@@ -59,32 +82,15 @@ impl SearchResult {
     }
 
     pub fn new_with_bytes(addr: usize, search_type: SearchType, bytes: &[u8]) -> Self {
-        let mut buf = [0u8; 8];
-        let needed = search_type.get_byte_length().min(8);
-        let copy_len = needed.min(bytes.len());
-        if copy_len > 0 {
-            buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
-            Self {
-                addr,
-                search_type,
-                stored: Some(buf),
-            }
-        } else {
-            // For types without a fixed byte length (e.g., Guess/Unknown), don't store bytes.
-            Self {
-                addr,
-                search_type,
-                stored: None,
-            }
+        Self {
+            addr,
+            search_type,
+            stored: StoredBytes::new(search_type, bytes),
         }
     }
 
-    // Returns a slice to the stored bytes matching the SearchType's byte length.
+    // Returns a slice to the stored bytes without relying on SearchType length lookups.
     pub fn stored_bytes(&self) -> Option<&[u8]> {
-        let len = self.search_type.get_byte_length().min(8);
-        if len == 0 {
-            return None;
-        }
-        self.stored.as_ref().map(|arr| &arr[..len])
+        self.stored.as_ref().map(StoredBytes::as_slice)
     }
 }
