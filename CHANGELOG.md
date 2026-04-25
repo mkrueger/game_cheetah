@@ -13,8 +13,8 @@ A robustness, performance, and UX release.
 
 - Result table now uses a virtual row renderer, so only visible rows are laid out instead of prebuilding every result row. Replaces the previous hard cap of 1000 visible results without requiring pagination.
 - Memory editor uses the same virtual row renderer over the target process' readable memory regions, skipping unmapped holes while preserving region permissions and names in the inspector. Cursor navigation, page up/down, and address jumps now scroll smoothly with viewport-aware "ensure visible" behavior.
-- Memory editor value inspector fields are editable. Users can write typed integer and floating-point values at the cursor address directly from the inspector.
-- Memory editor status strip now shows the focused address, offset from the opened search hit (when applicable), and a single region summary (name, range, access).
+- Memory editor value inspector fields are editable. Users can write typed integer and floating-point values at the cursor address directly from the inspector. Invalid input is highlighted in the destructive color until it parses cleanly.
+- Memory editor region info now sits in its own band above the hex grid, with a compact status strip below the grid showing the focused address and offset from the opened search hit (when applicable).
 - Process selection list now defaults to sorting by memory size, descending. Users can still click any column header to override.
 - Attach now probes the target process and surfaces a platform-specific hint when access is denied (Linux: `kernel.yama.ptrace_scope`; macOS: `task_for_pid` entitlements; Windows: Administrator / protected processes).
 - Process exit / PID recycling detection. The engine captures the target's start time at attach and refuses to keep operating against a recycled PID, so the freeze loop can no longer write into an unrelated process when the target restarts.
