@@ -451,8 +451,25 @@ impl GameCheetahEngine {
         let results_sender = search_context.results_sender.clone();
         let search_complete: Arc<std::sync::atomic::AtomicBool> = search_context.search_complete.clone();
         let cache_valid = search_context.cache_valid.clone();
-        let guess_value_text = if matches!(search_data.0, SearchType::Guess) {
-            Some(String::from_utf8(search_data.1.clone()).unwrap_or_default())
+
+        // For Guess scans we try Int / Float / Double per region. Parsing the
+        // user-typed value into those three byte representations is identical
+        // for every region, so do it exactly once here instead of inside the
+        // par_iter closure (where it would otherwise run 3*N times). Errors
+        // are reported once, up front, rather than spamming stderr per region.
+        type GuessNeedles = Vec<(SearchType, Vec<u8>)>;
+        let guess_needles: Option<Arc<GuessNeedles>> = if matches!(search_data.0, SearchType::Guess) {
+            let value_text = String::from_utf8(search_data.1.clone()).unwrap_or_default();
+            let mut needles: GuessNeedles = Vec::with_capacity(3);
+            for search_type in [SearchType::Int, SearchType::Float, SearchType::Double] {
+                match search_type.from_string(&value_text) {
+                    Ok(typed_value) => needles.push((search_type, typed_value.1)),
+                    Err(e) => {
+                        eprintln!("Failed to parse typed value for {search_type}: {e}");
+                    }
+                }
+            }
+            Some(Arc::new(needles))
         } else {
             None
         };
@@ -494,30 +511,14 @@ impl GameCheetahEngine {
 
                 match memory_result {
                     Ok(memory) => {
-                        let results = if matches!(search_data.0, SearchType::Guess) {
-                            // For Guess type, try all possible interpretations
+                        let results = if let Some(needles) = guess_needles.as_ref() {
+                            // Guess mode: scan the region for each precomputed
+                            // typed needle (Int / Float / Double).
                             let mut all_results = Vec::new();
-
-                            // Try as each type
-                            for search_type in [
-                                // SearchType::Byte,
-                                // SearchType::Short,
-                                SearchType::Int,
-                                // SearchType::Int64,
-                                SearchType::Float,
-                                SearchType::Double,
-                            ] {
-                                match search_type.from_string(guess_value_text.as_deref().unwrap_or_default()) {
-                                    Ok(typed_value) => {
-                                        let typed_results: Vec<SearchResult> = search_memory(&memory, &typed_value.1, search_type, *start);
-                                        all_results.extend(typed_results);
-                                    }
-                                    Err(e) => {
-                                        eprintln!("Failed to parse typed value for {}: {}", search_type, e);
-                                    }
-                                }
+                            for (search_type, bytes) in needles.iter() {
+                                let typed_results: Vec<SearchResult> = search_memory(&memory, bytes, *search_type, *start);
+                                all_results.extend(typed_results);
                             }
-
                             all_results
                         } else {
                             search_memory(&memory, &search_data.1, search_data.0, *start)
