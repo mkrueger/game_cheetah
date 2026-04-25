@@ -305,6 +305,27 @@ impl App {
                 icy_ui::widget::operation::focus(icy_ui::widget::Id::from(format!("result-value-{index}")))
             }
             Message::ResultEditingChanged(index, text) => {
+                // Best-effort live write: if the buffered text parses cleanly,
+                // commit it to memory immediately so the user sees the value
+                // change in the running game while they're typing. Parse
+                // failures are silent here — the user is mid-edit.
+                if let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle()
+                    && let Some(current_search) = self.state.searches.get_mut(self.state.current_search)
+                {
+                    let results = current_search.collect_results();
+                    if let Some(result) = results.get(index)
+                        && let Ok(value) = result.search_type.from_string(&text)
+                    {
+                        let _ = handle.put_address(result.addr, &value.1);
+                        if current_search.freezed_addresses.contains(&result.addr) {
+                            let _ = self.state.freeze_sender.send(FreezeMessage {
+                                msg: crate::MessageCommand::Freeze,
+                                addr: result.addr,
+                                value,
+                            });
+                        }
+                    }
+                }
                 self.editing_result = Some((index, text));
                 Task::none()
             }

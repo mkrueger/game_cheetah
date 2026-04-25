@@ -367,12 +367,6 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                             let editor: Element<'_, Message> = text_input("", &display_text)
                                                 .id(icy_ui::widget::Id::from(format!("result-value-{i}")))
                                                 .width(Length::Fixed(120.0))
-                                                .style(|theme: &icy_ui::Theme, status| {
-                                                    let mut style = icy_ui::widget::text_input::default(theme, status);
-                                                    style.value = theme.accent.base;
-                                                    style.border.color = theme.accent.base;
-                                                    style
-                                                })
                                                 .on_input(move |v| Message::ResultEditingChanged(i, v))
                                                 .on_submit(Message::ResultEditingCommit(i))
                                                 .into();
@@ -387,24 +381,20 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                                 .into();
                                             frozen
                                         } else {
-                                            let clickable: Element<'_, Message> = mouse_area(
-                                                container(text(value_text.clone()).size(14).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                                                    color: Some(theme.accent.base),
-                                                }))
-                                                .width(Length::Fixed(120.0))
-                                                .padding([4, 6])
-                                                .style(|theme: &icy_ui::Theme| container::Style {
-                                                    background: Some(theme.background.base.into()),
-                                                    border: icy_ui::Border {
-                                                        radius: 2.0.into(),
-                                                        width: 1.0,
-                                                        color: theme.primary.divider,
+                                            let clickable: Element<'_, Message> =
+                                                mouse_area(container(text(value_text.clone()).size(14)).width(Length::Fixed(120.0)).padding([4, 6]).style(
+                                                    |theme: &icy_ui::Theme| container::Style {
+                                                        background: Some(theme.background.base.into()),
+                                                        border: icy_ui::Border {
+                                                            radius: 2.0.into(),
+                                                            width: 1.0,
+                                                            color: theme.primary.divider,
+                                                        },
+                                                        ..Default::default()
                                                     },
-                                                    ..Default::default()
-                                                }),
-                                            )
-                                            .on_press(Message::ResultEditingBegin(i, value_text.clone()))
-                                            .into();
+                                                ))
+                                                .on_press(Message::ResultEditingBegin(i, value_text.clone()))
+                                                .into();
                                             clickable
                                         }
                                     },
