@@ -25,6 +25,20 @@ fn scroll_id() -> Id {
     Id::new(SCROLL_ID)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InspectorValueKind {
+    U8,
+    I8,
+    U16,
+    I16,
+    U32,
+    I32,
+    U64,
+    I64,
+    F32,
+    F64,
+}
+
 #[derive(Default)]
 pub struct MemoryEditor {
     pub address_text: String,
@@ -42,6 +56,8 @@ pub struct MemoryEditor {
     /// cursor row is on-screen and to compute the minimal scroll required to
     /// keep it visible.
     viewport: Option<Viewport>,
+
+    inspector_edit: Option<(InspectorValueKind, String)>,
 }
 
 impl MemoryEditor {
@@ -67,6 +83,7 @@ impl MemoryEditor {
         self.cursor_col = 0;
         self.cursor_nibble = 0;
         self.viewport = None;
+        self.inspector_edit = None;
     }
 
     /// Animated scroll task that places the cursor row a few lines below the
@@ -78,6 +95,93 @@ impl MemoryEditor {
     {
         let target_y = ((self.cursor_row as f32 - 4.0) * ROW_HEIGHT).max(0.0);
         operation::scroll_to(scroll_id(), operation::AbsoluteOffset { x: None, y: Some(target_y) })
+    }
+
+    fn cursor_address(&self) -> usize {
+        self.base_address.saturating_add(self.cursor_row * BYTES_PER_ROW + self.cursor_col)
+    }
+
+    pub fn set_inspector_value_text(&mut self, kind: InspectorValueKind, value: String) {
+        self.inspector_edit = Some((kind, value));
+    }
+
+    fn parse_unsigned(input: &str, max: u64, label: &str) -> Result<u64, String> {
+        let text = input.trim().replace('_', "");
+        let value = if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+            u64::from_str_radix(hex, 16)
+        } else {
+            text.parse::<u64>()
+        }
+        .map_err(|err| format!("Invalid {label} value '{input}': {err}"))?;
+
+        if value <= max {
+            Ok(value)
+        } else {
+            Err(format!("{label} value {value} is out of range (max {max})"))
+        }
+    }
+
+    fn parse_signed(input: &str, min: i64, max: i64, label: &str) -> Result<i64, String> {
+        let text = input.trim().replace('_', "");
+        let value = if let Some(hex) = text.strip_prefix("-0x").or_else(|| text.strip_prefix("-0X")) {
+            let magnitude = i64::from_str_radix(hex, 16).map_err(|err| format!("Invalid {label} value '{input}': {err}"))?;
+            -magnitude
+        } else if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+            i64::from_str_radix(hex, 16).map_err(|err| format!("Invalid {label} value '{input}': {err}"))?
+        } else {
+            text.parse::<i64>().map_err(|err| format!("Invalid {label} value '{input}': {err}"))?
+        };
+
+        if (min..=max).contains(&value) {
+            Ok(value)
+        } else {
+            Err(format!("{label} value {value} is out of range ({min}..={max})"))
+        }
+    }
+
+    fn inspector_bytes(kind: InspectorValueKind, input: &str) -> Result<Vec<u8>, String> {
+        match kind {
+            InspectorValueKind::U8 => Ok(vec![Self::parse_unsigned(input, u8::MAX as u64, "u8")? as u8]),
+            InspectorValueKind::I8 => Ok(vec![(Self::parse_signed(input, i8::MIN as i64, i8::MAX as i64, "i8")? as i8) as u8]),
+            InspectorValueKind::U16 => Ok((Self::parse_unsigned(input, u16::MAX as u64, "u16")? as u16).to_le_bytes().to_vec()),
+            InspectorValueKind::I16 => Ok((Self::parse_signed(input, i16::MIN as i64, i16::MAX as i64, "i16")? as i16)
+                .to_le_bytes()
+                .to_vec()),
+            InspectorValueKind::U32 => Ok((Self::parse_unsigned(input, u32::MAX as u64, "u32")? as u32).to_le_bytes().to_vec()),
+            InspectorValueKind::I32 => Ok((Self::parse_signed(input, i32::MIN as i64, i32::MAX as i64, "i32")? as i32)
+                .to_le_bytes()
+                .to_vec()),
+            InspectorValueKind::U64 => Ok(Self::parse_unsigned(input, u64::MAX, "u64")?.to_le_bytes().to_vec()),
+            InspectorValueKind::I64 => Ok(Self::parse_signed(input, i64::MIN, i64::MAX, "i64")?.to_le_bytes().to_vec()),
+            InspectorValueKind::F32 => Ok(input
+                .trim()
+                .parse::<f32>()
+                .map_err(|err| format!("Invalid f32 value '{input}': {err}"))?
+                .to_le_bytes()
+                .to_vec()),
+            InspectorValueKind::F64 => Ok(input
+                .trim()
+                .parse::<f64>()
+                .map_err(|err| format!("Invalid f64 value '{input}': {err}"))?
+                .to_le_bytes()
+                .to_vec()),
+        }
+    }
+
+    pub fn submit_inspector_value(&mut self, pid: process_memory::Pid, kind: InspectorValueKind) -> Result<(), String> {
+        let Some((edit_kind, input)) = self.inspector_edit.as_ref() else {
+            return Ok(());
+        };
+        if *edit_kind != kind {
+            return Ok(());
+        }
+
+        let address = self.cursor_address();
+        let bytes = Self::inspector_bytes(kind, input)?;
+        let handle = pid.try_into_process_handle().map_err(|e| format!("Failed to attach to process: {e}"))?;
+        handle.put_address(address, &bytes).map_err(|e| format!("Failed to write 0x{address:X}: {e}"))?;
+        self.inspector_edit = None;
+        Ok(())
     }
 
     /// Returns an animated scroll task that brings the cursor row into view if
@@ -405,19 +509,12 @@ impl MemoryEditor {
                 0
             };
 
-            let fmt_dec_hex = |dec: String, hex: String| -> String { format!("{dec}  ({hex})") };
             let na = || "—".to_string();
 
-            let byte_str = if bytes_available >= 1 {
-                let v = value_bytes[0];
-                fmt_dec_hex(format!("{v}"), format!("0x{v:02X}"))
-            } else {
-                na()
-            };
+            let byte_str = if bytes_available >= 1 { value_bytes[0].to_string() } else { na() };
             let i8_str = if bytes_available >= 1 { format!("{}", value_bytes[0] as i8) } else { na() };
             let u16_str = if bytes_available >= 2 {
-                let v = u16::from_le_bytes([value_bytes[0], value_bytes[1]]);
-                fmt_dec_hex(format!("{v}"), format!("0x{v:04X}"))
+                u16::from_le_bytes([value_bytes[0], value_bytes[1]]).to_string()
             } else {
                 na()
             };
@@ -427,8 +524,7 @@ impl MemoryEditor {
                 na()
             };
             let u32_str = if bytes_available >= 4 {
-                let v = u32::from_le_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]]);
-                fmt_dec_hex(format!("{v}"), format!("0x{v:08X}"))
+                u32::from_le_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]]).to_string()
             } else {
                 na()
             };
@@ -438,8 +534,7 @@ impl MemoryEditor {
                 na()
             };
             let u64_str = if bytes_available >= 8 {
-                let v = u64::from_le_bytes(value_bytes);
-                fmt_dec_hex(format!("{v}"), format!("0x{v:016X}"))
+                u64::from_le_bytes(value_bytes).to_string()
             } else {
                 na()
             };
@@ -495,21 +590,27 @@ impl MemoryEditor {
                     })
                     .into()
             };
-            let value = |s: String| -> Element<'_, Message> {
-                text(s)
-                    .size(14)
-                    .font(icy_ui::Font::MONOSPACE)
-                    .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                        color: Some(theme.secondary.on),
-                    })
-                    .into()
-            };
+            let make_pair = |kind: InspectorValueKind, lbl: &'static str, val: String| -> Element<'_, Message> {
+                let input_value = self
+                    .inspector_edit
+                    .as_ref()
+                    .filter(|(edit_kind, _)| *edit_kind == kind)
+                    .map(|(_, text)| text.clone())
+                    .unwrap_or(val);
 
-            let make_pair = |lbl: &'static str, val: String| -> Element<'_, Message> {
-                row![container(label(lbl)).width(Length::Fixed(56.0)), value(val),]
-                    .spacing(8)
-                    .align_y(alignment::Alignment::Center)
-                    .into()
+                row![
+                    container(label(lbl)).width(Length::Fixed(44.0)),
+                    text_input("—", &input_value)
+                        .on_input(move |value| Message::MemoryEditorInspectorValueChanged(kind, value))
+                        .on_submit(Message::MemoryEditorInspectorValueSubmit(kind))
+                        .font(icy_ui::Font::MONOSPACE)
+                        .size(13)
+                        .padding([2, 6])
+                        .width(Length::Fixed(170.0)),
+                ]
+                .spacing(8)
+                .align_y(alignment::Alignment::Center)
+                .into()
             };
 
             let header_line = row![
@@ -530,20 +631,24 @@ impl MemoryEditor {
             .align_y(alignment::Alignment::Center);
 
             let unsigned_col = column![
-                make_pair("u8", byte_str),
-                make_pair("u16", u16_str),
-                make_pair("u32", u32_str),
-                make_pair("u64", u64_str),
+                make_pair(InspectorValueKind::U8, "u8", byte_str),
+                make_pair(InspectorValueKind::U16, "u16", u16_str),
+                make_pair(InspectorValueKind::U32, "u32", u32_str),
+                make_pair(InspectorValueKind::U64, "u64", u64_str),
             ]
             .spacing(4);
             let signed_col = column![
-                make_pair("i8", i8_str),
-                make_pair("i16", i16_str),
-                make_pair("i32", i32_str),
-                make_pair("i64", i64_str),
+                make_pair(InspectorValueKind::I8, "i8", i8_str),
+                make_pair(InspectorValueKind::I16, "i16", i16_str),
+                make_pair(InspectorValueKind::I32, "i32", i32_str),
+                make_pair(InspectorValueKind::I64, "i64", i64_str),
             ]
             .spacing(4);
-            let float_col = column![make_pair("f32", f32_str), make_pair("f64", f64_str),].spacing(4);
+            let float_col = column![
+                make_pair(InspectorValueKind::F32, "f32", f32_str),
+                make_pair(InspectorValueKind::F64, "f64", f64_str),
+            ]
+            .spacing(4);
 
             container(
                 column![header_line, row![unsigned_col, signed_col, float_col,].spacing(24),]
@@ -646,8 +751,13 @@ impl MemoryEditor {
             let total_nibbles = BYTES_PER_ROW * 2;
             let current_nibble_pos = self.cursor_col * 2 + self.cursor_nibble;
             let new_nibble_pos = (current_nibble_pos as i32 + col_delta).clamp(0, total_nibbles as i32 - 1) as usize;
-            self.cursor_col = new_nibble_pos / 2;
-            self.cursor_nibble = new_nibble_pos % 2;
+            let new_col = new_nibble_pos / 2;
+            let new_nibble = new_nibble_pos % 2;
+            if new_col != self.cursor_col || new_nibble != self.cursor_nibble {
+                self.inspector_edit = None;
+            }
+            self.cursor_col = new_col;
+            self.cursor_nibble = new_nibble;
         }
 
         if row_delta == 0 {
@@ -657,6 +767,9 @@ impl MemoryEditor {
         let new_row = (self.cursor_row as i32 + row_delta).clamp(0, WINDOW_ROWS as i32 - 1) as usize;
         let changed = new_row != self.cursor_row;
         self.cursor_row = new_row;
+        if changed {
+            self.inspector_edit = None;
+        }
         changed
     }
 
@@ -664,12 +777,14 @@ impl MemoryEditor {
         self.cursor_row = row.min(WINDOW_ROWS - 1);
         self.cursor_col = col.min(BYTES_PER_ROW - 1);
         self.cursor_nibble = 0;
+        self.inspector_edit = None;
     }
 
     pub fn reset_cursor(&mut self) {
         self.cursor_row = 0;
         self.cursor_col = 0;
         self.cursor_nibble = 0;
+        self.inspector_edit = None;
     }
 
     pub fn edit_hex(&mut self, pid: process_memory::Pid, hex_digit: u8) -> Result<(), String> {
@@ -697,6 +812,7 @@ impl MemoryEditor {
                 self.cursor_row = (self.cursor_row + 1).min(WINDOW_ROWS - 1);
             }
         }
+        self.inspector_edit = None;
         Ok(())
     }
 }

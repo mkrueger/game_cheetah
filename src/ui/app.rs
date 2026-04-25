@@ -493,6 +493,17 @@ impl App {
                     Task::none()
                 }
             }
+            Message::MemoryEditorInspectorValueChanged(kind, value) => {
+                self.memory_editor.set_inspector_value_text(kind, value);
+                Task::none()
+            }
+            Message::MemoryEditorInspectorValueSubmit(kind) => {
+                match self.memory_editor.submit_inspector_value(self.state.pid, kind) {
+                    Ok(()) => self.state.error_text.clear(),
+                    Err(err) => self.state.error_text = err,
+                }
+                Task::none()
+            }
             Message::MemoryEditorScrolled(viewport) => {
                 self.memory_editor.set_viewport(viewport);
                 Task::none()
