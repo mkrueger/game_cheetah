@@ -26,6 +26,7 @@ A robustness, performance, and UX release.
 
 ### Changed
 
+- **No longer published on crates.io.** Game Cheetah depends on `icy_ui` (git-only), and `cargo publish` requires every dependency to be on crates.io. Until `icy_ui` is published, install via the prebuilt binaries on the [GitHub releases page](https://github.com/mkrueger/game_cheetah/releases/latest) or build from source. `cargo install game-cheetah` will keep working for older 0.5.x versions but will not pick up new releases.
 - Float SIMD scan now uses the portable `wide` crate instead of x86\_64-only intrinsics. Roughly 15× faster on f32 / f64 scans and now runs on aarch64.
 - Integer scans (`i16`, `i32`, `i64`, byte) use `memchr::memmem` (Two-Way + SIMD prefilter) in place of hand-rolled SIMD.
 - `Guess` mode parses the user-typed needle once before the parallel region scan instead of re-parsing it inside every region's closure.

@@ -7,6 +7,8 @@ rust-version = "1.88"
 description = "High-performance memory scanner/editor and game trainer for Linux, Windows, and macOS"
 license = "Apache-2.0"
 repository = "https://github.com/mkrueger/game_cheetah"
+# Not published on crates.io: depends on icy_ui (git-only). Distribute via GitHub releases.
+publish = false
 
 [package.metadata.bundle]
 name = "GameCheetah"

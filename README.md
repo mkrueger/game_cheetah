@@ -45,33 +45,23 @@ Keep in mind that altering a game memory contents may lead to game and/or comput
 
 [![Watch the video](https://img.youtube.com/vi/ng_1LBaUS48/maxresdefault.jpg)](https://youtu.be/ng_1LBaUS48)
 
-# Installing 
+# Installing
 
-All other OSes: Easiest way is to use cargo or grab a binary. 
-
-See: 
-https://doc.rust-lang.org/cargo/getting-started/installation.html
-
-Then install it with: `cargo install game-cheetah`
-Ensure that the cargo bin path is in your PATH (but cargo tells you about it)
-
-# Get binaries
-
-Alternatively get the latest release here:
+Grab a prebuilt binary from the releases page (recommended):
 https://github.com/mkrueger/game_cheetah/releases/latest
 
-# Build
+> **Note:** Game Cheetah is **no longer published to crates.io** starting with 0.6.0.
+> The UI now depends on [`icy_ui`](https://github.com/mkrueger/icy_ui), which is not on crates.io,
+> and `cargo publish` requires every dependency to have a crates.io version. Until `icy_ui` is
+> published, install from a release binary or build from source (see below). `cargo install game-cheetah`
+> will continue to work for older 0.5.x versions but will not receive new releases.
 
-Just install rust and compile with "cargo build --release".
-Executable will be in target/release/game_cheetah
+# Build from source
 
-Just follow https://gtk-rs.org/gtk4-rs/git/book/installation.html
+Install Rust (https://www.rust-lang.org/tools/install) and run:
 
-Note: You may need the nightly toolchain of rust
+```
+cargo build --release
+```
 
-rustup toolchain install nightly
-
-From project directory:
-rustup override set nightly
-
-https://doc.rust-lang.org/book/appendix-07-nightly-rust.html
+The executable will be in `target/release/game-cheetah`.
