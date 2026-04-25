@@ -125,10 +125,10 @@ pub(super) fn fast_read_memory(pid: process_memory::Pid, address: usize, size: u
 
 #[cfg(not(target_os = "linux"))]
 pub(super) fn fast_read_memory(pid: process_memory::Pid, address: usize, size: usize) -> Result<Vec<u8>, std::io::Error> {
-    use std::io::{Error, ErrorKind};
+    use std::io::Error;
 
     match pid.try_into_process_handle() {
-        Ok(handle) => copy_address(address, size, &handle).map_err(|e| Error::new(ErrorKind::Other, e.to_string())),
-        Err(e) => Err(Error::new(ErrorKind::Other, e.to_string())),
+        Ok(handle) => copy_address(address, size, &handle).map_err(|e| Error::other(e.to_string())),
+        Err(e) => Err(Error::other(e.to_string())),
     }
 }
