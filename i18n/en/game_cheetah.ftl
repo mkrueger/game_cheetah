@@ -14,8 +14,6 @@ name-label = Name:
 value-label = Value:
 search-description-label = Search description
 search-value-label = Search for { $valuetype } value
-truncated-results-warning = Showing first {$shown} of {$total} results. Use 'Update' to narrow down results.
-results-page-indicator = Page {$page}/{$pages}  ({$from}-{$to} of {$total})
 
 found-results-label =
     { $results ->

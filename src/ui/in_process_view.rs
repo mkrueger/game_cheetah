@@ -3,14 +3,14 @@ use std::sync::atomic::Ordering;
 use i18n_embed_fl::fl;
 use icy_ui::{
     Element, Length, alignment,
-    widget::{button, checkbox, column, container, pick_list, progress_bar, row, rule, scrollable, text, text_input},
+    widget::{button, checkbox, column, container, pick_list, progress_bar, row, rule, scroll_area, scrollable, text, text_input},
 };
 use process_memory::{TryIntoProcessHandle, copy_address};
 
 use crate::{SearchMode, SearchType, SearchValue, app::App, message::Message};
 
-/// Number of result rows displayed per page in the result table.
-pub const RESULTS_PAGE_SIZE: usize = 200;
+/// Uniform row height used by the virtualized result table.
+const RESULT_ROW_HEIGHT: f32 = 34.0;
 
 fn search_ui(app: &App) -> Element<'_, Message> {
     let search_types = vec![
@@ -260,13 +260,7 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
     let string_len = current_search_context.search_value_text.len();
     let string_len_chars = current_search_context.search_value_text.chars().count();
 
-    // Paginate so the result list stays responsive even with millions of hits.
     let total_results = results.len();
-    let max_page = total_results.saturating_sub(1) / RESULTS_PAGE_SIZE;
-    let current_page = current_search_context.result_page.min(max_page);
-    let page_offset = current_page * RESULTS_PAGE_SIZE;
-    let page_end = (page_offset + RESULTS_PAGE_SIZE).min(total_results);
-    let displayed_results = results.iter().enumerate().skip(page_offset).take(page_end - page_offset);
 
     let table_header = if is_string {
         row![
@@ -299,67 +293,6 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
     .spacing(5)
     .align_y(alignment::Alignment::Center);
 
-    let table_rows = displayed_results.map(|(absolute_index, result)| -> icy_ui::Element<'_, Message> {
-        let i = absolute_index;
-        let value_text = if is_string {
-            let utf16_hint = result.search_type == SearchType::StringUtf16;
-            read_string_from_process(
-                app.state.pid as process_memory::Pid,
-                result.addr,
-                utf16_hint,
-                if utf16_hint { string_len_chars * 2 } else { string_len },
-            )
-            .unwrap_or_default()
-        } else if let Some(byte_len) = result.search_type.fixed_byte_length()
-            && let Ok(handle) = (app.state.pid as process_memory::Pid).try_into_process_handle()
-        {
-            if let Ok(buf) = copy_address(result.addr, byte_len, &handle) {
-                let val = SearchValue(result.search_type, buf);
-                val.to_string()
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        };
-        if is_string {
-            row![
-                container(text(format!("0x{:X}", result.addr)).size(14)).width(Length::Fixed(120.0)),
-                container(text(value_text)).width(Length::Fill),
-                button(text(fl!(crate::LANGUAGE_LOADER, "edit-button"))).on_press(Message::OpenEditor(i)),
-                button(text(fl!(crate::LANGUAGE_LOADER, "remove-button"))).on_press(Message::RemoveResult(i))
-            ]
-        } else {
-            let is_frozen = current_search_context.freezed_addresses.contains(&result.addr);
-            row![
-                container(text(format!("0x{:X}", result.addr)).size(14)).width(Length::Fixed(120.0)),
-                {
-                    let input = text_input("", &value_text).width(Length::Fixed(120.0));
-                    if is_frozen {
-                        input // frozen: no on_input handler = disabled
-                    } else {
-                        input.on_input(move |v| Message::ResultValueChanged(i, v))
-                    }
-                },
-                if show_search_types {
-                    container(text(result.search_type.get_description_text()).size(14)).width(Length::Fixed(120.0))
-                } else {
-                    container(text("")).width(Length::Fixed(0.0))
-                },
-                checkbox(current_search_context.freezed_addresses.contains(&result.addr))
-                    .on_toggle(move |_| Message::ToggleFreeze(i))
-                    .size(14)
-                    .width(Length::Fill),
-                button(text(fl!(crate::LANGUAGE_LOADER, "edit-button"))).on_press(Message::OpenEditor(i)),
-                button(text(fl!(crate::LANGUAGE_LOADER, "remove-button"))).on_press(Message::RemoveResult(i))
-            ]
-        }
-        .padding(2)
-        .spacing(5)
-        .align_y(alignment::Alignment::Center)
-        .into()
-    });
-
     let mut table_content = vec![
         container(table_header)
             .style(|theme: &icy_ui::Theme| container::Style {
@@ -369,53 +302,79 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
             .into(),
     ];
 
-    // Pagination controls (only when more than one page exists)
-    if max_page > 0 {
-        let page_human = current_page + 1;
-        let pages_human = max_page + 1;
-        let from_human = page_offset + 1;
-        let label = fl!(
-            crate::LANGUAGE_LOADER,
-            "results-page-indicator",
-            page = page_human,
-            pages = pages_human,
-            from = from_human,
-            to = page_end,
-            total = total_results
-        )
-        .chars()
-        .filter(|c| c.is_ascii())
-        .collect::<String>();
-
-        let prev_disabled = current_page == 0;
-        let next_disabled = current_page >= max_page;
-        let mut first_btn = button(text("<<"));
-        let mut prev_btn = button(text("<"));
-        let mut next_btn = button(text(">"));
-        let mut last_btn = button(text(">>"));
-        if !prev_disabled {
-            first_btn = first_btn.on_press(Message::FirstResultPage);
-            prev_btn = prev_btn.on_press(Message::PrevResultPage);
-        }
-        if !next_disabled {
-            next_btn = next_btn.on_press(Message::NextResultPage);
-            last_btn = last_btn.on_press(Message::LastResultPage);
-        }
-
-        table_content.push(
-            container(
-                row![first_btn, prev_btn, text(label).size(12), next_btn, last_btn]
-                    .spacing(5)
-                    .align_y(alignment::Alignment::Center),
-            )
-            .padding(5)
-            .into(),
-        );
-    }
-
     table_content.push(
-        scrollable(column(table_rows.collect::<Vec<Element<'_, Message>>>()).spacing(5).padding(5))
+        scroll_area()
             .height(Length::FillPortion(1))
+            .show_rows(RESULT_ROW_HEIGHT, total_results, move |visible_range| {
+                column(
+                    visible_range
+                        .map(|i| {
+                            let result = &results[i];
+                            let value_text = if is_string {
+                                let utf16_hint = result.search_type == SearchType::StringUtf16;
+                                read_string_from_process(
+                                    app.state.pid as process_memory::Pid,
+                                    result.addr,
+                                    utf16_hint,
+                                    if utf16_hint { string_len_chars * 2 } else { string_len },
+                                )
+                                .unwrap_or_default()
+                            } else if let Some(byte_len) = result.search_type.fixed_byte_length()
+                                && let Ok(handle) = (app.state.pid as process_memory::Pid).try_into_process_handle()
+                            {
+                                if let Ok(buf) = copy_address(result.addr, byte_len, &handle) {
+                                    let val = SearchValue(result.search_type, buf);
+                                    val.to_string()
+                                } else {
+                                    String::new()
+                                }
+                            } else {
+                                String::new()
+                            };
+                            if is_string {
+                                row![
+                                    container(text(format!("0x{:X}", result.addr)).size(14)).width(Length::Fixed(120.0)),
+                                    container(text(value_text)).width(Length::Fill),
+                                    button(text(fl!(crate::LANGUAGE_LOADER, "edit-button"))).on_press(Message::OpenEditor(i)),
+                                    button(text(fl!(crate::LANGUAGE_LOADER, "remove-button"))).on_press(Message::RemoveResult(i))
+                                ]
+                            } else {
+                                let is_frozen = current_search_context.freezed_addresses.contains(&result.addr);
+                                row![
+                                    container(text(format!("0x{:X}", result.addr)).size(14)).width(Length::Fixed(120.0)),
+                                    {
+                                        let input = text_input("", &value_text).width(Length::Fixed(120.0));
+                                        if is_frozen {
+                                            input // frozen: no on_input handler = disabled
+                                        } else {
+                                            input.on_input(move |v| Message::ResultValueChanged(i, v))
+                                        }
+                                    },
+                                    if show_search_types {
+                                        container(text(result.search_type.get_description_text()).size(14)).width(Length::Fixed(120.0))
+                                    } else {
+                                        container(text("")).width(Length::Fixed(0.0))
+                                    },
+                                    checkbox(current_search_context.freezed_addresses.contains(&result.addr))
+                                        .on_toggle(move |_| Message::ToggleFreeze(i))
+                                        .size(14)
+                                        .width(Length::Fill),
+                                    button(text(fl!(crate::LANGUAGE_LOADER, "edit-button"))).on_press(Message::OpenEditor(i)),
+                                    button(text(fl!(crate::LANGUAGE_LOADER, "remove-button"))).on_press(Message::RemoveResult(i))
+                                ]
+                            }
+                            .height(RESULT_ROW_HEIGHT)
+                            .padding(2)
+                            .spacing(5)
+                            .align_y(alignment::Alignment::Center)
+                            .into()
+                        })
+                        .collect::<Vec<Element<'_, Message>>>(),
+                )
+                .spacing(5)
+                .padding(5)
+                .into()
+            })
             .into(),
     );
 

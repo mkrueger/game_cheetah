@@ -11,7 +11,7 @@ A robustness, performance, and UX release.
 
 ### Added
 
-- Result table is now paginated (200 rows per page) with First / Prev / Next / Last navigation and a `Page x/y (a-b of total)` indicator. Replaces the previous hard cap of 1000 visible results.
+- Result table now uses a virtual row renderer, so only visible rows are laid out instead of prebuilding every result row. Replaces the previous hard cap of 1000 visible results without requiring pagination.
 - Process selection list now defaults to sorting by memory size, descending. Users can still click any column header to override.
 - Attach now probes the target process and surfaces a platform-specific hint when access is denied (Linux: `kernel.yama.ptrace_scope`; macOS: `task_for_pid` entitlements; Windows: Administrator / protected processes).
 - Process exit / PID recycling detection. The engine captures the target's start time at attach and refuses to keep operating against a recycled PID, so the freeze loop can no longer write into an unrelated process when the target restarts.
