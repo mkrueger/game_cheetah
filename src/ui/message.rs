@@ -47,6 +47,7 @@ pub enum Message {
     MemoryEditorEndEdit,
     MemoryEditorInspectorValueChanged(InspectorValueKind, String),
     MemoryEditorInspectorValueSubmit(InspectorValueKind),
+    MemoryEditorTick,
     SortProcesses(ProcessSortColumn),
 
     UnknownSearchDecrease,

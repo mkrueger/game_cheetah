@@ -405,7 +405,7 @@ impl App {
                         match self.memory_editor.initialize(self.state.pid, result.addr, result.search_type) {
                             Ok(()) => {
                                 self.app_state = AppState::MemoryEditor;
-                                return self.memory_editor.snap_to_cursor();
+                                return Task::batch([self.memory_editor.snap_to_cursor(), Task::done(Message::MemoryEditorTick)]);
                             }
                             Err(err) => self.state.error_text = err,
                         }
@@ -415,6 +415,7 @@ impl App {
             }
             Message::CloseMemoryEditor => {
                 self.app_state = AppState::InProcess;
+                self.memory_editor.reset_change_tracker();
                 Task::none()
             }
             Message::MemoryEditorAddressChanged(text) => {
@@ -518,6 +519,18 @@ impl App {
             Message::MemoryEditorScrolled(viewport) => {
                 self.memory_editor.set_viewport(viewport);
                 Task::none()
+            }
+            Message::MemoryEditorTick => {
+                if matches!(self.app_state, AppState::MemoryEditor) {
+                    icy_ui::Task::perform(
+                        async {
+                            sleep(super::memory_editor::TICK_INTERVAL);
+                        },
+                        |_| Message::MemoryEditorTick,
+                    )
+                } else {
+                    Task::none()
+                }
             }
             Message::SortProcesses(column) => {
                 if self.process_sort_column == column {
