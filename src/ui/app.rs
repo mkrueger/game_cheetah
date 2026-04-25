@@ -452,11 +452,16 @@ impl App {
 
             Message::MemoryEditorJumpToAddress => {
                 // Parse the address from the text input
-                let text = self.memory_editor.address_text.trim();
-                let text = text.strip_prefix("0x").unwrap_or(text);
-
-                if let Ok(new_address) = u64::from_str_radix(text, 16) {
-                    self.state.edit_address = new_address as usize;
+                let raw = self.memory_editor.address_text.trim();
+                let stripped = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")).unwrap_or(raw);
+                match u64::from_str_radix(stripped, 16) {
+                    Ok(new_address) => {
+                        self.state.edit_address = new_address as usize;
+                        self.state.error_text.clear();
+                    }
+                    Err(err) => {
+                        self.state.error_text = format!("Invalid address '{raw}': {err}");
+                    }
                 }
                 Task::none()
             }

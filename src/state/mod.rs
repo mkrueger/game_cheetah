@@ -503,17 +503,28 @@ impl GameCheetahEngine {
         // are reported once, up front, rather than spamming stderr per region.
         type GuessNeedles = Vec<(SearchType, Vec<u8>)>;
         let guess_needles: Option<Arc<GuessNeedles>> = if matches!(search_data.0, SearchType::Guess) {
-            let value_text = String::from_utf8(search_data.1.clone()).unwrap_or_default();
-            let mut needles: GuessNeedles = Vec::with_capacity(3);
-            for search_type in [SearchType::Int, SearchType::Float, SearchType::Double] {
-                match search_type.from_string(&value_text) {
-                    Ok(typed_value) => needles.push((search_type, typed_value.1)),
-                    Err(e) => {
-                        eprintln!("Failed to parse typed value for {search_type}: {e}");
+            // The Guess payload is the user-typed search string stored as UTF-8
+            // bytes by `SearchType::from_string`. If the bytes are somehow not
+            // valid UTF-8 we skip Guess parsing and log it rather than running
+            // the scan with an empty needle list silently.
+            match std::str::from_utf8(&search_data.1) {
+                Ok(value_text) => {
+                    let mut needles: GuessNeedles = Vec::with_capacity(3);
+                    for search_type in [SearchType::Int, SearchType::Float, SearchType::Double] {
+                        match search_type.from_string(value_text) {
+                            Ok(typed_value) => needles.push((search_type, typed_value.1)),
+                            Err(e) => {
+                                eprintln!("Failed to parse typed value for {search_type}: {e}");
+                            }
+                        }
                     }
+                    Some(Arc::new(needles))
+                }
+                Err(e) => {
+                    eprintln!("Guess search payload was not valid UTF-8: {e}");
+                    Some(Arc::new(GuessNeedles::new()))
                 }
             }
-            Some(Arc::new(needles))
         } else {
             None
         };
