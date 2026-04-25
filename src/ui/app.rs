@@ -1,8 +1,4 @@
-use std::{
-    sync::atomic::Ordering,
-    thread::sleep,
-    time::{Duration, SystemTime},
-};
+use std::{sync::atomic::Ordering, thread::sleep, time::Duration};
 
 use i18n_embed_fl::fl;
 use icy_ui::{
@@ -52,7 +48,8 @@ impl App {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
-        if self.app_state == AppState::ProcessSelection && SystemTime::now().duration_since(self.state.last_process_update).unwrap().as_millis() > 500 {
+        let should_update_processes = self.state.last_process_update.elapsed().map_or(true, |elapsed| elapsed.as_millis() > 500);
+        if self.app_state == AppState::ProcessSelection && should_update_processes {
             self.state.update_process_data();
         }
         // Check and update search modes for all searches
