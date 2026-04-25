@@ -3,19 +3,12 @@ use icy_ui::{
     border::Radius,
     widget::{Id, operation, rule, scrollable::Viewport, text_input},
 };
+use proc_maps::get_process_maps;
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 
 use crate::{DIALOG_PADDING, SearchType, app::App, message::Message};
 
 pub const BYTES_PER_ROW: usize = 16;
-/// Total navigable rows from the current window base address. The view is
-/// virtualized so only the visible rows are laid out and read from process
-/// memory; the remaining rows are just an empty scroll range.
-///
-/// 2^20 rows × 16 B = 16 MB navigable. The focus address is centered in this
-/// window so the user can freely scroll both up (to lower addresses) and down
-/// from the search hit.
-pub const WINDOW_ROWS: usize = 1 << 20;
 pub const ROW_HEIGHT: f32 = 22.0;
 pub const PAGE_ROWS: usize = 16;
 
@@ -39,12 +32,49 @@ pub enum InspectorValueKind {
     F64,
 }
 
+#[derive(Debug, Clone)]
+struct MemoryRegion {
+    start: usize,
+    size: usize,
+    row_start: usize,
+    row_count: usize,
+    readable: bool,
+    writable: bool,
+    executable: bool,
+    name: String,
+}
+
+impl MemoryRegion {
+    fn end(&self) -> usize {
+        self.start.saturating_add(self.size)
+    }
+
+    fn contains_address(&self, address: usize) -> bool {
+        address >= self.start && address < self.end()
+    }
+
+    fn contains_row(&self, row: usize) -> bool {
+        row >= self.row_start && row < self.row_start + self.row_count
+    }
+
+    fn row_address(&self, row: usize) -> usize {
+        self.start.saturating_add((row - self.row_start) * BYTES_PER_ROW)
+    }
+
+    fn permissions(&self) -> String {
+        format!(
+            "{}{}{}",
+            if self.readable { 'r' } else { '-' },
+            if self.writable { 'w' } else { '-' },
+            if self.executable { 'x' } else { '-' },
+        )
+    }
+}
+
 #[derive(Default)]
 pub struct MemoryEditor {
     pub address_text: String,
-    /// Address mapped to row 0 of the virtualized window. Centered around the
-    /// focus address so the user can scroll both up and down.
-    base_address: usize,
+    regions: Vec<MemoryRegion>,
     cursor_row: usize,
     cursor_col: usize,
     cursor_nibble: usize, // 0 = high nibble, 1 = low nibble
@@ -65,25 +95,111 @@ impl MemoryEditor {
         self.cursor_row
     }
 
-    pub fn base_address(&self) -> usize {
-        self.base_address
+    fn total_rows(&self) -> usize {
+        self.regions.last().map_or(1, |region| region.row_start + region.row_count).max(1)
+    }
+
+    fn region_for_row_in(regions: &[MemoryRegion], row: usize) -> Option<&MemoryRegion> {
+        regions.iter().find(|region| region.contains_row(row))
+    }
+
+    fn region_for_row(&self, row: usize) -> Option<&MemoryRegion> {
+        Self::region_for_row_in(&self.regions, row)
+    }
+
+    pub fn address_for_offset(&self, offset: usize) -> Option<usize> {
+        let row = offset / BYTES_PER_ROW;
+        let col = offset % BYTES_PER_ROW;
+        let region = self.region_for_row(row)?;
+        let address = region.row_address(row).saturating_add(col);
+        (address < region.end()).then_some(address)
     }
 
     pub fn set_viewport(&mut self, viewport: Viewport) {
         self.viewport = Some(viewport);
     }
 
-    /// Centers the navigable window on the given focus address and places the
-    /// cursor on it.
-    pub fn focus_on(&mut self, focus_addr: usize) {
-        let half = (WINDOW_ROWS / 2) * BYTES_PER_ROW;
-        self.base_address = focus_addr.saturating_sub(half);
-        let row = (focus_addr - self.base_address) / BYTES_PER_ROW;
-        self.cursor_row = row.min(WINDOW_ROWS - 1);
-        self.cursor_col = 0;
+    fn should_skip_region(map: &proc_maps::MapRange) -> bool {
+        if map.size() == 0 || !map.is_read() {
+            return true;
+        }
+
+        if map.start() == 0xffffffffff600000 || map.start() > 0x7fffffffffff {
+            return true;
+        }
+
+        if let Some(file_name) = map.filename() {
+            let file_str = file_name.to_string_lossy();
+            if file_str == "[vvar]" || file_str == "[vdso]" || file_str == "[vsyscall]" {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    pub fn refresh_regions(&mut self, pid: process_memory::Pid) -> Result<(), String> {
+        let mut maps = get_process_maps(pid).map_err(|err| format!("Failed to read memory map of PID {pid}: {err}"))?;
+        maps.sort_by_key(proc_maps::MapRange::start);
+        let mut regions = Vec::new();
+        let mut row_start = 0usize;
+
+        for map in maps {
+            if Self::should_skip_region(&map) {
+                continue;
+            }
+
+            let row_count = map.size().div_ceil(BYTES_PER_ROW).max(1);
+            let name = map
+                .filename()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "anonymous".to_string());
+
+            regions.push(MemoryRegion {
+                start: map.start(),
+                size: map.size(),
+                row_start,
+                row_count,
+                readable: map.is_read(),
+                writable: map.is_write(),
+                executable: map.is_exec(),
+                name,
+            });
+            row_start = row_start.saturating_add(row_count);
+        }
+
+        if regions.is_empty() {
+            return Err(format!("PID {pid} reports no readable memory regions"));
+        }
+
+        self.regions = regions;
+        Ok(())
+    }
+
+    /// Places the cursor on `focus_addr` inside the current region map. If the
+    /// exact address is not mapped, jumps to the nearest following region (or
+    /// the last available region when the address is past the map).
+    pub fn focus_on(&mut self, focus_addr: usize) -> Result<(), String> {
+        let Some((row, col)) = self.address_to_cursor(focus_addr) else {
+            return Err(format!("0x{focus_addr:X} is not in a readable memory region"));
+        };
+
+        self.cursor_row = row;
+        self.cursor_col = col;
         self.cursor_nibble = 0;
         self.viewport = None;
         self.inspector_edit = None;
+        Ok(())
+    }
+
+    fn address_to_cursor(&self, address: usize) -> Option<(usize, usize)> {
+        if let Some(region) = self.regions.iter().find(|region| region.contains_address(address)) {
+            let offset = address - region.start;
+            return Some((region.row_start + offset / BYTES_PER_ROW, offset % BYTES_PER_ROW));
+        }
+
+        let nearest = self.regions.iter().find(|region| region.start > address).or_else(|| self.regions.last())?;
+        Some((nearest.row_start, 0))
     }
 
     /// Animated scroll task that places the cursor row a few lines below the
@@ -97,8 +213,10 @@ impl MemoryEditor {
         operation::scroll_to(scroll_id(), operation::AbsoluteOffset { x: None, y: Some(target_y) })
     }
 
-    fn cursor_address(&self) -> usize {
-        self.base_address.saturating_add(self.cursor_row * BYTES_PER_ROW + self.cursor_col)
+    fn cursor_address(&self) -> Option<usize> {
+        let region = self.region_for_row(self.cursor_row)?;
+        let address = region.row_address(self.cursor_row).saturating_add(self.cursor_col);
+        (address < region.end()).then_some(address)
     }
 
     pub fn set_inspector_value_text(&mut self, kind: InspectorValueKind, value: String) {
@@ -176,7 +294,9 @@ impl MemoryEditor {
             return Ok(());
         }
 
-        let address = self.cursor_address();
+        let Some(address) = self.cursor_address() else {
+            return Err("Cursor is not in a readable memory region".to_string());
+        };
         let bytes = Self::inspector_bytes(kind, input)?;
         let handle = pid.try_into_process_handle().map_err(|e| format!("Failed to attach to process: {e}"))?;
         handle.put_address(address, &bytes).map_err(|e| format!("Failed to write 0x{address:X}: {e}"))?;
@@ -230,13 +350,14 @@ impl MemoryEditor {
         const ASCII_GROUP_WIDTH: f32 = ASCII_CELL_WIDTH * 8.0;
         const ASCII_BLOCK_WIDTH: f32 = ASCII_GROUP_WIDTH * 2.0 + ASCII_GROUP_GAP;
 
-        let address = self.base_address;
         let pid = app.state.pid;
         let highlight_start = self.editor_initial_address;
         let highlight_end = highlight_start + self.editor_initial_size;
         let cursor_row = self.cursor_row;
         let cursor_col = self.cursor_col;
         let cursor_nibble = self.cursor_nibble;
+        let regions = self.regions.clone();
+        let total_rows = self.total_rows();
 
         // ---- Header -----------------------------------------------------------
         // Theming model:
@@ -290,22 +411,19 @@ impl MemoryEditor {
         let memory_view = scroll_area()
             .id(scroll_id())
             .height(Length::FillPortion(3))
-            .show_rows(ROW_HEIGHT, WINDOW_ROWS, move |range| {
+            .show_rows(ROW_HEIGHT, total_rows, move |range| {
                 let range_start = range.start;
                 let range_end = range.end;
-                let row_count = range_end.saturating_sub(range_start);
-                let mut memory = vec![0u8; row_count * BYTES_PER_ROW];
-                let start_address = address.saturating_add(range_start * BYTES_PER_ROW);
-                if let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle()
-                    && let Ok(buf) = copy_address(start_address, memory.len(), &handle)
-                {
-                    let n = buf.len().min(memory.len());
-                    memory[..n].copy_from_slice(&buf[..n]);
-                }
+                let handle = (pid as process_memory::Pid).try_into_process_handle().ok();
 
-                let make_hex_cell = |absolute_row: usize, col_idx: usize, byte: u8| -> Element<'_, Message> {
+                let make_hex_cell = |absolute_row: usize, col_idx: usize, byte: u8, current_address: usize, is_valid: bool| -> Element<'_, Message> {
+                    if !is_valid {
+                        return container(text("  ").size(14).font(icy_ui::Font::MONOSPACE))
+                            .width(Length::Fixed(HEX_CELL_WIDTH))
+                            .into();
+                    }
+
                     let is_selected_byte = cursor_row == absolute_row && cursor_col == col_idx;
-                    let current_address = address.saturating_add(absolute_row * BYTES_PER_ROW + col_idx);
                     let is_initial = current_address >= highlight_start && current_address < highlight_end;
                     let is_zero = byte == 0;
 
@@ -365,12 +483,17 @@ impl MemoryEditor {
                     .into()
                 };
 
-                let make_ascii_cell = |absolute_row: usize, i: usize, byte: u8| -> Element<'_, Message> {
+                let make_ascii_cell = |absolute_row: usize, i: usize, byte: u8, current_address: usize, is_valid: bool| -> Element<'_, Message> {
+                    if !is_valid {
+                        return container(text(" ").size(14).font(icy_ui::Font::MONOSPACE))
+                            .width(Length::Fixed(ASCII_CELL_WIDTH))
+                            .into();
+                    }
+
                     let c = byte as char;
                     let is_printable = c.is_ascii_graphic() || c == ' ';
                     let display_char = if is_printable { c.to_string() } else { "·".to_string() };
                     let is_selected = cursor_row == absolute_row && cursor_col == i;
-                    let current_address = address.saturating_add(absolute_row * BYTES_PER_ROW + i);
                     let is_initial = current_address >= highlight_start && current_address < highlight_end;
 
                     container(
@@ -410,20 +533,35 @@ impl MemoryEditor {
                 column(
                     (range_start..range_end)
                         .map(|absolute_row| {
-                            let local_idx = absolute_row - range_start;
-                            let row_offset = local_idx * BYTES_PER_ROW;
-                            let row_bytes = &memory[row_offset..row_offset + BYTES_PER_ROW];
-                            let row_addr = address.saturating_add(absolute_row * BYTES_PER_ROW);
+                            let Some(region) = Self::region_for_row_in(&regions, absolute_row) else {
+                                return container(text("No readable memory regions").size(14))
+                                    .height(Length::Fixed(ROW_HEIGHT))
+                                    .padding([0, 16])
+                                    .into();
+                            };
+
+                            let row_addr = region.row_address(absolute_row);
+                            let bytes_in_region = region.end().saturating_sub(row_addr).min(BYTES_PER_ROW);
+                            let mut row_bytes = [0u8; BYTES_PER_ROW];
+                            if bytes_in_region > 0
+                                && let Some(handle) = &handle
+                                && let Ok(buf) = copy_address(row_addr, bytes_in_region, handle)
+                            {
+                                let n = buf.len().min(bytes_in_region);
+                                row_bytes[..n].copy_from_slice(&buf[..n]);
+                            }
                             let zebra = absolute_row % 2 == 1;
                             let is_cursor_row = cursor_row == absolute_row;
 
                             let mut hex_left = row![].spacing(0);
                             let mut hex_right = row![].spacing(0);
                             for (col_idx, byte) in row_bytes.iter().enumerate().take(8) {
-                                hex_left = hex_left.push(make_hex_cell(absolute_row, col_idx, *byte));
+                                let cell_addr = row_addr.saturating_add(col_idx);
+                                hex_left = hex_left.push(make_hex_cell(absolute_row, col_idx, *byte, cell_addr, col_idx < bytes_in_region));
                             }
                             for (col_idx, byte) in row_bytes.iter().enumerate().skip(8) {
-                                hex_right = hex_right.push(make_hex_cell(absolute_row, col_idx, *byte));
+                                let cell_addr = row_addr.saturating_add(col_idx);
+                                hex_right = hex_right.push(make_hex_cell(absolute_row, col_idx, *byte, cell_addr, col_idx < bytes_in_region));
                             }
                             let hex_block = row![
                                 container(hex_left).width(Length::Fixed(HEX_GROUP_WIDTH)),
@@ -434,10 +572,12 @@ impl MemoryEditor {
                             let mut ascii_left = row![].spacing(0);
                             let mut ascii_right = row![].spacing(0);
                             for (i, byte) in row_bytes.iter().enumerate().take(8) {
-                                ascii_left = ascii_left.push(make_ascii_cell(absolute_row, i, *byte));
+                                let cell_addr = row_addr.saturating_add(i);
+                                ascii_left = ascii_left.push(make_ascii_cell(absolute_row, i, *byte, cell_addr, i < bytes_in_region));
                             }
                             for (i, byte) in row_bytes.iter().enumerate().skip(8) {
-                                ascii_right = ascii_right.push(make_ascii_cell(absolute_row, i, *byte));
+                                let cell_addr = row_addr.saturating_add(i);
+                                ascii_right = ascii_right.push(make_ascii_cell(absolute_row, i, *byte, cell_addr, i < bytes_in_region));
                             }
                             let ascii_block = row![
                                 container(ascii_left).width(Length::Fixed(ASCII_GROUP_WIDTH)),
@@ -496,10 +636,12 @@ impl MemoryEditor {
 
         // ---- Info area --------------------------------------------------------
         let info_area = {
-            let cursor_address = address.saturating_add(cursor_row * BYTES_PER_ROW + cursor_col);
+            let cursor_address = self.cursor_address();
+            let cursor_region = self.region_for_row(cursor_row);
 
             let mut value_bytes = [0u8; 8];
-            let bytes_available = if let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle()
+            let bytes_available = if let Some(cursor_address) = cursor_address
+                && let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle()
                 && let Ok(buf) = copy_address(cursor_address, 8, &handle)
             {
                 let n = buf.len().min(8);
@@ -620,11 +762,17 @@ impl MemoryEditor {
                     .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
                         color: Some(theme.secondary.on.scale_alpha(0.6)),
                     }),
-                text(format!("0x{cursor_address:016X}"))
+                text(cursor_address.map_or_else(|| "—".to_string(), |address| format!("0x{address:016X}")))
                     .size(14)
                     .font(icy_ui::Font::MONOSPACE)
                     .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
                         color: Some(theme.accent.base),
+                    }),
+                text(cursor_region.map_or_else(String::new, |region| format!("{}  {}", region.permissions(), region.name)))
+                    .size(12)
+                    .font(icy_ui::Font::MONOSPACE)
+                    .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                        color: Some(theme.secondary.on.scale_alpha(0.55)),
                     }),
             ]
             .spacing(10)
@@ -732,7 +880,7 @@ impl MemoryEditor {
         .into()
     }
 
-    pub fn initialize(&mut self, addr: usize, search_type: SearchType) {
+    pub fn initialize(&mut self, pid: process_memory::Pid, addr: usize, search_type: SearchType) -> Result<(), String> {
         self.address_text = format!("{addr:X}");
         self.editor_initial_address = addr;
         self.editor_initial_size = if search_type == SearchType::String || search_type == SearchType::StringUtf16 {
@@ -741,7 +889,8 @@ impl MemoryEditor {
             search_type.fixed_byte_length().unwrap_or(1)
         };
 
-        self.focus_on(addr);
+        self.refresh_regions(pid)?;
+        self.focus_on(addr)
     }
 
     /// Moves the cursor within the virtualized window. Returns `true` when the
@@ -764,7 +913,7 @@ impl MemoryEditor {
             return false;
         }
 
-        let new_row = (self.cursor_row as i32 + row_delta).clamp(0, WINDOW_ROWS as i32 - 1) as usize;
+        let new_row = (self.cursor_row as i32 + row_delta).clamp(0, self.total_rows() as i32 - 1) as usize;
         let changed = new_row != self.cursor_row;
         self.cursor_row = new_row;
         if changed {
@@ -774,7 +923,7 @@ impl MemoryEditor {
     }
 
     pub fn set_cursor(&mut self, row: usize, col: usize) {
-        self.cursor_row = row.min(WINDOW_ROWS - 1);
+        self.cursor_row = row.min(self.total_rows() - 1);
         self.cursor_col = col.min(BYTES_PER_ROW - 1);
         self.cursor_nibble = 0;
         self.inspector_edit = None;
@@ -788,8 +937,9 @@ impl MemoryEditor {
     }
 
     pub fn edit_hex(&mut self, pid: process_memory::Pid, hex_digit: u8) -> Result<(), String> {
-        let offset = self.cursor_row * BYTES_PER_ROW + self.cursor_col;
-        let address = self.base_address.saturating_add(offset);
+        let Some(address) = self.cursor_address() else {
+            return Err("Cursor is not in a readable memory region".to_string());
+        };
         let handle = pid.try_into_process_handle().map_err(|e| format!("Failed to attach to process: {e}"))?;
         let buf = copy_address(address, 1, &handle).map_err(|e| format!("Failed to read 0x{address:X}: {e}"))?;
         let current_byte = buf[0];
@@ -809,7 +959,7 @@ impl MemoryEditor {
             self.cursor_col += 1;
             if self.cursor_col >= BYTES_PER_ROW {
                 self.cursor_col = 0;
-                self.cursor_row = (self.cursor_row + 1).min(WINDOW_ROWS - 1);
+                self.cursor_row = (self.cursor_row + 1).min(self.total_rows() - 1);
             }
         }
         self.inspector_edit = None;

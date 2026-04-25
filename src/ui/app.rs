@@ -402,9 +402,13 @@ impl App {
 
                     if index < results.len() {
                         let result = &results[index];
-                        self.memory_editor.initialize(result.addr, result.search_type);
-                        self.app_state = AppState::MemoryEditor;
-                        return self.memory_editor.snap_to_cursor();
+                        match self.memory_editor.initialize(self.state.pid, result.addr, result.search_type) {
+                            Ok(()) => {
+                                self.app_state = AppState::MemoryEditor;
+                                return self.memory_editor.snap_to_cursor();
+                            }
+                            Err(err) => self.state.error_text = err,
+                        }
                     }
                 }
                 Task::none()
@@ -424,9 +428,17 @@ impl App {
                 let stripped = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")).unwrap_or(raw);
                 match u64::from_str_radix(stripped, 16) {
                     Ok(new_address) => {
-                        self.memory_editor.focus_on(new_address as usize);
-                        self.state.error_text.clear();
-                        return self.memory_editor.snap_to_cursor();
+                        match self
+                            .memory_editor
+                            .refresh_regions(self.state.pid)
+                            .and_then(|()| self.memory_editor.focus_on(new_address as usize))
+                        {
+                            Ok(()) => {
+                                self.state.error_text.clear();
+                                return self.memory_editor.snap_to_cursor();
+                            }
+                            Err(err) => self.state.error_text = err,
+                        }
                     }
                     Err(err) => {
                         self.state.error_text = format!("Invalid address '{raw}': {err}");
@@ -440,11 +452,10 @@ impl App {
                 if value.len() <= 2
                     && let Ok(byte_value) = u8::from_str_radix(&value, 16)
                     && let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle()
+                    && let Some(address) = self.memory_editor.address_for_offset(offset)
+                    && let Err(err) = handle.put_address(address, &[byte_value])
                 {
-                    let address = self.memory_editor.base_address() + offset;
-                    if let Err(err) = handle.put_address(address, &[byte_value]) {
-                        self.state.error_text = format!("Failed to write 0x{address:X}: {err}");
-                    }
+                    self.state.error_text = format!("Failed to write 0x{address:X}: {err}");
                 }
                 Task::none()
             }
