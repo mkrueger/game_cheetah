@@ -11,7 +11,7 @@ pub struct ProcessMemReader {
 impl ProcessMemReader {
     pub fn new(pid: process_memory::Pid) -> std::io::Result<Self> {
         use std::fs::OpenOptions;
-        let path = format!("/proc/{}/mem", pid);
+        let path = format!("/proc/{pid}/mem");
         let file = OpenOptions::new().read(true).open(&path)?;
         Ok(Self { file })
     }
@@ -97,7 +97,7 @@ pub(super) fn fast_read_memory(pid: process_memory::Pid, address: usize, size: u
     }
 
     // Fallback to /proc/[pid]/mem with pread
-    let path = format!("/proc/{}/mem", pid);
+    let path = format!("/proc/{pid}/mem");
     if let Ok(file) = OpenOptions::new().read(true).open(&path) {
         let mut buffer = vec![0u8; size];
         let fd = file.as_raw_fd();

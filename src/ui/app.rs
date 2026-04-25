@@ -74,19 +74,19 @@ impl App {
             }
             Message::Discuss => {
                 if let Err(err) = webbrowser::open("https://github.com/mkrueger/game_cheetah/discussions") {
-                    println!("Failed to open discussion page: {}", err);
+                    println!("Failed to open discussion page: {err}");
                 }
                 Task::none()
             }
             Message::ReportBug => {
                 if let Err(err) = webbrowser::open("https://github.com/mkrueger/game_cheetah/issues/new") {
-                    println!("Failed to open bug report page: {}", err);
+                    println!("Failed to open bug report page: {err}");
                 }
                 Task::none()
             }
             Message::OpenGitHub => {
                 if let Err(err) = webbrowser::open("https://github.com/mkrueger/game_cheetah") {
-                    println!("Failed to open GitHub page: {}", err);
+                    println!("Failed to open GitHub page: {err}");
                 }
                 Task::none()
             }
@@ -207,7 +207,7 @@ impl App {
                             }
                         }
                         Err(err) => {
-                            println!("Error parsing search value: {}", err);
+                            println!("Error parsing search value: {err}");
                         }
                     }
                 }
@@ -282,7 +282,7 @@ impl App {
                                 }
                             }
                             Err(err) => {
-                                self.state.error_text = format!("Invalid value '{}': {}", value_text, err);
+                                self.state.error_text = format!("Invalid value '{value_text}': {err}");
                             }
                         }
                     } else {
@@ -471,7 +471,7 @@ impl App {
                 {
                     let address = self.state.edit_address + offset;
                     if let Err(err) = handle.put_address(address, &[byte_value]) {
-                        self.state.error_text = format!("Failed to write 0x{:X}: {}", address, err);
+                        self.state.error_text = format!("Failed to write 0x{address:X}: {err}");
                     }
                 }
                 Task::none()
@@ -482,7 +482,7 @@ impl App {
                 let offset = (rows * BYTES_PER_ROW as i32) as isize;
                 let new_address = (self.state.edit_address as isize + offset).max(0) as usize;
                 self.state.edit_address = new_address;
-                self.memory_editor.address_text = format!("{:X}", new_address);
+                self.memory_editor.address_text = format!("{new_address:X}");
                 Task::none()
             }
 
@@ -492,7 +492,7 @@ impl App {
                 let page_size = BYTES_PER_ROW * ROWS_PER_PAGE;
                 let new_address = self.state.edit_address.saturating_sub(page_size);
                 self.state.edit_address = new_address;
-                self.memory_editor.address_text = format!("{:X}", new_address);
+                self.memory_editor.address_text = format!("{new_address:X}");
                 Task::none()
             }
 
@@ -502,7 +502,7 @@ impl App {
                 let page_size = BYTES_PER_ROW * ROWS_PER_PAGE;
                 let new_address = self.state.edit_address.saturating_add(page_size);
                 self.state.edit_address = new_address;
-                self.memory_editor.address_text = format!("{:X}", new_address);
+                self.memory_editor.address_text = format!("{new_address:X}");
                 Task::none()
             }
 

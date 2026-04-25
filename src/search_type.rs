@@ -70,27 +70,27 @@ impl SearchType {
     pub fn from_string(&self, txt: &str) -> Result<SearchValue, String> {
         match self {
             SearchType::Byte => {
-                let val = txt.parse::<u8>().map_err(|_| format!("Invalid byte value: {}", txt))?;
+                let val = txt.parse::<u8>().map_err(|_| format!("Invalid byte value: {txt}"))?;
                 Ok(SearchValue(*self, vec![val]))
             }
             SearchType::Short => {
-                let val = txt.parse::<i16>().map_err(|_| format!("Invalid short value: {}", txt))?;
+                let val = txt.parse::<i16>().map_err(|_| format!("Invalid short value: {txt}"))?;
                 Ok(SearchValue(*self, val.to_le_bytes().to_vec()))
             }
             SearchType::Int => {
-                let val = txt.parse::<i32>().map_err(|_| format!("Invalid int value: {}", txt))?;
+                let val = txt.parse::<i32>().map_err(|_| format!("Invalid int value: {txt}"))?;
                 Ok(SearchValue(*self, val.to_le_bytes().to_vec()))
             }
             SearchType::Int64 => {
-                let val = txt.parse::<i64>().map_err(|_| format!("Invalid int64 value: {}", txt))?;
+                let val = txt.parse::<i64>().map_err(|_| format!("Invalid int64 value: {txt}"))?;
                 Ok(SearchValue(*self, val.to_le_bytes().to_vec()))
             }
             SearchType::Float => {
-                let val = txt.parse::<f32>().map_err(|_| format!("Invalid float value: {}", txt))?;
+                let val = txt.parse::<f32>().map_err(|_| format!("Invalid float value: {txt}"))?;
                 Ok(SearchValue(*self, val.to_le_bytes().to_vec()))
             }
             SearchType::Double => {
-                let val = txt.parse::<f64>().map_err(|_| format!("Invalid double value: {}", txt))?;
+                let val = txt.parse::<f64>().map_err(|_| format!("Invalid double value: {txt}"))?;
                 Ok(SearchValue(*self, val.to_le_bytes().to_vec()))
             }
             SearchType::Guess => {
@@ -122,6 +122,6 @@ impl fmt::Display for SearchType {
             SearchType::Unknown => fl!(crate::LANGUAGE_LOADER, "unknown-value-item"),
             SearchType::String | SearchType::StringUtf16 => fl!(crate::LANGUAGE_LOADER, "string-value-item"),
         };
-        write!(f, "{}", text)
+        write!(f, "{text}")
     }
 }

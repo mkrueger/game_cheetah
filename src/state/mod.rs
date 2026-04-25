@@ -122,8 +122,7 @@ impl Default for GameCheetahEngine {
                                         *counter += 1;
                                         if *counter >= MAX_FREEZE_FAILURES {
                                             eprintln!(
-                                                "freeze: giving up on 0x{:X} after {} failures: {}",
-                                                addr, counter, err
+                                                "freeze: giving up on 0x{addr:X} after {counter} failures: {err}"
                                             );
                                             to_drop.push(*addr);
                                         }
@@ -689,7 +688,7 @@ impl GameCheetahEngine {
                 self.spawn_snapshot_capture(search_index, regions);
             }
             Err(e) => {
-                self.error_text = format!("Failed to get process maps: {}", e);
+                self.error_text = format!("Failed to get process maps: {e}");
                 // Set search complete even on error so UI doesn't get stuck
                 search_context.search_complete.store(true, Ordering::SeqCst);
             }

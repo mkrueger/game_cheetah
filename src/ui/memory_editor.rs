@@ -49,7 +49,7 @@ impl MemoryEditor {
                 let mut hex_headers = row![];
                 for i in 0..BYTES_PER_ROW {
                     hex_headers = hex_headers.push(
-                        container(text(format!("{:02X}", i)).size(14).font(icy_ui::Font::MONOSPACE))
+                        container(text(format!("{i:02X}")).size(14).font(icy_ui::Font::MONOSPACE))
                             .width(Length::Fixed(30.0))
                             .align_x(alignment::Alignment::Center),
                     );
@@ -84,7 +84,7 @@ impl MemoryEditor {
 
                 let hex_display = if is_selected_byte {
                     row![
-                        text(format!("{:X}", high_nibble))
+                        text(format!("{high_nibble:X}"))
                             .size(14)
                             .font(icy_ui::Font::MONOSPACE)
                             .style(move |theme: &icy_ui::Theme| {
@@ -98,7 +98,7 @@ impl MemoryEditor {
                                     }
                                 }
                             }),
-                        text(format!("{:X}", low_nibble))
+                        text(format!("{low_nibble:X}"))
                             .size(14)
                             .font(icy_ui::Font::MONOSPACE)
                             .style(move |theme: &icy_ui::Theme| {
@@ -116,8 +116,8 @@ impl MemoryEditor {
                     .spacing(0)
                 } else {
                     row![
-                        text(format!("{:X}", high_nibble)).size(14).font(icy_ui::Font::MONOSPACE),
-                        text(format!("{:X}", low_nibble)).size(14).font(icy_ui::Font::MONOSPACE),
+                        text(format!("{high_nibble:X}")).size(14).font(icy_ui::Font::MONOSPACE),
+                        text(format!("{low_nibble:X}")).size(14).font(icy_ui::Font::MONOSPACE),
                     ]
                     .spacing(0)
                 };
@@ -268,7 +268,7 @@ impl MemoryEditor {
 
             container(
                 column![
-                    row![text(format!("Cursor: 0x{:08X}", cursor_address)).size(14).font(icy_ui::Font::MONOSPACE),].spacing(20),
+                    row![text(format!("Cursor: 0x{cursor_address:08X}")).size(14).font(icy_ui::Font::MONOSPACE),].spacing(20),
                     row![
                         column![
                             text("Byte:").size(14).font(icy_ui::Font::MONOSPACE),
@@ -279,10 +279,10 @@ impl MemoryEditor {
                         .width(Length::Fixed(60.0))
                         .spacing(5),
                         column![
-                            text(format!("{}", byte_val)).size(14).font(icy_ui::Font::MONOSPACE),
-                            text(format!("{}", u16_val)).size(14).font(icy_ui::Font::MONOSPACE),
-                            text(format!("{}", u32_val)).size(14).font(icy_ui::Font::MONOSPACE),
-                            text(format!("{}", u64_val)).size(14).font(icy_ui::Font::MONOSPACE),
+                            text(format!("{byte_val}")).size(14).font(icy_ui::Font::MONOSPACE),
+                            text(format!("{u16_val}")).size(14).font(icy_ui::Font::MONOSPACE),
+                            text(format!("{u32_val}")).size(14).font(icy_ui::Font::MONOSPACE),
+                            text(format!("{u64_val}")).size(14).font(icy_ui::Font::MONOSPACE),
                         ]
                         .width(Length::Fixed(200.0))
                         .spacing(5),
@@ -301,19 +301,19 @@ impl MemoryEditor {
                                         "0.0".to_string()
                                     } else if abs_val >= 1e6 || abs_val <= 1e-3 {
                                         // Use scientific notation for very large or very small numbers
-                                        format!("{:.3e}", float_val)
+                                        format!("{float_val:.3e}")
                                     } else if abs_val >= 1000.0 {
                                         // For large numbers, show fewer decimal places
-                                        format!("{:.1}", float_val)
+                                        format!("{float_val:.1}")
                                     } else if abs_val >= 1.0 {
                                         // For medium numbers, show up to 3 decimal places
-                                        format!("{:.3}", float_val)
+                                        format!("{float_val:.3}")
                                     } else {
                                         // For small numbers, show up to 4 decimal places
-                                        format!("{:.4}", float_val)
+                                        format!("{float_val:.4}")
                                     }
                                 } else {
-                                    format!("{}", float_val)
+                                    format!("{float_val}")
                                 }
                             } else {
                                 "N/A".to_string()
@@ -328,19 +328,19 @@ impl MemoryEditor {
                                         "0.0".to_string()
                                     } else if abs_val >= 1e7 || abs_val <= 1e-4 {
                                         // Use scientific notation for very large or very small numbers
-                                        format!("{:.4e}", double_val)
+                                        format!("{double_val:.4e}")
                                     } else if abs_val >= 1000.0 {
                                         // For large numbers, show fewer decimal places
-                                        format!("{:.2}", double_val)
+                                        format!("{double_val:.2}")
                                     } else if abs_val >= 1.0 {
                                         // For medium numbers, show up to 4 decimal places
-                                        format!("{:.4}", double_val)
+                                        format!("{double_val:.4}")
                                     } else {
                                         // For small numbers, show up to 6 decimal places
-                                        format!("{:.6}", double_val)
+                                        format!("{double_val:.6}")
                                     }
                                 } else {
-                                    format!("{}", double_val)
+                                    format!("{double_val}")
                                 }
                             } else {
                                 "N/A".to_string()
@@ -412,7 +412,7 @@ impl MemoryEditor {
     }
 
     pub fn initialize(&mut self, addr: usize, search_type: SearchType) {
-        self.address_text = format!("{:X}", addr);
+        self.address_text = format!("{addr:X}");
         self.editor_initial_address = addr;
         self.editor_initial_size = if search_type == SearchType::String || search_type == SearchType::StringUtf16 {
             1
@@ -448,13 +448,13 @@ impl MemoryEditor {
                 // Cursor at top, scroll up
                 let new_address = edit_address.saturating_sub(BYTES_PER_ROW);
                 edit_address = new_address;
-                self.address_text = format!("{:X}", new_address);
+                self.address_text = format!("{new_address:X}");
                 self.cursor_row = 0;
             } else if new_row >= MAX_VISIBLE_ROWS as i32 {
                 // Cursor would go beyond visible area, scroll down
                 let new_address = edit_address.saturating_add(BYTES_PER_ROW);
                 edit_address = new_address;
-                self.address_text = format!("{:X}", new_address);
+                self.address_text = format!("{new_address:X}");
                 // Keep cursor at last visible row
                 self.cursor_row = MAX_VISIBLE_ROWS - 1;
             } else {

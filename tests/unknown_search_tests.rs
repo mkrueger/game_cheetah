@@ -197,7 +197,7 @@ fn unknown_compare_unsupported_type_returns_false() {
             UnknownComparison::Changed,
             UnknownComparison::Unchanged,
         ] {
-            assert!(!compare_values(&buf, &buf, ty, cmp), "{:?}/{:?} should be false", ty, cmp);
+            assert!(!compare_values(&buf, &buf, ty, cmp), "{ty:?}/{cmp:?} should be false");
         }
     }
 }

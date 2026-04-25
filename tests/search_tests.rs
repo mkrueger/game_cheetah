@@ -193,7 +193,7 @@ fn test_simd_search_performance() {
     let results = search_memory(&memory, &search_value, SearchType::Int, 0x10000000);
     let duration = start.elapsed();
 
-    println!("SIMD Int32 search took: {:?} for 1MB", duration);
+    println!("SIMD Int32 search took: {duration:?} for 1MB");
     assert_eq!(results.len(), 1024);
     assert!(duration.as_millis() < 100); // Should be fast
 }
@@ -216,7 +216,7 @@ fn test_simd_float_search_performance() {
     let results = search_memory(&memory, &search_value, SearchType::Float, 0x10000000);
     let duration = start.elapsed();
 
-    println!("SIMD Float32 search took: {:?} for 1MB", duration);
+    println!("SIMD Float32 search took: {duration:?} for 1MB");
     assert_eq!(results.len(), 1024);
     assert!(duration.as_millis() < 100);
 }
@@ -239,7 +239,7 @@ fn test_simd_short_search_performance() {
     let results = search_memory(&memory, &search_value, SearchType::Short, 0x10000000);
     let duration = start.elapsed();
 
-    println!("SIMD Int16 search took: {:?} for 1MB", duration);
+    println!("SIMD Int16 search took: {duration:?} for 1MB");
     assert_eq!(results.len(), 1024);
     assert!(duration.as_millis() < 100);
 }
@@ -262,7 +262,7 @@ fn test_simd_double_search_performance() {
     let results = search_memory(&memory, &search_value, SearchType::Double, 0x10000000);
     let duration = start.elapsed();
 
-    println!("SIMD Float64 search took: {:?} for 1MB", duration);
+    println!("SIMD Float64 search took: {duration:?} for 1MB");
     assert_eq!(results.len(), 1024);
     assert!(duration.as_millis() < 100);
 }
