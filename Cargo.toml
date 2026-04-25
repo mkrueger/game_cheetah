@@ -45,6 +45,10 @@ criterion = { version = "0.5", default-features = false, features = ["html_repor
 name = "search_scan"
 harness = false
 
+[[bench]]
+name = "search_regions"
+harness = false
+
 # Linux: libc for process_vm_readv
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
