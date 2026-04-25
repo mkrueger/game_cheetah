@@ -691,8 +691,15 @@ impl App {
     }
 
     pub fn subscription(&self) -> icy_ui::Subscription<Message> {
-        // Only subscribe to keyboard events when in memory editor mode
-        if matches!(self.app_state, AppState::MemoryEditor) {
+        // Periodic refresh while showing live result rows so the values
+        // re-read memory and update on screen.
+        let live_results_tick = if matches!(self.app_state, AppState::InProcess) {
+            icy_ui::time::every(Duration::from_millis(250)).map(|_| Message::Tick)
+        } else {
+            icy_ui::Subscription::none()
+        };
+
+        let keyboard_sub: icy_ui::Subscription<Message> = if matches!(self.app_state, AppState::MemoryEditor) {
             keyboard::listen().filter_map(|event| {
                 let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
                     return None;
@@ -770,6 +777,7 @@ impl App {
                     _ => None,
                 }
             })
-        }
+        };
+        icy_ui::Subscription::batch([live_results_tick, keyboard_sub])
     }
 }
