@@ -21,7 +21,24 @@
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use game_cheetah::{SearchType, UnknownComparison, compare_values, search_memory, search_string_in_memory};
+use game_cheetah::{SearchResult, SearchType, UnknownComparison, compare_values, search_memory, search_string_in_memory};
+
+/// Fold a result vector into a single value the optimiser cannot precompute.
+///
+/// `search_memory` returns `Vec<SearchResult>`. If the only observed output is
+/// `r.len()`, LLVM is free to elide the per-match `Vec::push` and just count
+/// hits, which – combined with inlining – can collapse a 16 MiB scan into a
+/// few nanoseconds and produce nonsensical throughput numbers. Summing the
+/// addresses (wrapping, to avoid overflow panics) forces every successful
+/// match to be materialised before the loop finishes.
+#[inline(never)]
+fn consume(results: Vec<SearchResult>) -> usize {
+    let mut acc: usize = results.len();
+    for r in &results {
+        acc = acc.wrapping_add(r.addr);
+    }
+    acc
+}
 
 /// 16 MiB is large enough to defeat L2 for most CPUs while still running each
 /// iteration in well under a second.
@@ -63,7 +80,7 @@ fn bench_numeric_scans(c: &mut Criterion) {
     group.bench_function("short_i16", |b| {
         b.iter(|| {
             let r = search_memory(black_box(&buf), black_box(&needle), SearchType::Short, 0);
-            black_box(r.len());
+            black_box(consume(r));
         });
     });
 
@@ -73,7 +90,7 @@ fn bench_numeric_scans(c: &mut Criterion) {
     group.bench_function("int_i32", |b| {
         b.iter(|| {
             let r = search_memory(black_box(&buf), black_box(&needle), SearchType::Int, 0);
-            black_box(r.len());
+            black_box(consume(r));
         });
     });
 
@@ -83,7 +100,7 @@ fn bench_numeric_scans(c: &mut Criterion) {
     group.bench_function("int64_i64", |b| {
         b.iter(|| {
             let r = search_memory(black_box(&buf), black_box(&needle), SearchType::Int64, 0);
-            black_box(r.len());
+            black_box(consume(r));
         });
     });
 
@@ -93,7 +110,7 @@ fn bench_numeric_scans(c: &mut Criterion) {
     group.bench_function("float_f32", |b| {
         b.iter(|| {
             let r = search_memory(black_box(&buf), black_box(&needle), SearchType::Float, 0);
-            black_box(r.len());
+            black_box(consume(r));
         });
     });
 
@@ -103,7 +120,7 @@ fn bench_numeric_scans(c: &mut Criterion) {
     group.bench_function("double_f64", |b| {
         b.iter(|| {
             let r = search_memory(black_box(&buf), black_box(&needle), SearchType::Double, 0);
-            black_box(r.len());
+            black_box(consume(r));
         });
     });
 
@@ -125,7 +142,7 @@ fn bench_string_scan(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("len", needle_str.len()), &buf, |b, buf| {
             b.iter(|| {
                 let r = search_string_in_memory(black_box(buf), black_box(needle_str), 0);
-                black_box(r.len());
+                black_box(consume(r));
             });
         });
     }
@@ -144,7 +161,7 @@ fn bench_guess_scan(c: &mut Criterion) {
     group.bench_function("digits_4", |b| {
         b.iter(|| {
             let r = search_memory(black_box(&buf), black_box(needle), SearchType::Guess, 0);
-            black_box(r.len());
+            black_box(consume(r));
         });
     });
 
