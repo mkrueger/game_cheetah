@@ -112,6 +112,20 @@ impl MemoryEditor {
     pub fn show_memory_editor<'a>(&'a self, app: &'a App) -> Element<'a, Message> {
         use icy_ui::widget::{button, column, container, mouse_area, row, scroll_area, text};
 
+        // ---- Layout constants -------------------------------------------------
+        // Address: 16 hex digits + one space worth of padding -> wide enough for
+        // 64-bit addresses without overflowing into the hex grid.
+        const ADDRESS_WIDTH: f32 = 150.0;
+        const HEX_CELL_WIDTH: f32 = 26.0;
+        const HEX_GROUP_GAP: f32 = 12.0;
+        const ASCII_CELL_WIDTH: f32 = 10.0;
+        const ASCII_GROUP_GAP: f32 = 6.0;
+        const GUTTER: f32 = 14.0;
+        const HEX_GROUP_WIDTH: f32 = HEX_CELL_WIDTH * 8.0;
+        const HEX_BLOCK_WIDTH: f32 = HEX_GROUP_WIDTH * 2.0 + HEX_GROUP_GAP;
+        const ASCII_GROUP_WIDTH: f32 = ASCII_CELL_WIDTH * 8.0;
+        const ASCII_BLOCK_WIDTH: f32 = ASCII_GROUP_WIDTH * 2.0 + ASCII_GROUP_GAP;
+
         let address = self.base_address;
         let pid = app.state.pid;
         let highlight_start = self.editor_initial_address;
@@ -120,31 +134,55 @@ impl MemoryEditor {
         let cursor_col = self.cursor_col;
         let cursor_nibble = self.cursor_nibble;
 
-        // Header row with column labels
-        let header = row![
-            container(text("Address").size(14).font(icy_ui::Font::MONOSPACE))
-                .width(Length::Fixed(95.0))
-                .padding(0),
-            container({
-                let mut hex_headers = row![];
-                for i in 0..BYTES_PER_ROW {
-                    hex_headers = hex_headers.push(
-                        container(text(format!("{i:02X}")).size(14).font(icy_ui::Font::MONOSPACE))
-                            .width(Length::Fixed(30.0))
-                            .align_x(alignment::Alignment::Center),
-                    );
-                }
-                hex_headers
-            })
-            .width(Length::Fixed(480.0))
-            .padding(0),
-            container(text("ASCII").size(14).font(icy_ui::Font::MONOSPACE))
-                .width(Length::Fixed(140.0))
-                .padding(0),
-        ]
-        .spacing(0);
+        // ---- Header -----------------------------------------------------------
+        // Theming model:
+        //   * The editor sits inside a `primary` panel; text on it uses
+        //     `theme.primary.on` and dimmed text uses `primary.on.scale_alpha(...)`.
+        //   * Highlights (cursor, selected byte, search hit) are *translucent*
+        //     overlays so text remains readable on top.
+        let dim = |theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+            color: Some(theme.primary.on.scale_alpha(0.55)),
+        };
 
-        // Virtualized memory view: only visible rows are read and laid out.
+        let make_hex_header_group = |start: usize| {
+            let mut group = row![].spacing(0);
+            for i in start..start + 8 {
+                group = group.push(
+                    container(text(format!("{i:02X}")).size(13).font(icy_ui::Font::MONOSPACE).style(dim))
+                        .width(Length::Fixed(HEX_CELL_WIDTH))
+                        .align_x(alignment::Alignment::Center),
+                );
+            }
+            container(group).width(Length::Fixed(HEX_GROUP_WIDTH))
+        };
+
+        let header = container(
+            row![
+                container(text("Address").size(12).font(icy_ui::Font::MONOSPACE).style(dim))
+                    .width(Length::Fixed(ADDRESS_WIDTH))
+                    .padding([0, 8])
+                    .align_x(alignment::Alignment::Start),
+                row![make_hex_header_group(0), make_hex_header_group(8),].spacing(HEX_GROUP_GAP),
+                container(text("ASCII").size(12).font(icy_ui::Font::MONOSPACE).style(dim))
+                    .width(Length::Fixed(ASCII_BLOCK_WIDTH))
+                    .padding([0, 4])
+                    .align_x(alignment::Alignment::Start),
+            ]
+            .spacing(GUTTER)
+            .align_y(alignment::Alignment::Center),
+        )
+        .padding([6, 8])
+        .style(|theme: &icy_ui::Theme| container::Style {
+            background: Some(theme.primary.on.scale_alpha(0.04).into()),
+            border: icy_ui::Border {
+                color: theme.primary.divider,
+                width: 0.0,
+                radius: Radius::new(0.0),
+            },
+            ..Default::default()
+        });
+
+        // ---- Virtualized memory rows -----------------------------------------
         let memory_view = scroll_area()
             .id(scroll_id())
             .height(Length::FillPortion(3))
@@ -161,6 +199,110 @@ impl MemoryEditor {
                     memory[..n].copy_from_slice(&buf[..n]);
                 }
 
+                let make_hex_cell = |absolute_row: usize, col_idx: usize, byte: u8| -> Element<'_, Message> {
+                    let is_selected_byte = cursor_row == absolute_row && cursor_col == col_idx;
+                    let current_address = address.saturating_add(absolute_row * BYTES_PER_ROW + col_idx);
+                    let is_initial = current_address >= highlight_start && current_address < highlight_end;
+                    let is_zero = byte == 0;
+
+                    let high = (byte >> 4) & 0x0F;
+                    let low = byte & 0x0F;
+                    let nibble_color = move |theme: &icy_ui::Theme, is_active_nibble: bool| {
+                        if is_active_nibble {
+                            theme.accent.base
+                        } else if is_zero {
+                            theme.primary.on.scale_alpha(0.35)
+                        } else {
+                            theme.primary.on
+                        }
+                    };
+                    let hi_text = text(format!("{high:X}"))
+                        .size(14)
+                        .font(icy_ui::Font::MONOSPACE)
+                        .style(move |theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                            color: Some(nibble_color(theme, is_selected_byte && cursor_nibble == 0)),
+                        });
+                    let lo_text = text(format!("{low:X}"))
+                        .size(14)
+                        .font(icy_ui::Font::MONOSPACE)
+                        .style(move |theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                            color: Some(nibble_color(theme, is_selected_byte && cursor_nibble == 1)),
+                        });
+
+                    let hex_pair = row![hi_text, lo_text].spacing(0);
+
+                    mouse_area(
+                        container(hex_pair)
+                            .width(Length::Fixed(HEX_CELL_WIDTH))
+                            .padding([1, 0])
+                            .align_x(alignment::Alignment::Center)
+                            .style(move |theme: &icy_ui::Theme| {
+                                if is_selected_byte {
+                                    container::Style {
+                                        background: Some(theme.accent.base.scale_alpha(0.30).into()),
+                                        border: icy_ui::Border {
+                                            color: theme.accent.base,
+                                            width: 1.0,
+                                            radius: Radius::new(3.0),
+                                        },
+                                        ..Default::default()
+                                    }
+                                } else if is_initial {
+                                    container::Style {
+                                        background: Some(theme.success.base.scale_alpha(0.22).into()),
+                                        ..Default::default()
+                                    }
+                                } else {
+                                    container::Style::default()
+                                }
+                            }),
+                    )
+                    .on_press(Message::MemoryEditorSetCursor(absolute_row, col_idx))
+                    .into()
+                };
+
+                let make_ascii_cell = |absolute_row: usize, i: usize, byte: u8| -> Element<'_, Message> {
+                    let c = byte as char;
+                    let is_printable = c.is_ascii_graphic() || c == ' ';
+                    let display_char = if is_printable { c.to_string() } else { "·".to_string() };
+                    let is_selected = cursor_row == absolute_row && cursor_col == i;
+                    let current_address = address.saturating_add(absolute_row * BYTES_PER_ROW + i);
+                    let is_initial = current_address >= highlight_start && current_address < highlight_end;
+
+                    container(
+                        text(display_char)
+                            .size(14)
+                            .font(icy_ui::Font::MONOSPACE)
+                            .style(move |theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                                color: Some(if is_selected {
+                                    theme.accent.base
+                                } else if is_printable {
+                                    theme.primary.on
+                                } else {
+                                    theme.primary.on.scale_alpha(0.35)
+                                }),
+                            }),
+                    )
+                    .width(Length::Fixed(ASCII_CELL_WIDTH))
+                    .align_x(alignment::Alignment::Center)
+                    .style(move |theme: &icy_ui::Theme| {
+                        if is_selected {
+                            container::Style {
+                                background: Some(theme.accent.base.scale_alpha(0.30).into()),
+                                ..Default::default()
+                            }
+                        } else if is_initial {
+                            container::Style {
+                                background: Some(theme.success.base.scale_alpha(0.22).into()),
+                                ..Default::default()
+                            }
+                        } else {
+                            container::Style::default()
+                        }
+                    })
+                    .into()
+                };
+
                 column(
                     (range_start..range_end)
                         .map(|absolute_row| {
@@ -168,135 +310,77 @@ impl MemoryEditor {
                             let row_offset = local_idx * BYTES_PER_ROW;
                             let row_bytes = &memory[row_offset..row_offset + BYTES_PER_ROW];
                             let row_addr = address.saturating_add(absolute_row * BYTES_PER_ROW);
+                            let zebra = absolute_row % 2 == 1;
+                            let is_cursor_row = cursor_row == absolute_row;
 
-                            let mut hex_cells = row![];
-                            for (col_idx, byte) in row_bytes.iter().enumerate() {
-                                let is_selected_byte = cursor_row == absolute_row && cursor_col == col_idx;
-                                let current_address = row_addr + col_idx;
-                                let is_initial_location = current_address >= highlight_start && current_address < highlight_end;
-
-                                let high_nibble = (byte >> 4) & 0x0F;
-                                let low_nibble = byte & 0x0F;
-
-                                let hex_display = if is_selected_byte {
-                                    row![
-                                        text(format!("{high_nibble:X}"))
-                                            .size(14)
-                                            .font(icy_ui::Font::MONOSPACE)
-                                            .style(move |theme: &icy_ui::Theme| {
-                                                if cursor_nibble == 0 {
-                                                    icy_ui::widget::text::Style {
-                                                        color: Some(theme.accent.base),
-                                                    }
-                                                } else {
-                                                    icy_ui::widget::text::Style {
-                                                        color: Some(theme.background.on),
-                                                    }
-                                                }
-                                            }),
-                                        text(format!("{low_nibble:X}"))
-                                            .size(14)
-                                            .font(icy_ui::Font::MONOSPACE)
-                                            .style(move |theme: &icy_ui::Theme| {
-                                                if cursor_nibble == 1 {
-                                                    icy_ui::widget::text::Style {
-                                                        color: Some(theme.accent.base),
-                                                    }
-                                                } else {
-                                                    icy_ui::widget::text::Style {
-                                                        color: Some(theme.background.on),
-                                                    }
-                                                }
-                                            }),
-                                    ]
-                                    .spacing(0)
-                                } else {
-                                    row![
-                                        text(format!("{high_nibble:X}")).size(14).font(icy_ui::Font::MONOSPACE),
-                                        text(format!("{low_nibble:X}")).size(14).font(icy_ui::Font::MONOSPACE),
-                                    ]
-                                    .spacing(0)
-                                };
-
-                                hex_cells = hex_cells.push(
-                                    mouse_area(
-                                        container(hex_display)
-                                            .width(Length::Fixed(30.0))
-                                            .padding(2)
-                                            .style(move |theme: &icy_ui::Theme| {
-                                                if is_selected_byte {
-                                                    container::Style {
-                                                        background: Some(theme.background.base.into()),
-                                                        text_color: Some(theme.background.on),
-                                                        border: icy_ui::Border {
-                                                            color: theme.accent.base,
-                                                            width: 2.0,
-                                                            radius: Radius::new(4.0),
-                                                        },
-                                                        ..Default::default()
-                                                    }
-                                                } else if is_initial_location {
-                                                    container::Style {
-                                                        background: Some(theme.accent.hover.into()),
-                                                        text_color: Some(theme.background.on),
-                                                        border: icy_ui::Border {
-                                                            color: theme.accent.hover,
-                                                            width: 1.0,
-                                                            radius: Radius::new(0.0),
-                                                        },
-                                                        ..Default::default()
-                                                    }
-                                                } else {
-                                                    container::Style::default()
-                                                }
-                                            }),
-                                    )
-                                    .on_press(Message::MemoryEditorSetCursor(absolute_row, col_idx)),
-                                );
+                            let mut hex_left = row![].spacing(0);
+                            let mut hex_right = row![].spacing(0);
+                            for (col_idx, byte) in row_bytes.iter().enumerate().take(8) {
+                                hex_left = hex_left.push(make_hex_cell(absolute_row, col_idx, *byte));
                             }
-
-                            let ascii = row_bytes
-                                .iter()
-                                .enumerate()
-                                .map(|(i, b)| {
-                                    let c = *b as char;
-                                    let display_char = if c.is_ascii_graphic() || c == ' ' { c.to_string() } else { ".".to_string() };
-                                    let is_selected = cursor_row == absolute_row && cursor_col == i;
-                                    let current_address = row_addr + i;
-                                    let is_initial_location = current_address >= highlight_start && current_address < highlight_end;
-
-                                    container(text(display_char).size(14).font(icy_ui::Font::MONOSPACE))
-                                        .width(Length::Fixed(8.0))
-                                        .align_x(alignment::Alignment::Center)
-                                        .style(move |theme: &icy_ui::Theme| {
-                                            if is_selected {
-                                                container::Style {
-                                                    background: Some(theme.accent.base.into()),
-                                                    text_color: Some(theme.background.base),
-                                                    ..Default::default()
-                                                }
-                                            } else if is_initial_location {
-                                                container::Style {
-                                                    background: Some(theme.success.hover.into()),
-                                                    text_color: Some(theme.background.on),
-                                                    ..Default::default()
-                                                }
-                                            } else {
-                                                container::Style::default()
-                                            }
-                                        })
-                                })
-                                .fold(row![], |row, elem| row.push(elem));
-
-                            row![
-                                container(text(format!("{row_addr:08X}")).size(14).font(icy_ui::Font::MONOSPACE))
-                                    .width(Length::Fixed(100.0))
-                                    .padding(0),
-                                container(hex_cells).width(Length::Fixed(480.0)).padding(0),
-                                container(ascii).width(Length::Fixed(140.0)).padding(0),
+                            for (col_idx, byte) in row_bytes.iter().enumerate().skip(8) {
+                                hex_right = hex_right.push(make_hex_cell(absolute_row, col_idx, *byte));
+                            }
+                            let hex_block = row![
+                                container(hex_left).width(Length::Fixed(HEX_GROUP_WIDTH)),
+                                container(hex_right).width(Length::Fixed(HEX_GROUP_WIDTH)),
                             ]
+                            .spacing(HEX_GROUP_GAP);
+
+                            let mut ascii_left = row![].spacing(0);
+                            let mut ascii_right = row![].spacing(0);
+                            for (i, byte) in row_bytes.iter().enumerate().take(8) {
+                                ascii_left = ascii_left.push(make_ascii_cell(absolute_row, i, *byte));
+                            }
+                            for (i, byte) in row_bytes.iter().enumerate().skip(8) {
+                                ascii_right = ascii_right.push(make_ascii_cell(absolute_row, i, *byte));
+                            }
+                            let ascii_block = row![
+                                container(ascii_left).width(Length::Fixed(ASCII_GROUP_WIDTH)),
+                                container(ascii_right).width(Length::Fixed(ASCII_GROUP_WIDTH)),
+                            ]
+                            .spacing(ASCII_GROUP_GAP);
+
+                            let address_label = text(format!("{row_addr:016X}"))
+                                .size(13)
+                                .font(icy_ui::Font::MONOSPACE)
+                                .style(move |theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                                    color: Some(if is_cursor_row {
+                                        theme.accent.base
+                                    } else {
+                                        theme.primary.on.scale_alpha(0.55)
+                                    }),
+                                });
+
+                            container(
+                                row![
+                                    container(address_label)
+                                        .width(Length::Fixed(ADDRESS_WIDTH))
+                                        .padding([0, 8])
+                                        .align_x(alignment::Alignment::Start),
+                                    container(hex_block).width(Length::Fixed(HEX_BLOCK_WIDTH)),
+                                    container(ascii_block).width(Length::Fixed(ASCII_BLOCK_WIDTH)).padding([0, 4]),
+                                ]
+                                .spacing(GUTTER)
+                                .align_y(alignment::Alignment::Center),
+                            )
                             .height(Length::Fixed(ROW_HEIGHT))
-                            .spacing(0)
+                            .padding([0, 8])
+                            .style(move |theme: &icy_ui::Theme| {
+                                if is_cursor_row {
+                                    container::Style {
+                                        background: Some(theme.accent.base.scale_alpha(0.10).into()),
+                                        ..Default::default()
+                                    }
+                                } else if zebra {
+                                    container::Style {
+                                        background: Some(theme.primary.on.scale_alpha(0.04).into()),
+                                        ..Default::default()
+                                    }
+                                } else {
+                                    container::Style::default()
+                                }
+                            })
                             .into()
                         })
                         .collect::<Vec<Element<'_, Message>>>(),
@@ -306,7 +390,7 @@ impl MemoryEditor {
             })
             .on_scroll(Message::MemoryEditorScrolled);
 
-        // Info area showing values at the cursor position
+        // ---- Info area --------------------------------------------------------
         let info_area = {
             let cursor_address = address.saturating_add(cursor_row * BYTES_PER_ROW + cursor_col);
 
@@ -321,150 +405,225 @@ impl MemoryEditor {
                 0
             };
 
-            let byte_val = if bytes_available >= 1 { value_bytes[0] } else { 0 };
-            let u16_val = if bytes_available >= 2 {
-                u16::from_le_bytes([value_bytes[0], value_bytes[1]])
+            let fmt_dec_hex = |dec: String, hex: String| -> String { format!("{dec}  ({hex})") };
+            let na = || "—".to_string();
+
+            let byte_str = if bytes_available >= 1 {
+                let v = value_bytes[0];
+                fmt_dec_hex(format!("{v}"), format!("0x{v:02X}"))
             } else {
-                0
+                na()
             };
-            let u32_val = if bytes_available >= 4 {
-                u32::from_le_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]])
+            let i8_str = if bytes_available >= 1 { format!("{}", value_bytes[0] as i8) } else { na() };
+            let u16_str = if bytes_available >= 2 {
+                let v = u16::from_le_bytes([value_bytes[0], value_bytes[1]]);
+                fmt_dec_hex(format!("{v}"), format!("0x{v:04X}"))
             } else {
-                0
+                na()
             };
-            let u64_val = if bytes_available >= 8 { u64::from_le_bytes(value_bytes) } else { 0 };
-            let float_val = if bytes_available >= 4 {
-                f32::from_le_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]])
+            let i16_str = if bytes_available >= 2 {
+                format!("{}", i16::from_le_bytes([value_bytes[0], value_bytes[1]]))
             } else {
-                0.0
+                na()
             };
-            let double_val = if bytes_available >= 8 { f64::from_le_bytes(value_bytes) } else { 0.0 };
+            let u32_str = if bytes_available >= 4 {
+                let v = u32::from_le_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]]);
+                fmt_dec_hex(format!("{v}"), format!("0x{v:08X}"))
+            } else {
+                na()
+            };
+            let i32_str = if bytes_available >= 4 {
+                format!("{}", i32::from_le_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]]))
+            } else {
+                na()
+            };
+            let u64_str = if bytes_available >= 8 {
+                let v = u64::from_le_bytes(value_bytes);
+                fmt_dec_hex(format!("{v}"), format!("0x{v:016X}"))
+            } else {
+                na()
+            };
+            let i64_str = if bytes_available >= 8 {
+                format!("{}", i64::from_le_bytes(value_bytes))
+            } else {
+                na()
+            };
+
+            let format_float = |val: f32| -> String {
+                if !val.is_finite() {
+                    return format!("{val}");
+                }
+                let abs = val.abs();
+                if abs == 0.0 {
+                    "0.0".to_string()
+                } else if abs >= 1e6 || abs <= 1e-3 {
+                    format!("{val:.3e}")
+                } else {
+                    format!("{val:.4}")
+                }
+            };
+            let format_double = |val: f64| -> String {
+                if !val.is_finite() {
+                    return format!("{val}");
+                }
+                let abs = val.abs();
+                if abs == 0.0 {
+                    "0.0".to_string()
+                } else if abs >= 1e7 || abs <= 1e-4 {
+                    format!("{val:.4e}")
+                } else {
+                    format!("{val:.6}")
+                }
+            };
+            let f32_str = if bytes_available >= 4 {
+                format_float(f32::from_le_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]]))
+            } else {
+                na()
+            };
+            let f64_str = if bytes_available >= 8 {
+                format_double(f64::from_le_bytes(value_bytes))
+            } else {
+                na()
+            };
+
+            let label = |s: &'static str| -> Element<'_, Message> {
+                text(s)
+                    .size(13)
+                    .font(icy_ui::Font::MONOSPACE)
+                    .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                        color: Some(theme.secondary.on.scale_alpha(0.6)),
+                    })
+                    .into()
+            };
+            let value = |s: String| -> Element<'_, Message> {
+                text(s)
+                    .size(14)
+                    .font(icy_ui::Font::MONOSPACE)
+                    .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                        color: Some(theme.secondary.on),
+                    })
+                    .into()
+            };
+
+            let make_pair = |lbl: &'static str, val: String| -> Element<'_, Message> {
+                row![container(label(lbl)).width(Length::Fixed(56.0)), value(val),]
+                    .spacing(8)
+                    .align_y(alignment::Alignment::Center)
+                    .into()
+            };
+
+            let header_line = row![
+                text("Cursor")
+                    .size(12)
+                    .font(icy_ui::Font::MONOSPACE)
+                    .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                        color: Some(theme.secondary.on.scale_alpha(0.6)),
+                    }),
+                text(format!("0x{cursor_address:016X}"))
+                    .size(14)
+                    .font(icy_ui::Font::MONOSPACE)
+                    .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                        color: Some(theme.accent.base),
+                    }),
+            ]
+            .spacing(10)
+            .align_y(alignment::Alignment::Center);
+
+            let unsigned_col = column![
+                make_pair("u8", byte_str),
+                make_pair("u16", u16_str),
+                make_pair("u32", u32_str),
+                make_pair("u64", u64_str),
+            ]
+            .spacing(4);
+            let signed_col = column![
+                make_pair("i8", i8_str),
+                make_pair("i16", i16_str),
+                make_pair("i32", i32_str),
+                make_pair("i64", i64_str),
+            ]
+            .spacing(4);
+            let float_col = column![make_pair("f32", f32_str), make_pair("f64", f64_str),].spacing(4);
 
             container(
-                column![
-                    row![text(format!("Cursor: 0x{cursor_address:08X}")).size(14).font(icy_ui::Font::MONOSPACE),].spacing(20),
-                    row![
-                        column![
-                            text("Byte:").size(14).font(icy_ui::Font::MONOSPACE),
-                            text("U16:").size(14).font(icy_ui::Font::MONOSPACE),
-                            text("U32:").size(14).font(icy_ui::Font::MONOSPACE),
-                            text("U64:").size(14).font(icy_ui::Font::MONOSPACE),
-                        ]
-                        .width(Length::Fixed(60.0))
-                        .spacing(5),
-                        column![
-                            text(format!("{byte_val}")).size(14).font(icy_ui::Font::MONOSPACE),
-                            text(format!("{u16_val}")).size(14).font(icy_ui::Font::MONOSPACE),
-                            text(format!("{u32_val}")).size(14).font(icy_ui::Font::MONOSPACE),
-                            text(format!("{u64_val}")).size(14).font(icy_ui::Font::MONOSPACE),
-                        ]
-                        .width(Length::Fixed(200.0))
-                        .spacing(5),
-                        column![
-                            text("Float:").size(14).font(icy_ui::Font::MONOSPACE),
-                            text("Double:").size(14).font(icy_ui::Font::MONOSPACE),
-                        ]
-                        .width(Length::Fixed(60.0))
-                        .spacing(5),
-                        column![
-                            text(if bytes_available >= 4 {
-                                if float_val.is_finite() {
-                                    let abs_val = float_val.abs();
-                                    if abs_val == 0.0 {
-                                        "0.0".to_string()
-                                    } else if abs_val >= 1e6 || abs_val <= 1e-3 {
-                                        format!("{float_val:.3e}")
-                                    } else if abs_val >= 1000.0 {
-                                        format!("{float_val:.1}")
-                                    } else if abs_val >= 1.0 {
-                                        format!("{float_val:.3}")
-                                    } else {
-                                        format!("{float_val:.4}")
-                                    }
-                                } else {
-                                    format!("{float_val}")
-                                }
-                            } else {
-                                "N/A".to_string()
-                            })
-                            .size(14)
-                            .font(icy_ui::Font::MONOSPACE),
-                            text(if bytes_available >= 8 {
-                                if double_val.is_finite() {
-                                    let abs_val = double_val.abs();
-                                    if abs_val == 0.0 {
-                                        "0.0".to_string()
-                                    } else if abs_val >= 1e7 || abs_val <= 1e-4 {
-                                        format!("{double_val:.4e}")
-                                    } else if abs_val >= 1000.0 {
-                                        format!("{double_val:.2}")
-                                    } else if abs_val >= 1.0 {
-                                        format!("{double_val:.4}")
-                                    } else {
-                                        format!("{double_val:.6}")
-                                    }
-                                } else {
-                                    format!("{double_val}")
-                                }
-                            } else {
-                                "N/A".to_string()
-                            })
-                            .size(14)
-                            .font(icy_ui::Font::MONOSPACE),
-                        ]
-                        .spacing(5),
-                    ]
-                    .spacing(20)
-                ]
-                .spacing(10)
-                .padding(10),
+                column![header_line, row![unsigned_col, signed_col, float_col,].spacing(24),]
+                    .spacing(10)
+                    .padding(12),
             )
             .width(Length::Fill)
             .style(|theme: &icy_ui::Theme| container::Style {
-                background: Some(theme.primary.base.into()),
+                background: Some(theme.secondary.base.into()),
+                text_color: Some(theme.secondary.on),
                 border: icy_ui::Border {
-                    color: theme.secondary.base,
+                    color: theme.primary.divider,
                     width: 1.0,
-                    radius: Radius::new(4.0),
+                    radius: Radius::new(6.0),
                 },
                 ..Default::default()
             })
         };
 
+        // ---- Toolbar ----------------------------------------------------------
+        let toolbar = container(
+            row![
+                text("Memory Editor")
+                    .size(18)
+                    .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style { color: Some(theme.primary.on) }),
+                text(format!("PID {}", app.state.pid))
+                    .size(13)
+                    .font(icy_ui::Font::MONOSPACE)
+                    .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                        color: Some(theme.primary.on.scale_alpha(0.55)),
+                    }),
+                container(
+                    row![
+                        text("Address").size(13).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                            color: Some(theme.primary.on.scale_alpha(0.7)),
+                        }),
+                        text_input("0x…", &self.address_text)
+                            .on_input(Message::MemoryEditorAddressChanged)
+                            .on_submit(Message::MemoryEditorJumpToAddress)
+                            .font(icy_ui::Font::MONOSPACE)
+                            .width(Length::Fixed(200.0)),
+                        button(text("Go")).on_press(Message::MemoryEditorJumpToAddress).padding([4, 12]),
+                    ]
+                    .spacing(8)
+                    .align_y(alignment::Alignment::Center)
+                )
+                .width(Length::Fill)
+                .align_x(alignment::Alignment::End),
+                button(text("Close")).on_press(Message::CloseMemoryEditor).padding([4, 12]),
+            ]
+            .spacing(16)
+            .align_y(alignment::Alignment::Center),
+        )
+        .padding([10, 12]);
+
+        // ---- Body wrapper -----------------------------------------------------
+        // The whole editor is presented as a single primary panel so the
+        // toolbar, header, body and info area share one consistent surface.
         container(
             column![
-                row![
-                    text(format!("Memory Editor - PID: {}", app.state.pid)).size(20),
-                    container(
-                        row![
-                            text("Address:"),
-                            text_input("0x", &self.address_text)
-                                .on_input(Message::MemoryEditorAddressChanged)
-                                .on_submit(Message::MemoryEditorJumpToAddress)
-                                .width(Length::Fixed(120.0)),
-                            button(text("Go")).on_press(Message::MemoryEditorJumpToAddress).padding(5),
-                        ]
-                        .spacing(10)
-                        .align_y(alignment::Alignment::Center)
-                    )
-                    .width(Length::Fill),
-                    button(text("Close")).on_press(Message::CloseMemoryEditor).padding(10)
-                ]
-                .spacing(20)
-                .align_y(alignment::Alignment::Center),
+                toolbar,
                 rule::horizontal(1),
-                container(header).style(|theme: &icy_ui::Theme| container::Style {
-                    background: Some(theme.primary.base.into()),
+                header,
+                container(memory_view).style(|theme: &icy_ui::Theme| container::Style {
+                    text_color: Some(theme.primary.on),
                     ..Default::default()
                 }),
-                memory_view,
-                info_area,
+                rule::horizontal(1),
+                container(info_area).padding([10, 12]),
             ]
-            .spacing(0)
-            .padding(DIALOG_PADDING),
+            .spacing(0),
         )
+        .padding(DIALOG_PADDING)
         .width(Length::Fill)
         .height(Length::Fill)
+        .style(|theme: &icy_ui::Theme| container::Style {
+            background: Some(theme.primary.base.into()),
+            text_color: Some(theme.primary.on),
+            ..Default::default()
+        })
         .into()
     }
 

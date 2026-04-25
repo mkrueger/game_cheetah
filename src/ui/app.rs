@@ -404,6 +404,7 @@ impl App {
                         let result = &results[index];
                         self.memory_editor.initialize(result.addr, result.search_type);
                         self.app_state = AppState::MemoryEditor;
+                        return self.memory_editor.snap_to_cursor();
                     }
                 }
                 Task::none()
