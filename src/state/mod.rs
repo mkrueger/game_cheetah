@@ -424,28 +424,33 @@ impl GameCheetahEngine {
             // Take the first (best) process from the group
             if let Some((pid, process)) = group.first() {
                 let pid_u32 = pid.as_u32();
-                if let Ok(conv_pid) = pid_u32.try_into() {
-                    let user = process.user_id().map(|u| u.to_string()).unwrap_or_default();
+                #[cfg(target_os = "windows")]
+                let conv_pid = pid_u32;
+                #[cfg(not(target_os = "windows"))]
+                let Ok(conv_pid) = pid_u32.try_into() else {
+                    continue;
+                };
 
-                    // Get the process name
-                    let name = process.name().to_string_lossy().to_string();
+                let user = process.user_id().map(|u| u.to_string()).unwrap_or_default();
 
-                    // Build command line, and note if there are multiple instances
-                    let instance_count = group.len();
-                    let cmd = if instance_count > 1 {
-                        format!("{:?} [{} processes]", process.cmd(), instance_count)
-                    } else {
-                        format!("{:?}", process.cmd())
-                    };
+                // Get the process name
+                let name = process.name().to_string_lossy().to_string();
 
-                    self.processes.push(ProcessInfo {
-                        pid: conv_pid,
-                        name,
-                        cmd,
-                        user,
-                        memory: largest_group_memory as usize, // Use total group memory instead
-                    });
-                }
+                // Build command line, and note if there are multiple instances
+                let instance_count = group.len();
+                let cmd = if instance_count > 1 {
+                    format!("{:?} [{} processes]", process.cmd(), instance_count)
+                } else {
+                    format!("{:?}", process.cmd())
+                };
+
+                self.processes.push(ProcessInfo {
+                    pid: conv_pid,
+                    name,
+                    cmd,
+                    user,
+                    memory: largest_group_memory as usize, // Use total group memory instead
+                });
             }
         }
     }
