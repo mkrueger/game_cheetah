@@ -8,17 +8,17 @@ use crate::{app::App, message::Message};
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum ProcessSortColumn {
-    #[default]
     Pid,
     Name,
+    #[default]
     Memory,
     Command,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum SortDirection {
-    #[default]
     Ascending,
+    #[default]
     Descending,
 }
 
