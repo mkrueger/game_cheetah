@@ -302,6 +302,25 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
             .into(),
     ];
 
+    // Cache key forces VirtualScrollable to rebuild visible rows whenever the
+    // editing buffer changes, the result count changes, or the freeze set
+    // toggles. Without this, our buffered keystrokes / freeze toggles wouldn't
+    // make it past the row cache.
+    let cache_key = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        total_results.hash(&mut hasher);
+        if let Some((idx, buf)) = &app.editing_result {
+            idx.hash(&mut hasher);
+            buf.hash(&mut hasher);
+        }
+        for addr in &current_search_context.freezed_addresses {
+            addr.hash(&mut hasher);
+        }
+        hasher.finish()
+    };
+
     table_content.push(
         scroll_area()
             .height(Length::FillPortion(1))
@@ -392,6 +411,7 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                 .padding(5)
                 .into()
             })
+            .cache_key(cache_key)
             .into(),
     );
 

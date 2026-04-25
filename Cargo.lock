@@ -1457,9 +1457,9 @@ dependencies = [
 
 [[package]]
 name = "glam"
-version = "0.25.0"
+version = "0.30.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "151665d9be52f9bb40fc7966565d39666f2d1e69233571b71b87791c7e0528b3"
+checksum = "19fc433e8437a212d1b6f1e68c7824af3aed907da60afa994e7f542d18d12aa9"
 
 [[package]]
 name = "glob"
@@ -1761,7 +1761,7 @@ dependencies = [
 [[package]]
 name = "icy_ui"
 version = "0.1.0"
-source = "git+https://github.com/mkrueger/icy_ui?branch=master#b631310b65bc31985b33fd99192f6ffd3a76212c"
+source = "git+https://github.com/mkrueger/icy_ui?branch=master#f68f3f11db409c04e28e20929a88e28a34d0c494"
 dependencies = [
  "icy_ui_core",
  "icy_ui_debug",
@@ -1776,7 +1776,7 @@ dependencies = [
 [[package]]
 name = "icy_ui_core"
 version = "0.1.0"
-source = "git+https://github.com/mkrueger/icy_ui?branch=master#b631310b65bc31985b33fd99192f6ffd3a76212c"
+source = "git+https://github.com/mkrueger/icy_ui?branch=master#f68f3f11db409c04e28e20929a88e28a34d0c494"
 dependencies = [
  "bitflags 2.10.0",
  "bytes",
@@ -1793,7 +1793,7 @@ dependencies = [
 [[package]]
 name = "icy_ui_debug"
 version = "0.1.0"
-source = "git+https://github.com/mkrueger/icy_ui?branch=master#b631310b65bc31985b33fd99192f6ffd3a76212c"
+source = "git+https://github.com/mkrueger/icy_ui?branch=master#f68f3f11db409c04e28e20929a88e28a34d0c494"
 dependencies = [
  "icy_ui_core",
  "icy_ui_futures",
@@ -1803,7 +1803,7 @@ dependencies = [
 [[package]]
 name = "icy_ui_futures"
 version = "0.1.0"
-source = "git+https://github.com/mkrueger/icy_ui?branch=master#b631310b65bc31985b33fd99192f6ffd3a76212c"
+source = "git+https://github.com/mkrueger/icy_ui?branch=master#f68f3f11db409c04e28e20929a88e28a34d0c494"
 dependencies = [
  "futures",
  "icy_ui_core",
@@ -1816,7 +1816,7 @@ dependencies = [
 [[package]]
 name = "icy_ui_graphics"
 version = "0.1.0"
-source = "git+https://github.com/mkrueger/icy_ui?branch=master#b631310b65bc31985b33fd99192f6ffd3a76212c"
+source = "git+https://github.com/mkrueger/icy_ui?branch=master#f68f3f11db409c04e28e20929a88e28a34d0c494"
 dependencies = [
  "bitflags 2.10.0",
  "bytemuck",
@@ -1834,7 +1834,7 @@ dependencies = [
 [[package]]
 name = "icy_ui_macos"
 version = "0.1.0"
-source = "git+https://github.com/mkrueger/icy_ui?branch=master#b631310b65bc31985b33fd99192f6ffd3a76212c"
+source = "git+https://github.com/mkrueger/icy_ui?branch=master#f68f3f11db409c04e28e20929a88e28a34d0c494"
 dependencies = [
  "block2 0.6.2",
  "icy_ui_core",
@@ -1847,7 +1847,7 @@ dependencies = [
 [[package]]
 name = "icy_ui_program"
 version = "0.1.0"
-source = "git+https://github.com/mkrueger/icy_ui?branch=master#b631310b65bc31985b33fd99192f6ffd3a76212c"
+source = "git+https://github.com/mkrueger/icy_ui?branch=master#f68f3f11db409c04e28e20929a88e28a34d0c494"
 dependencies = [
  "icy_ui_graphics",
  "icy_ui_runtime",
@@ -1856,7 +1856,7 @@ dependencies = [
 [[package]]
 name = "icy_ui_renderer"
 version = "0.1.0"
-source = "git+https://github.com/mkrueger/icy_ui?branch=master#b631310b65bc31985b33fd99192f6ffd3a76212c"
+source = "git+https://github.com/mkrueger/icy_ui?branch=master#f68f3f11db409c04e28e20929a88e28a34d0c494"
 dependencies = [
  "icy_ui_graphics",
  "icy_ui_tiny_skia",
@@ -1868,7 +1868,7 @@ dependencies = [
 [[package]]
 name = "icy_ui_runtime"
 version = "0.1.0"
-source = "git+https://github.com/mkrueger/icy_ui?branch=master#b631310b65bc31985b33fd99192f6ffd3a76212c"
+source = "git+https://github.com/mkrueger/icy_ui?branch=master#f68f3f11db409c04e28e20929a88e28a34d0c494"
 dependencies = [
  "bytes",
  "icy_ui_core",
@@ -1880,7 +1880,7 @@ dependencies = [
 [[package]]
 name = "icy_ui_tiny_skia"
 version = "0.1.0"
-source = "git+https://github.com/mkrueger/icy_ui?branch=master#b631310b65bc31985b33fd99192f6ffd3a76212c"
+source = "git+https://github.com/mkrueger/icy_ui?branch=master#f68f3f11db409c04e28e20929a88e28a34d0c494"
 dependencies = [
  "bytemuck",
  "cosmic-text",
@@ -1896,7 +1896,7 @@ dependencies = [
 [[package]]
 name = "icy_ui_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/mkrueger/icy_ui?branch=master#b631310b65bc31985b33fd99192f6ffd3a76212c"
+source = "git+https://github.com/mkrueger/icy_ui?branch=master#f68f3f11db409c04e28e20929a88e28a34d0c494"
 dependencies = [
  "bitflags 2.10.0",
  "bytemuck",
@@ -1915,7 +1915,7 @@ dependencies = [
 [[package]]
 name = "icy_ui_widget"
 version = "0.1.0"
-source = "git+https://github.com/mkrueger/icy_ui?branch=master#b631310b65bc31985b33fd99192f6ffd3a76212c"
+source = "git+https://github.com/mkrueger/icy_ui?branch=master#f68f3f11db409c04e28e20929a88e28a34d0c494"
 dependencies = [
  "icy_ui_renderer",
  "icy_ui_runtime",
@@ -1931,8 +1931,9 @@ dependencies = [
 [[package]]
 name = "icy_ui_windows"
 version = "0.1.0"
-source = "git+https://github.com/mkrueger/icy_ui?branch=master#b631310b65bc31985b33fd99192f6ffd3a76212c"
+source = "git+https://github.com/mkrueger/icy_ui?branch=master#f68f3f11db409c04e28e20929a88e28a34d0c494"
 dependencies = [
+ "icy_ui_core",
  "log",
  "windows 0.58.0",
  "windows-core 0.58.0",
@@ -1941,7 +1942,7 @@ dependencies = [
 [[package]]
 name = "icy_ui_winit"
 version = "0.1.0"
-source = "git+https://github.com/mkrueger/icy_ui?branch=master#b631310b65bc31985b33fd99192f6ffd3a76212c"
+source = "git+https://github.com/mkrueger/icy_ui?branch=master#f68f3f11db409c04e28e20929a88e28a34d0c494"
 dependencies = [
  "clipboard-rs",
  "icy_ui_debug",
@@ -2123,11 +2124,12 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kurbo"
-version = "0.10.4"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1618d4ebd923e97d67e7cd363d80aef35fe961005cbbbb3d2dad8bdd1bc63440"
+checksum = "7564e90fe3c0d5771e1f0bc95322b21baaeaa0d9213fa6a0b61c99f8b17b3bfb"
 dependencies = [
  "arrayvec",
+ "euclid",
  "smallvec",
 ]
 
@@ -3646,7 +3648,7 @@ dependencies = [
 [[package]]
 name = "smithay-clipboard"
 version = "0.7.3"
-source = "git+https://github.com/mkrueger/smithay-clipboard.git?rev=0be79e9828bb42ea6591afe95e2f189458577054#0be79e9828bb42ea6591afe95e2f189458577054"
+source = "git+https://github.com/mkrueger/icy_ui?branch=master#f68f3f11db409c04e28e20929a88e28a34d0c494"
 dependencies = [
  "libc",
  "raw-window-handle",
