@@ -417,7 +417,7 @@ impl MemoryEditor {
         self.editor_initial_size = if search_type == SearchType::String || search_type == SearchType::StringUtf16 {
             1
         } else {
-            search_type.get_byte_length()
+            search_type.fixed_byte_length().unwrap_or(1)
         };
 
         // Reset cursor to highlight the first byte

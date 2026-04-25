@@ -1161,7 +1161,10 @@ where
     for result in old_results {
         match result.search_type.from_string(value_text) {
             Ok(search_value) => {
-                if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), handle) {
+                let Some(byte_len) = result.search_type.fixed_byte_length() else {
+                    continue;
+                };
+                if let Ok(buf) = copy_address(result.addr, byte_len, handle) {
                     let matches = match result.search_type {
                         SearchType::Float => {
                             if buf.len() == 4 && search_value.1.len() == 4 {
@@ -1351,6 +1354,16 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
     result
 }
 
+// Float search tolerance.
+//
+// This is intentionally a coarse tolerance just under 1.0 (rather than a
+// small relative epsilon). The tool is primarily used with games whose
+// floating-point values drift slightly between frames or are stored in a
+// scaled/quantized form that does not round-trip exactly to the user's
+// typed value. The motivating example is "Warhammer 40,000: Dawn of War",
+// where matching a typed integer like resource amounts against the in-game
+// f32/f64 storage requires accepting differences well above machine
+// epsilon. Tightening this would make those values impossible to find.
 fn get_epsilon_f32(_current: f32) -> f32 {
     1.0 - f32::EPSILON
 }

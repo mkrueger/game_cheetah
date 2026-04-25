@@ -293,8 +293,9 @@ impl App {
                         let b = !search_context.freezed_addresses.contains(&result.addr);
                         if b {
                             search_context.freezed_addresses.insert(result.addr);
-                            if let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle()
-                                && let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle)
+                            if let Some(byte_len) = result.search_type.fixed_byte_length()
+                                && let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle()
+                                && let Ok(buf) = copy_address(result.addr, byte_len, &handle)
                             {
                                 self.state
                                     .freeze_sender
@@ -342,7 +343,10 @@ impl App {
                             for result in results.iter() {
                                 if !search_context.freezed_addresses.contains(&result.addr) {
                                     search_context.freezed_addresses.insert(result.addr);
-                                    if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
+                                    let Some(byte_len) = result.search_type.fixed_byte_length() else {
+                                        continue;
+                                    };
+                                    if let Ok(buf) = copy_address(result.addr, byte_len, &handle) {
                                         self.state
                                             .freeze_sender
                                             .send(FreezeMessage {

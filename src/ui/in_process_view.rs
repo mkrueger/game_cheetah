@@ -304,8 +304,10 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                 if utf16_hint { string_len_chars * 2 } else { string_len },
             )
             .unwrap_or_default()
-        } else if let Ok(handle) = (app.state.pid as process_memory::Pid).try_into_process_handle() {
-            if let Ok(buf) = copy_address(result.addr, result.search_type.get_byte_length(), &handle) {
+        } else if let Some(byte_len) = result.search_type.fixed_byte_length()
+            && let Ok(handle) = (app.state.pid as process_memory::Pid).try_into_process_handle()
+        {
+            if let Ok(buf) = copy_address(result.addr, byte_len, &handle) {
                 let val = SearchValue(result.search_type, buf);
                 val.to_string()
             } else {

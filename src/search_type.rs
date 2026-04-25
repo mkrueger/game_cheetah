@@ -41,15 +41,6 @@ impl SearchType {
         }
     }
 
-    pub fn get_byte_length(&self) -> usize {
-        self.fixed_byte_length().unwrap_or_else(|| match self {
-            SearchType::Guess => panic!("guess has no length"),
-            SearchType::Unknown => panic!("unknown has no length"),
-            SearchType::String | SearchType::StringUtf16 => panic!("string has no length"),
-            SearchType::Byte | SearchType::Short | SearchType::Int | SearchType::Int64 | SearchType::Float | SearchType::Double => unreachable!(),
-        })
-    }
-
     pub fn fixed_byte_length(&self) -> Option<usize> {
         match self {
             SearchType::Guess | SearchType::Unknown | SearchType::String | SearchType::StringUtf16 => None,
