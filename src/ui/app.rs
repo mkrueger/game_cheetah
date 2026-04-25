@@ -300,6 +300,10 @@ impl App {
                 self.editing_result = None;
                 Task::none()
             }
+            Message::ResultEditingBegin(index, text) => {
+                self.editing_result = Some((index, text));
+                icy_ui::widget::operation::focus(icy_ui::widget::Id::from(format!("result-value-{index}")))
+            }
             Message::ResultEditingChanged(index, text) => {
                 self.editing_result = Some((index, text));
                 Task::none()

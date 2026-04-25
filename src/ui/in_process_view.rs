@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use i18n_embed_fl::fl;
 use icy_ui::{
     Element, Length, alignment,
-    widget::{button, checkbox, column, container, pick_list, progress_bar, row, rule, scroll_area, scrollable, text, text_input},
+    widget::{button, checkbox, column, container, mouse_area, pick_list, progress_bar, row, rule, scroll_area, scrollable, text, text_input},
 };
 use process_memory::{TryIntoProcessHandle, copy_address};
 
@@ -359,31 +359,53 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                 ]
                             } else {
                                 let is_frozen = current_search_context.freezed_addresses.contains(&result.addr);
-                                let display_text = match &app.editing_result {
-                                    Some((idx, buf)) if *idx == i => buf.clone(),
-                                    _ => value_text.clone(),
-                                };
+                                let edited_text = app.editing_result.as_ref().and_then(|(idx, buf)| (*idx == i).then_some(buf.clone()));
                                 row![
                                     container(text(format!("0x{:X}", result.addr)).size(14)).width(Length::Fixed(120.0)),
                                     {
-                                        let input = text_input("", &display_text)
-                                            .id(icy_ui::widget::Id::from(format!("result-value-{i}")))
-                                            .width(Length::Fixed(120.0))
-                                            .style(|theme: &icy_ui::Theme, status| {
-                                                let mut style = icy_ui::widget::text_input::default(theme, status);
-                                                if !matches!(status, icy_ui::widget::text_input::Status::Disabled) {
-                                                    style.background = theme.background.base.into();
+                                        if let Some(display_text) = edited_text {
+                                            let editor: Element<'_, Message> = text_input("", &display_text)
+                                                .id(icy_ui::widget::Id::from(format!("result-value-{i}")))
+                                                .width(Length::Fixed(120.0))
+                                                .style(|theme: &icy_ui::Theme, status| {
+                                                    let mut style = icy_ui::widget::text_input::default(theme, status);
                                                     style.value = theme.accent.base;
-                                                    style.placeholder = theme.background.on.scale_alpha(0.5);
-                                                }
-                                                style
-                                            });
-                                        if is_frozen {
-                                            input // frozen: no on_input handler = disabled
-                                        } else {
-                                            input
+                                                    style.border.color = theme.accent.base;
+                                                    style
+                                                })
                                                 .on_input(move |v| Message::ResultEditingChanged(i, v))
                                                 .on_submit(Message::ResultEditingCommit(i))
+                                                .into();
+                                            editor
+                                        } else if is_frozen {
+                                            let frozen: Element<'_, Message> =
+                                                container(text(value_text).size(14).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                                                    color: Some(theme.background.on.scale_alpha(0.5)),
+                                                }))
+                                                .width(Length::Fixed(120.0))
+                                                .padding([4, 6])
+                                                .into();
+                                            frozen
+                                        } else {
+                                            let clickable: Element<'_, Message> = mouse_area(
+                                                container(text(value_text.clone()).size(14).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                                                    color: Some(theme.accent.base),
+                                                }))
+                                                .width(Length::Fixed(120.0))
+                                                .padding([4, 6])
+                                                .style(|theme: &icy_ui::Theme| container::Style {
+                                                    background: Some(theme.background.base.into()),
+                                                    border: icy_ui::Border {
+                                                        radius: 2.0.into(),
+                                                        width: 1.0,
+                                                        color: theme.primary.divider,
+                                                    },
+                                                    ..Default::default()
+                                                }),
+                                            )
+                                            .on_press(Message::ResultEditingBegin(i, value_text.clone()))
+                                            .into();
+                                            clickable
                                         }
                                     },
                                     if show_search_types {
