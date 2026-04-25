@@ -347,7 +347,18 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                 row![
                                     container(text(format!("0x{:X}", result.addr)).size(14)).width(Length::Fixed(120.0)),
                                     {
-                                        let input = text_input("", &display_text).width(Length::Fixed(120.0));
+                                        let input = text_input("", &display_text)
+                                            .id(icy_ui::widget::Id::from(format!("result-value-{i}")))
+                                            .width(Length::Fixed(120.0))
+                                            .style(|theme: &icy_ui::Theme, status| {
+                                                let mut style = icy_ui::widget::text_input::default(theme, status);
+                                                if !matches!(status, icy_ui::widget::text_input::Status::Disabled) {
+                                                    style.background = theme.secondary.base.into();
+                                                    style.value = theme.secondary.on;
+                                                    style.placeholder = theme.secondary.on.scale_alpha(0.6);
+                                                }
+                                                style
+                                            });
                                         if is_frozen {
                                             input // frozen: no on_input handler = disabled
                                         } else {
