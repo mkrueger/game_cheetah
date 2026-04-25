@@ -471,23 +471,24 @@ impl MemoryEditor {
         self.cursor_nibble = 0; // Always start at high nibble when clicking
     }
 
-    pub fn edit_hex(&mut self, edit_address: usize, pid: process_memory::Pid, hex_digit: u8) {
+    pub fn edit_hex(&mut self, edit_address: usize, pid: process_memory::Pid, hex_digit: u8) -> Result<(), String> {
         let offset = self.cursor_row * 16 + self.cursor_col;
-        if let Ok(handle) = pid.try_into_process_handle() {
-            let address = edit_address + offset;
-            // Read current byte
-            if let Ok(buf) = copy_address(address, 1, &handle) {
-                let current_byte = buf[0];
-                let new_byte = if self.cursor_nibble == 0 {
-                    // Editing high nibble
-                    (hex_digit << 4) | (current_byte & 0x0F)
-                } else {
-                    // Editing low nibble
-                    (current_byte & 0xF0) | hex_digit
-                };
-                handle.put_address(address, &[new_byte]).unwrap_or_default();
-            }
-        }
+        let address = edit_address + offset;
+        let handle = pid
+            .try_into_process_handle()
+            .map_err(|e| format!("Failed to attach to process: {e}"))?;
+        let buf = copy_address(address, 1, &handle).map_err(|e| format!("Failed to read 0x{address:X}: {e}"))?;
+        let current_byte = buf[0];
+        let new_byte = if self.cursor_nibble == 0 {
+            // Editing high nibble
+            (hex_digit << 4) | (current_byte & 0x0F)
+        } else {
+            // Editing low nibble
+            (current_byte & 0xF0) | hex_digit
+        };
+        handle
+            .put_address(address, &[new_byte])
+            .map_err(|e| format!("Failed to write 0x{address:X}: {e}"))?;
 
         // Advance to next nibble
         if self.cursor_nibble == 0 {
@@ -503,5 +504,6 @@ impl MemoryEditor {
                 }
             }
         }
+        Ok(())
     }
 }

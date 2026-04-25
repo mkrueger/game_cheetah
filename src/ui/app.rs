@@ -264,21 +264,26 @@ impl App {
 
                     if index < results.len() {
                         let result = &results[index];
-                        if let Ok(value) = result.search_type.from_string(&value_text) {
-                            handle.put_address(result.addr, &value.1).unwrap_or_default();
-                            if current_search.freezed_addresses.contains(&result.addr) {
-                                self.state
-                                    .freeze_sender
-                                    .send(FreezeMessage {
+                        match result.search_type.from_string(&value_text) {
+                            Ok(value) => {
+                                if let Err(err) = handle.put_address(result.addr, &value.1) {
+                                    self.state.error_text = format!("Failed to write 0x{:X}: {}", result.addr, err);
+                                } else if current_search.freezed_addresses.contains(&result.addr)
+                                    && let Err(err) = self.state.freeze_sender.send(FreezeMessage {
                                         msg: crate::MessageCommand::Freeze,
                                         addr: result.addr,
                                         value,
                                     })
-                                    .unwrap_or_default();
+                                {
+                                    self.state.error_text = format!("Freeze channel closed: {err}");
+                                }
+                            }
+                            Err(err) => {
+                                self.state.error_text = format!("Invalid value '{}': {}", value_text, err);
                             }
                         }
                     } else {
-                        println!("Invalid value for result at index {}: {}", index, value_text);
+                        self.state.error_text = format!("Invalid result index {index}");
                     }
                 }
                 Task::none()
@@ -434,7 +439,9 @@ impl App {
                     && let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle()
                 {
                     let address = self.state.edit_address + offset;
-                    handle.put_address(address, &[byte_value]).unwrap_or_default();
+                    if let Err(err) = handle.put_address(address, &[byte_value]) {
+                        self.state.error_text = format!("Failed to write 0x{:X}: {}", address, err);
+                    }
                 }
                 Task::none()
             }
@@ -480,8 +487,9 @@ impl App {
             Message::MemoryEditorBeginEdit => Task::none(),
             Message::MemoryEditorEndEdit => Task::none(),
             Message::MemoryEditorEditHex(hex_digit) => {
-                self.memory_editor.edit_hex(self.state.edit_address, self.state.pid, hex_digit);
-
+                if let Err(err) = self.memory_editor.edit_hex(self.state.edit_address, self.state.pid, hex_digit) {
+                    self.state.error_text = err;
+                }
                 Task::none()
             }
             Message::SortProcesses(column) => {

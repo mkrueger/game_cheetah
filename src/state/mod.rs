@@ -76,9 +76,11 @@ pub struct GameCheetahEngine {
 
 impl Default for GameCheetahEngine {
     fn default() -> Self {
+        const MAX_FREEZE_FAILURES: u32 = 5;
         let (tx, rx) = crossbeam_channel::unbounded::<FreezeMessage>();
         thread::spawn(move || {
             let mut freezed_values: HashMap<usize, SearchValue> = HashMap::new();
+            let mut failure_counts: HashMap<usize, u32> = HashMap::new();
             let mut pid: i32 = 0;
             let ticker = tick(Duration::from_millis(125));
             loop {
@@ -89,13 +91,16 @@ impl Default for GameCheetahEngine {
                             pid = msg.addr as i32;
                             if pid == 0 {
                                 freezed_values.clear();
+                                failure_counts.clear();
                             }
                         }
                         MessageCommand::Freeze => {
                             freezed_values.insert(msg.addr, msg.value);
+                            failure_counts.remove(&msg.addr);
                         }
                         MessageCommand::Unfreeze => {
                             freezed_values.remove(&msg.addr);
+                            failure_counts.remove(&msg.addr);
                         }
                     }
                 }
@@ -104,8 +109,25 @@ impl Default for GameCheetahEngine {
                     recv(ticker) -> _ => {
                         if pid != 0
                             && let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle() {
+                                let mut to_drop: Vec<usize> = Vec::new();
                                 for (addr, value) in &freezed_values {
-                                    let _ = handle.put_address(*addr, &value.1);
+                                    if let Err(err) = handle.put_address(*addr, &value.1) {
+                                        let counter = failure_counts.entry(*addr).or_insert(0);
+                                        *counter += 1;
+                                        if *counter >= MAX_FREEZE_FAILURES {
+                                            eprintln!(
+                                                "freeze: giving up on 0x{:X} after {} failures: {}",
+                                                addr, counter, err
+                                            );
+                                            to_drop.push(*addr);
+                                        }
+                                    } else {
+                                        failure_counts.remove(addr);
+                                    }
+                                }
+                                for addr in to_drop {
+                                    freezed_values.remove(&addr);
+                                    failure_counts.remove(&addr);
                                 }
                             }
                     },
@@ -114,10 +136,19 @@ impl Default for GameCheetahEngine {
                             match msg.msg {
                                 MessageCommand::Pid => {
                                     pid = msg.addr as i32;
-                                    if pid == 0 { freezed_values.clear(); }
+                                    if pid == 0 {
+                                        freezed_values.clear();
+                                        failure_counts.clear();
+                                    }
                                 }
-                                MessageCommand::Freeze => { freezed_values.insert(msg.addr, msg.value); }
-                                MessageCommand::Unfreeze => { freezed_values.remove(&msg.addr); }
+                                MessageCommand::Freeze => {
+                                    freezed_values.insert(msg.addr, msg.value);
+                                    failure_counts.remove(&msg.addr);
+                                }
+                                MessageCommand::Unfreeze => {
+                                    freezed_values.remove(&msg.addr);
+                                    failure_counts.remove(&msg.addr);
+                                }
                             }
                         } else {
                             break; // channel closed
