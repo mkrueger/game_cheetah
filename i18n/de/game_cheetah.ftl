@@ -108,3 +108,36 @@ unknown-search-description = Speicherwerte vergleichen ohne den genauen Wert zu 
 process-exited-title = Prozess beendet
 process-exited-message = Der Zielprozess läuft nicht mehr. Bitte kehren Sie zum Hauptmenü zurück, um einen neuen Prozess auszuwählen.
 back-to-main-button = Zurück zum Hauptmenü
+
+# Speichereditor
+memory-editor-title = Speichereditor
+memory-editor-pid = PID { $pid }
+memory-editor-address-label = Adresse
+memory-editor-address-hint = 0x…
+memory-editor-go-button = Los
+memory-editor-ascii-heading = ASCII
+memory-editor-no-regions = Keine lesbaren Speicherbereiche
+memory-editor-region-label = Bereich
+memory-editor-region-unmapped = kein zugeordneter Bereich
+memory-editor-region-unnamed = <ohne Namen>
+memory-editor-region-anonymous = anonym
+memory-editor-from-hit-label = vom Suchtreffer
+memory-editor-access-unmapped = nicht zugeordnet
+memory-editor-access-rwx = lesen / schreiben / ausführen
+memory-editor-access-rw = lesen / schreiben
+memory-editor-access-rx = lesen / ausführen
+memory-editor-access-r = nur lesen
+memory-editor-access-w = nur schreiben
+memory-editor-access-x = nur ausführen
+memory-editor-access-none = kein Zugriff
+
+# Speichereditor – Fehler
+memory-editor-error-cursor-not-readable = Cursor befindet sich nicht in einem lesbaren Speicherbereich
+memory-editor-error-read-map = Speicherkarte für PID { $pid } konnte nicht gelesen werden: { $error }
+memory-editor-error-no-regions = PID { $pid } meldet keine lesbaren Speicherbereiche
+memory-editor-error-attach = Verbinden mit Prozess fehlgeschlagen: { $error }
+memory-editor-error-read-address = Lesen von 0x{ $address } fehlgeschlagen: { $error }
+memory-editor-error-write-address = Schreiben nach 0x{ $address } fehlgeschlagen: { $error }
+memory-editor-error-invalid-value = Ungültiger { $kind }-Wert '{ $input }': { $error }
+memory-editor-error-out-of-range-max = { $kind }-Wert { $value } liegt außerhalb des Bereichs (max { $max })
+memory-editor-error-out-of-range = { $kind }-Wert { $value } liegt außerhalb des Bereichs ({ $min }..={ $max })

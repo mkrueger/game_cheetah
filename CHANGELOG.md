@@ -17,6 +17,7 @@ A robustness, performance, and UX release.
 - Memory editor region info now sits in its own band above the hex grid, with a compact status strip below the grid showing the focused address and offset from the opened search hit (when applicable).
 - Memory editor highlights bytes that change in the target process: each visible byte that updates is briefly tinted in the destructive color and fades back to normal, making it obvious which addresses the game is currently writing to.
 - Memory editor undo/redo: `Ctrl/Cmd+Z` undoes the most recent edit (hex digit or inspector value), `Shift+Ctrl/Cmd+Z` redoes it. The cursor jumps to the affected address so the change is visible.
+- Memory editor strings (toolbar, header, status strip, region access labels, and error messages) are now localized through Fluent and ship with English and German translations.
 - Process selection list now defaults to sorting by memory size, descending. Users can still click any column header to override.
 - Attach now probes the target process and surfaces a platform-specific hint when access is denied (Linux: `kernel.yama.ptrace_scope`; macOS: `task_for_pid` entitlements; Windows: Administrator / protected processes).
 - Process exit / PID recycling detection. The engine captures the target's start time at attach and refuses to keep operating against a recycled PID, so the freeze loop can no longer write into an unrelated process when the target restarts.

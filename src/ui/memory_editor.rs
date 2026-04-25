@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use i18n_embed_fl::fl;
 use icy_ui::{
     Element, Length, Task, alignment,
     border::Radius,
@@ -188,7 +189,14 @@ impl MemoryEditor {
     }
 
     pub fn refresh_regions(&mut self, pid: process_memory::Pid) -> Result<(), String> {
-        let mut maps = get_process_maps(pid).map_err(|err| format!("Failed to read memory map of PID {pid}: {err}"))?;
+        let mut maps = get_process_maps(pid).map_err(|err| {
+            fl!(
+                crate::LANGUAGE_LOADER,
+                "memory-editor-error-read-map",
+                pid = pid.to_string(),
+                error = err.to_string()
+            )
+        })?;
         maps.sort_by_key(proc_maps::MapRange::start);
         let mut regions = Vec::new();
         let mut row_start = 0usize;
@@ -202,7 +210,7 @@ impl MemoryEditor {
             let name = map
                 .filename()
                 .map(|path| path.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "anonymous".to_string());
+                .unwrap_or_else(|| fl!(crate::LANGUAGE_LOADER, "memory-editor-region-anonymous"));
 
             regions.push(MemoryRegion {
                 start: map.start(),
@@ -218,7 +226,7 @@ impl MemoryEditor {
         }
 
         if regions.is_empty() {
-            return Err(format!("PID {pid} reports no readable memory regions"));
+            return Err(fl!(crate::LANGUAGE_LOADER, "memory-editor-error-no-regions", pid = pid.to_string()));
         }
 
         self.regions = regions;
@@ -279,30 +287,60 @@ impl MemoryEditor {
         } else {
             text.parse::<u64>()
         }
-        .map_err(|err| format!("Invalid {label} value '{input}': {err}"))?;
+        .map_err(|err| {
+            fl!(
+                crate::LANGUAGE_LOADER,
+                "memory-editor-error-invalid-value",
+                kind = label.to_string(),
+                input = input.to_string(),
+                error = err.to_string()
+            )
+        })?;
 
         if value <= max {
             Ok(value)
         } else {
-            Err(format!("{label} value {value} is out of range (max {max})"))
+            Err(fl!(
+                crate::LANGUAGE_LOADER,
+                "memory-editor-error-out-of-range-max",
+                kind = label.to_string(),
+                value = value.to_string(),
+                max = max.to_string()
+            ))
         }
     }
 
     fn parse_signed(input: &str, min: i64, max: i64, label: &str) -> Result<i64, String> {
         let text = input.trim().replace('_', "");
+        let invalid = |err: std::num::ParseIntError| {
+            fl!(
+                crate::LANGUAGE_LOADER,
+                "memory-editor-error-invalid-value",
+                kind = label.to_string(),
+                input = input.to_string(),
+                error = err.to_string()
+            )
+        };
         let value = if let Some(hex) = text.strip_prefix("-0x").or_else(|| text.strip_prefix("-0X")) {
-            let magnitude = i64::from_str_radix(hex, 16).map_err(|err| format!("Invalid {label} value '{input}': {err}"))?;
+            let magnitude = i64::from_str_radix(hex, 16).map_err(invalid)?;
             -magnitude
         } else if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-            i64::from_str_radix(hex, 16).map_err(|err| format!("Invalid {label} value '{input}': {err}"))?
+            i64::from_str_radix(hex, 16).map_err(invalid)?
         } else {
-            text.parse::<i64>().map_err(|err| format!("Invalid {label} value '{input}': {err}"))?
+            text.parse::<i64>().map_err(invalid)?
         };
 
         if (min..=max).contains(&value) {
             Ok(value)
         } else {
-            Err(format!("{label} value {value} is out of range ({min}..={max})"))
+            Err(fl!(
+                crate::LANGUAGE_LOADER,
+                "memory-editor-error-out-of-range",
+                kind = label.to_string(),
+                value = value.to_string(),
+                min = min.to_string(),
+                max = max.to_string()
+            ))
         }
     }
 
@@ -323,13 +361,29 @@ impl MemoryEditor {
             InspectorValueKind::F32 => Ok(input
                 .trim()
                 .parse::<f32>()
-                .map_err(|err| format!("Invalid f32 value '{input}': {err}"))?
+                .map_err(|err| {
+                    fl!(
+                        crate::LANGUAGE_LOADER,
+                        "memory-editor-error-invalid-value",
+                        kind = "f32".to_string(),
+                        input = input.to_string(),
+                        error = err.to_string()
+                    )
+                })?
                 .to_le_bytes()
                 .to_vec()),
             InspectorValueKind::F64 => Ok(input
                 .trim()
                 .parse::<f64>()
-                .map_err(|err| format!("Invalid f64 value '{input}': {err}"))?
+                .map_err(|err| {
+                    fl!(
+                        crate::LANGUAGE_LOADER,
+                        "memory-editor-error-invalid-value",
+                        kind = "f64".to_string(),
+                        input = input.to_string(),
+                        error = err.to_string()
+                    )
+                })?
                 .to_le_bytes()
                 .to_vec()),
         }
@@ -357,9 +411,25 @@ impl MemoryEditor {
     /// stack is cleared because a fresh user write invalidates the redo
     /// branch.
     fn write_with_undo(&mut self, pid: process_memory::Pid, address: usize, after: &[u8]) -> Result<(), String> {
-        let handle = pid.try_into_process_handle().map_err(|e| format!("Failed to attach to process: {e}"))?;
-        let before = copy_address(address, after.len(), &handle).map_err(|e| format!("Failed to read 0x{address:X}: {e}"))?;
-        handle.put_address(address, after).map_err(|e| format!("Failed to write 0x{address:X}: {e}"))?;
+        let handle = pid
+            .try_into_process_handle()
+            .map_err(|e| fl!(crate::LANGUAGE_LOADER, "memory-editor-error-attach", error = e.to_string()))?;
+        let before = copy_address(address, after.len(), &handle).map_err(|e| {
+            fl!(
+                crate::LANGUAGE_LOADER,
+                "memory-editor-error-read-address",
+                address = format!("{address:X}"),
+                error = e.to_string()
+            )
+        })?;
+        handle.put_address(address, after).map_err(|e| {
+            fl!(
+                crate::LANGUAGE_LOADER,
+                "memory-editor-error-write-address",
+                address = format!("{address:X}"),
+                error = e.to_string()
+            )
+        })?;
 
         // Skip recording no-op writes so redundant submits don't pollute the
         // history.
@@ -390,10 +460,17 @@ impl MemoryEditor {
         let Some(entry) = self.undo_stack.pop() else {
             return Ok(None);
         };
-        let handle = pid.try_into_process_handle().map_err(|e| format!("Failed to attach to process: {e}"))?;
-        handle
-            .put_address(entry.address, &entry.before)
-            .map_err(|e| format!("Failed to write 0x{:X}: {e}", entry.address))?;
+        let handle = pid
+            .try_into_process_handle()
+            .map_err(|e| fl!(crate::LANGUAGE_LOADER, "memory-editor-error-attach", error = e.to_string()))?;
+        handle.put_address(entry.address, &entry.before).map_err(|e| {
+            fl!(
+                crate::LANGUAGE_LOADER,
+                "memory-editor-error-write-address",
+                address = format!("{:X}", entry.address),
+                error = e.to_string()
+            )
+        })?;
         let address = entry.address;
         self.redo_stack.push(entry);
         Ok(Some(address))
@@ -404,10 +481,17 @@ impl MemoryEditor {
         let Some(entry) = self.redo_stack.pop() else {
             return Ok(None);
         };
-        let handle = pid.try_into_process_handle().map_err(|e| format!("Failed to attach to process: {e}"))?;
-        handle
-            .put_address(entry.address, &entry.after)
-            .map_err(|e| format!("Failed to write 0x{:X}: {e}", entry.address))?;
+        let handle = pid
+            .try_into_process_handle()
+            .map_err(|e| fl!(crate::LANGUAGE_LOADER, "memory-editor-error-attach", error = e.to_string()))?;
+        handle.put_address(entry.address, &entry.after).map_err(|e| {
+            fl!(
+                crate::LANGUAGE_LOADER,
+                "memory-editor-error-write-address",
+                address = format!("{:X}", entry.address),
+                error = e.to_string()
+            )
+        })?;
         let address = entry.address;
         self.undo_stack.push(entry);
         Ok(Some(address))
@@ -492,15 +576,25 @@ impl MemoryEditor {
 
         let header = container(
             row![
-                container(text("Address").size(12).font(icy_ui::Font::MONOSPACE).style(dim))
-                    .width(Length::Fixed(ADDRESS_WIDTH))
-                    .padding([0, 8])
-                    .align_x(alignment::Alignment::Start),
+                container(
+                    text(fl!(crate::LANGUAGE_LOADER, "memory-editor-address-label"))
+                        .size(12)
+                        .font(icy_ui::Font::MONOSPACE)
+                        .style(dim)
+                )
+                .width(Length::Fixed(ADDRESS_WIDTH))
+                .padding([0, 8])
+                .align_x(alignment::Alignment::Start),
                 row![make_hex_header_group(0), make_hex_header_group(8),].spacing(HEX_GROUP_GAP),
-                container(text("ASCII").size(12).font(icy_ui::Font::MONOSPACE).style(dim))
-                    .width(Length::Fixed(ASCII_BLOCK_WIDTH))
-                    .padding([0, 4])
-                    .align_x(alignment::Alignment::Start),
+                container(
+                    text(fl!(crate::LANGUAGE_LOADER, "memory-editor-ascii-heading"))
+                        .size(12)
+                        .font(icy_ui::Font::MONOSPACE)
+                        .style(dim)
+                )
+                .width(Length::Fixed(ASCII_BLOCK_WIDTH))
+                .padding([0, 4])
+                .align_x(alignment::Alignment::Start),
             ]
             .spacing(GUTTER)
             .align_y(alignment::Alignment::Center),
@@ -654,7 +748,7 @@ impl MemoryEditor {
                         (range_start..range_end)
                             .map(|absolute_row| {
                                 let Some(region) = Self::region_for_row_in(&regions, absolute_row) else {
-                                    return container(text("No readable memory regions").size(14))
+                                    return container(text(fl!(crate::LANGUAGE_LOADER, "memory-editor-no-regions")).size(14))
                                         .height(Length::Fixed(ROW_HEIGHT))
                                         .padding([0, 16])
                                         .into();
@@ -829,21 +923,22 @@ impl MemoryEditor {
         let cursor_region = self.region_for_row(cursor_row);
         let cursor_address_text = cursor_address.map_or_else(|| "—".to_string(), |address| format!("0x{address:016X}"));
         let access_text = cursor_region.map_or_else(
-            || "unmapped".to_string(),
+            || fl!(crate::LANGUAGE_LOADER, "memory-editor-access-unmapped"),
             |region| match (region.readable, region.writable, region.executable) {
-                (true, true, true) => "read / write / execute".to_string(),
-                (true, true, false) => "read / write".to_string(),
-                (true, false, true) => "read / execute".to_string(),
-                (true, false, false) => "read-only".to_string(),
-                (false, true, _) => "write-only".to_string(),
-                (false, false, true) => "execute-only".to_string(),
-                (false, false, false) => "no access".to_string(),
+                (true, true, true) => fl!(crate::LANGUAGE_LOADER, "memory-editor-access-rwx"),
+                (true, true, false) => fl!(crate::LANGUAGE_LOADER, "memory-editor-access-rw"),
+                (true, false, true) => fl!(crate::LANGUAGE_LOADER, "memory-editor-access-rx"),
+                (true, false, false) => fl!(crate::LANGUAGE_LOADER, "memory-editor-access-r"),
+                (false, true, _) => fl!(crate::LANGUAGE_LOADER, "memory-editor-access-w"),
+                (false, false, true) => fl!(crate::LANGUAGE_LOADER, "memory-editor-access-x"),
+                (false, false, false) => fl!(crate::LANGUAGE_LOADER, "memory-editor-access-none"),
             },
         );
         let region_summary_text = cursor_region.map_or_else(
-            || "no mapped region".to_string(),
+            || fl!(crate::LANGUAGE_LOADER, "memory-editor-region-unmapped"),
             |region| {
-                let name = if region.name.is_empty() { "<unnamed>" } else { region.name.as_str() };
+                let unnamed = fl!(crate::LANGUAGE_LOADER, "memory-editor-region-unnamed");
+                let name = if region.name.is_empty() { unnamed.as_str() } else { region.name.as_str() };
                 format!("{name}   0x{:X}–0x{:X}   ({})", region.start, region.end(), access_text)
             },
         );
@@ -877,9 +972,12 @@ impl MemoryEditor {
         // (potentially long) region description gets its own line and never
         // pushes the address/offset off-screen.
         let region_strip = container(
-            row![status_label("Region".to_string()), status_value(region_summary_text)]
-                .spacing(8)
-                .align_y(alignment::Alignment::Center),
+            row![
+                status_label(fl!(crate::LANGUAGE_LOADER, "memory-editor-region-label")),
+                status_value(region_summary_text)
+            ]
+            .spacing(8)
+            .align_y(alignment::Alignment::Center),
         )
         .width(Length::Fill)
         .padding([6, 12])
@@ -893,14 +991,17 @@ impl MemoryEditor {
         // cursor moves byte-by-byte.
         let mut status_items: Vec<Element<'_, Message>> = Vec::new();
         status_items.push(
-            row![status_label("Address".to_string()), status_value(cursor_address_text)]
-                .spacing(6)
-                .align_y(alignment::Alignment::Center)
-                .into(),
+            row![
+                status_label(fl!(crate::LANGUAGE_LOADER, "memory-editor-address-label")),
+                status_value(cursor_address_text)
+            ]
+            .spacing(6)
+            .align_y(alignment::Alignment::Center)
+            .into(),
         );
         if let Some(offset) = offset_text {
             status_items.push(
-                row![status_label("from search hit".to_string()), status_value(offset)]
+                row![status_label(fl!(crate::LANGUAGE_LOADER, "memory-editor-from-hit-label")), status_value(offset)]
                     .spacing(6)
                     .align_y(alignment::Alignment::Center)
                     .into(),
@@ -1075,10 +1176,10 @@ impl MemoryEditor {
         // ---- Toolbar ----------------------------------------------------------
         let toolbar = container(
             row![
-                text("Memory Editor")
+                text(fl!(crate::LANGUAGE_LOADER, "memory-editor-title"))
                     .size(18)
                     .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style { color: Some(theme.primary.on) }),
-                text(format!("PID {}", app.state.pid))
+                text(fl!(crate::LANGUAGE_LOADER, "memory-editor-pid", pid = app.state.pid.to_string()))
                     .size(13)
                     .font(icy_ui::Font::MONOSPACE)
                     .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
@@ -1086,22 +1187,28 @@ impl MemoryEditor {
                     }),
                 container(
                     row![
-                        text("Address").size(13).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                            color: Some(theme.primary.on.scale_alpha(0.7)),
-                        }),
-                        text_input("0x…", &self.address_text)
+                        text(fl!(crate::LANGUAGE_LOADER, "memory-editor-address-label"))
+                            .size(13)
+                            .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                                color: Some(theme.primary.on.scale_alpha(0.7)),
+                            }),
+                        text_input(&fl!(crate::LANGUAGE_LOADER, "memory-editor-address-hint"), &self.address_text)
                             .on_input(Message::MemoryEditorAddressChanged)
                             .on_submit(Message::MemoryEditorJumpToAddress)
                             .font(icy_ui::Font::MONOSPACE)
                             .width(Length::Fixed(200.0)),
-                        button(text("Go")).on_press(Message::MemoryEditorJumpToAddress).padding([4, 12]),
+                        button(text(fl!(crate::LANGUAGE_LOADER, "memory-editor-go-button")))
+                            .on_press(Message::MemoryEditorJumpToAddress)
+                            .padding([4, 12]),
                     ]
                     .spacing(8)
                     .align_y(alignment::Alignment::Center)
                 )
                 .width(Length::Fill)
                 .align_x(alignment::Alignment::End),
-                button(text("Close")).on_press(Message::CloseMemoryEditor).padding([4, 12]),
+                button(text(fl!(crate::LANGUAGE_LOADER, "close-button")))
+                    .on_press(Message::CloseMemoryEditor)
+                    .padding([4, 12]),
             ]
             .spacing(16)
             .align_y(alignment::Alignment::Center),
@@ -1208,10 +1315,19 @@ impl MemoryEditor {
 
     pub fn edit_hex(&mut self, pid: process_memory::Pid, hex_digit: u8) -> Result<(), String> {
         let Some(address) = self.cursor_address() else {
-            return Err("Cursor is not in a readable memory region".to_string());
+            return Err(fl!(crate::LANGUAGE_LOADER, "memory-editor-error-cursor-not-readable"));
         };
-        let handle = pid.try_into_process_handle().map_err(|e| format!("Failed to attach to process: {e}"))?;
-        let buf = copy_address(address, 1, &handle).map_err(|e| format!("Failed to read 0x{address:X}: {e}"))?;
+        let handle = pid
+            .try_into_process_handle()
+            .map_err(|e| fl!(crate::LANGUAGE_LOADER, "memory-editor-error-attach", error = e.to_string()))?;
+        let buf = copy_address(address, 1, &handle).map_err(|e| {
+            fl!(
+                crate::LANGUAGE_LOADER,
+                "memory-editor-error-read-address",
+                address = format!("{address:X}"),
+                error = e.to_string()
+            )
+        })?;
         let current_byte = buf[0];
         let new_byte = if self.cursor_nibble == 0 {
             (hex_digit << 4) | (current_byte & 0x0F)
