@@ -537,7 +537,7 @@ impl App {
                     Ok(Some(address)) => {
                         self.state.error_text.clear();
                         if self.memory_editor.focus_on(address).is_ok() {
-                            return self.memory_editor.snap_to_cursor();
+                            return self.memory_editor.ensure_cursor_visible();
                         }
                     }
                     Ok(None) => {}
@@ -550,7 +550,7 @@ impl App {
                     Ok(Some(address)) => {
                         self.state.error_text.clear();
                         if self.memory_editor.focus_on(address).is_ok() {
-                            return self.memory_editor.snap_to_cursor();
+                            return self.memory_editor.ensure_cursor_visible();
                         }
                     }
                     Ok(None) => {}
