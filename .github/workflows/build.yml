@@ -40,6 +40,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
       - name: Install gtk
@@ -50,27 +54,28 @@ jobs:
         run: |
           cargo install cargo-deb --version 2.7.0
           cargo install cargo-get
-      - name: Build deb
-        id: build-deb
+      - name: Prepare package metadata
+        id: package-metadata
         run: |
-          export VERSION=$(python3 tools/prep_diz.py "${{ env.APP_NAME }}" "file_id.diz")
+          export VERSION=$(python3 tools/prep_diz.py "file_id.diz")
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+      - name: Build deb
+        run: |
           export DEB=$(cargo deb)
           echo "Copy $DEB to ${{ env.APP_NAME }}_${VERSION}_amd64.deb"
           mv $DEB ${{ env.APP_NAME }}_${VERSION}_amd64.deb
-          sed "s/#VERSION/$VERSION/g" <build/file_id.diz  >file_id.diz
       - name: 'Upload Artifact'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}_linux_${{ steps.build-deb.outputs.version }}
+          name: ${{ env.APP_NAME }}_${{ steps.package-metadata.outputs.version }}_linux_deb
           path: |
-            ${{ env.APP_NAME }}_${{ steps.build-deb.outputs.version }}_amd64.deb
+            ${{ env.APP_NAME }}_${{ steps.package-metadata.outputs.version }}_amd64.deb
             file_id.diz
       - name: Build AppImage
         id: build-appimage
         run: |
-          cargo build --release  # Add this - need to build first!
+          cargo build --release
           wget https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool-x86_64.AppImage
           mkdir -p ${{ env.APP_NAME }}-appimage/usr/bin
@@ -81,14 +86,14 @@ jobs:
           echo "exec \"\$(dirname \"\$0\")/usr/bin/${{ env.APP_NAME }}\" \"\$@\"" >> ${{ env.APP_NAME }}-appimage/AppRun
           chmod a+x ${{ env.APP_NAME }}-appimage/AppRun
 
-          export app_img=$(python3 tools/get_app_img.py "${{ env.APP_NAME }}" "${{ steps.build-deb.outputs.version }}" x86_64)
+          export app_img=$(python3 tools/get_app_img.py "${{ env.APP_NAME }}" "${{ steps.package-metadata.outputs.version }}" x86_64)
           echo "app_img=$app_img" >> $GITHUB_OUTPUT
 
           ./appimagetool-x86_64.AppImage "${{ env.APP_NAME }}-appimage" "$app_img"
       - name: 'Upload AppImage'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}_appimage_${{ steps.build-deb.outputs.version }}
+          name: ${{ env.APP_NAME }}_${{ steps.package-metadata.outputs.version }}_linux_appimage
           path: |
             ${{ steps.build-appimage.outputs.app_img }}
 
@@ -98,25 +103,31 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
       - name: Build exe
         run: |
           cargo build --release
-      - name: Prepare artifact
-        id: prepare-artifact
+      - name: Prepare package metadata
+        id: package-metadata
         shell: pwsh
         run: |
-          $VERSION=$(cargo pkgid | foreach-object { $_ -replace '(.*)#','' })
+          $VERSION=$(python tools/prep_diz.py file_id.diz)
           echo "Version: $VERSION"
           Add-Content -Path $env:GITHUB_ENV -Value "VERSION=$VERSION"
           Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$VERSION"
-          get-content .\build\file_id.diz | %{$_ -replace "#VERSION","$VERSION"} >file_id.diz
+      - name: Prepare artifact
+        shell: pwsh
+        run: |
           cp target/release/${{ env.APP_NAME }}.exe "./${{ env.APP_NAME }}.exe"
       - name: 'Upload Artifact'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}_${{ steps.prepare-artifact.outputs.version }}_windows
+          name: ${{ env.APP_NAME }}_${{ steps.package-metadata.outputs.version }}_windows
           path: |
             ${{ env.APP_NAME }}.exe
             file_id.diz
@@ -127,6 +138,10 @@ jobs:
     runs-on: macos-latest  # Removed matrix strategy
     steps:
       - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
       - name: Install cargo bundle & get
@@ -136,6 +151,12 @@ jobs:
           cargo install cargo-bundle
           brew install create-dmg
           git submodule update --init
+      - name: Prepare package metadata
+        id: package-metadata
+        run: |
+          export VERSION=$(python3 tools/prep_diz.py "file_id.diz")
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
       - name: Build app
         id: build-app
         run: |
@@ -163,9 +184,7 @@ jobs:
           iconutil -c icns AppIcon.iconset
           cp AppIcon.icns "$app.app/Contents/Resources"
 
-          export version=$(python3 tools/prep_diz.py "${{ env.APP_NAME }}" "file_id.diz")
-          echo "version=$version" >> $GITHUB_OUTPUT
-          echo "Version: $version"
+          echo "Version: $VERSION"
 
           echo "Creating universal binary $app.app/Contents/MacOS/${{ env.APP_NAME }}"
           lipo "target/x86_64-apple-darwin/release/${{ env.APP_NAME }}" \
@@ -183,13 +202,13 @@ jobs:
             --icon-size 128 \
             --hide-extension "${{ steps.build-app.outputs.app }}.app" \
             --app-drop-link 600 185 \
-            "${{ env.APP_NAME }}-${{ steps.build-app.outputs.version }}-universal.dmg" \
+            "${{ env.APP_NAME }}-${{ steps.package-metadata.outputs.version }}-universal.dmg" \
             "${{ steps.build-app.outputs.app }}.app"
-          echo "dmg_file=${{ env.APP_NAME }}-${{ steps.build-app.outputs.version }}-universal.dmg" >> $GITHUB_OUTPUT
+          echo "dmg_file=${{ env.APP_NAME }}-${{ steps.package-metadata.outputs.version }}-universal.dmg" >> $GITHUB_OUTPUT
       - name: 'Upload dmg'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}_osx_${{ steps.build-app.outputs.version }}_universal
+          name: ${{ env.APP_NAME }}_${{ steps.package-metadata.outputs.version }}_macos_universal
           path: |
-            ${{ env.APP_NAME }}-${{ steps.build-app.outputs.version }}-universal.dmg
+            ${{ env.APP_NAME }}-${{ steps.package-metadata.outputs.version }}-universal.dmg
             file_id.diz
