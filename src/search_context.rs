@@ -7,7 +7,9 @@ use std::{
 };
 
 use crate::{FreezeMessage, GameCheetahEngine, SearchResult, SearchType, UnknownComparison};
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::{Receiver, Sender, bounded};
+
+const RESULTS_CHANNEL_CAPACITY: usize = 128;
 
 /// Type alias for memory snapshot storage to reduce type complexity
 pub type MemorySnapshot = Arc<RwLock<Vec<(usize, Arc<[u8]>)>>>;
@@ -46,7 +48,7 @@ pub struct SearchContext {
 
 impl SearchContext {
     pub fn new(description: String) -> Self {
-        let (tx, rx) = unbounded();
+        let (tx, rx) = Self::result_channel();
         Self {
             description,
             search_value_text: "".to_owned(),
@@ -66,6 +68,10 @@ impl SearchContext {
             memory_snapshot: Arc::new(RwLock::new(Vec::new())),
             unknown_comparison: None,
         }
+    }
+
+    pub fn result_channel() -> (Sender<Vec<SearchResult>>, Receiver<Vec<SearchResult>>) {
+        bounded(RESULTS_CHANNEL_CAPACITY)
     }
 
     pub fn get_result_count(&self) -> usize {
@@ -91,7 +97,7 @@ impl SearchContext {
         self.old_results.clear();
 
         // Create new channel to clear all pending results
-        let (tx, rx) = unbounded();
+        let (tx, rx) = Self::result_channel();
         self.results_sender = tx;
         self.results_receiver = rx;
 
@@ -117,8 +123,17 @@ impl SearchContext {
     }
 
     pub fn collect_results(&self) -> Arc<Vec<SearchResult>> {
-        // Check if cache is valid - return Arc clone (cheap!)
-        if self.cache_valid.load(Ordering::Acquire)
+        let mut new_results = Vec::new();
+
+        // Always drain pending channel results before returning cached data. This keeps bounded
+        // result channels from filling up while a search is still running.
+        while let Ok(results) = self.results_receiver.try_recv() {
+            new_results.extend(results);
+        }
+
+        // Check if cache is valid - return Arc clone (cheap!) when there is no new data.
+        if new_results.is_empty()
+            && self.cache_valid.load(Ordering::Acquire)
             && let Ok(cache) = self.cached_results.read()
             && let Some(ref results) = *cache
         {
@@ -136,10 +151,7 @@ impl SearchContext {
             }
         } // Read lock definitely dropped here
 
-        // Add any new results from the channel
-        while let Ok(results) = self.results_receiver.try_recv() {
-            all_results.extend(results);
-        }
+        all_results.extend(new_results);
 
         // Wrap in Arc for cheap future clones
         let arc_results = Arc::new(all_results);

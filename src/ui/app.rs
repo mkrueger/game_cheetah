@@ -214,6 +214,10 @@ impl App {
                 // If searching, keep scheduling ticks
                 let current_search_context = &mut self.state.searches[self.state.current_search];
 
+                if !matches!(current_search_context.searching, SearchMode::None) {
+                    current_search_context.collect_results();
+                }
+
                 if current_search_context.search_complete.load(Ordering::SeqCst) {
                     // Collect any final results before marking as complete
                     let final_results = current_search_context.collect_results();

@@ -381,7 +381,7 @@ impl GameCheetahEngine {
         // Need to dereference Arc to clone the underlying Vec for old_results history
         search_context.old_results.push((*old_results).clone());
 
-        let (tx, rx) = crossbeam_channel::unbounded();
+        let (tx, rx) = SearchContext::result_channel();
         search_context.results_sender = tx;
         search_context.results_receiver = rx;
         search_context.invalidate_cache();
@@ -747,7 +747,7 @@ impl GameCheetahEngine {
         }
 
         // Reset channel/cache
-        let (tx, rx) = crossbeam_channel::unbounded();
+        let (tx, rx) = SearchContext::result_channel();
         search_context.results_sender = tx;
         search_context.results_receiver = rx;
         search_context.invalidate_cache();
