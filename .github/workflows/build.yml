@@ -40,7 +40,6 @@ jobs:
 
   build_linux:
     needs: run_checks
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -103,7 +102,6 @@ jobs:
 
   build_windows:
     needs: run_checks
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -138,7 +136,6 @@ jobs:
 
   build_mac:
     needs: run_checks
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-latest  # Removed matrix strategy
     steps:
       - uses: actions/checkout@v5

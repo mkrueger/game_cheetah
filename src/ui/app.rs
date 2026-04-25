@@ -669,7 +669,7 @@ impl App {
                     keyboard::Key::Named(keyboard::key::Named::PageDown) => Some(Message::MemoryEditorPageDown),
                     keyboard::Key::Named(keyboard::key::Named::Tab) => Some(Message::MemoryEditorMoveCursor(0, 1)),
                     keyboard::Key::Named(keyboard::key::Named::Enter) => Some(Message::MemoryEditorBeginEdit),
-                    keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::MemoryEditorEndEdit),
+                    keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::CloseMemoryEditor),
                     keyboard::Key::Character(c) => match c.as_str() {
                         "0" => Some(Message::MemoryEditorEditHex(0)),
                         "1" => Some(Message::MemoryEditorEditHex(1)),
