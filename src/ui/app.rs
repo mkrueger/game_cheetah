@@ -59,6 +59,10 @@ pub struct App {
 
     /// When true, result values are displayed in hexadecimal instead of decimal.
     pub hex_display: bool,
+
+    /// When true, automatically reattach to a process with the same name when
+    /// the current process exits.
+    pub auto_reattach: bool,
 }
 
 impl App {
@@ -68,7 +72,8 @@ impl App {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         let should_update_processes = self.state.last_process_update.elapsed().map_or(true, |elapsed| elapsed.as_millis() > 500);
-        if self.app_state == AppState::ProcessSelection && should_update_processes {
+        let watching = self.auto_reattach && self.state.pid == 0 && !self.state.process_name.is_empty();
+        if (self.app_state == AppState::ProcessSelection || watching) && should_update_processes {
             self.state.update_process_data();
         }
         // Check and update search modes for all searches
@@ -127,6 +132,13 @@ impl App {
             }
             Message::TickProcess => {
                 self.state.detach_if_gone();
+                // Auto-reattach: scan for the process by name and reattach if found.
+                if self.auto_reattach && self.state.pid == 0 && !self.state.process_name.is_empty() {
+                    let target = self.state.process_name.clone();
+                    if let Some(process) = self.state.processes.iter().find(|p| p.name == target).cloned() {
+                        self.state.select_process(&process);
+                    }
+                }
                 icy_ui::Task::perform(
                     async {
                         sleep(Duration::from_millis(2000));
@@ -709,6 +721,10 @@ impl App {
             }
             Message::ToggleHexDisplay => {
                 self.hex_display = !self.hex_display;
+                Task::none()
+            }
+            Message::ToggleAutoReattach => {
+                self.auto_reattach = !self.auto_reattach;
                 Task::none()
             }
         }

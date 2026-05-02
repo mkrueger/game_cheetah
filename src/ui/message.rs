@@ -70,4 +70,5 @@ pub enum Message {
     SaveCheatTable,
     LoadCheatTable,
     ToggleHexDisplay,
+    ToggleAutoReattach,
 }
