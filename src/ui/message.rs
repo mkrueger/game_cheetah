@@ -69,4 +69,5 @@ pub enum Message {
 
     SaveCheatTable,
     LoadCheatTable,
+    ToggleHexDisplay,
 }

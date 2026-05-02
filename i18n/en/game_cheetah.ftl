@@ -66,6 +66,7 @@ address-heading = Address
 value-heading = Value
 freezed-heading = Freezed
 datatype-heading = Data type
+hex-toggle-label = Hex
 
 pid-heading = Pid
 name-heading = Name

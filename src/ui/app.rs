@@ -56,6 +56,9 @@ pub struct App {
 
     /// Brief status shown next to the Save/Load buttons (e.g. path on success, error on failure).
     pub cheat_table_status: String,
+
+    /// When true, result values are displayed in hexadecimal instead of decimal.
+    pub hex_display: bool,
 }
 
 impl App {
@@ -702,6 +705,10 @@ impl App {
                     }
                     Err(e) => self.cheat_table_status = format!("Load error: {e}"),
                 }
+                Task::none()
+            }
+            Message::ToggleHexDisplay => {
+                self.hex_display = !self.hex_display;
                 Task::none()
             }
         }

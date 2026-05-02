@@ -293,7 +293,15 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                 .spacing(5)
                 .align_y(alignment::Alignment::Center)
             )
-            .width(Length::Fill)
+            .width(Length::Fill),
+            container(
+                row![
+                    checkbox(app.hex_display).on_toggle(|_| Message::ToggleHexDisplay).size(14),
+                    text(fl!(crate::LANGUAGE_LOADER, "hex-toggle-label")).size(14),
+                ]
+                .spacing(5)
+                .align_y(alignment::Alignment::Center)
+            )
         ]
     }
     .padding(2)
@@ -327,6 +335,7 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
         }
         // Bump the cache so live memory re-reads actually surface in the UI.
         app.refresh_counter.hash(&mut hasher);
+        app.hex_display.hash(&mut hasher);
         hasher.finish()
     };
 
@@ -352,7 +361,7 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                             {
                                 if let Ok(buf) = copy_address(result.addr, byte_len, &handle) {
                                     let val = SearchValue(result.search_type, buf);
-                                    val.to_string()
+                                    if app.hex_display { val.to_hex_string() } else { val.to_string() }
                                 } else {
                                     String::new()
                                 }
