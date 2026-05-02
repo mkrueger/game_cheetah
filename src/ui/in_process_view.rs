@@ -268,8 +268,8 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
             container(text(fl!(crate::LANGUAGE_LOADER, "value-heading")).size(14)).width(Length::Fixed(120.0)),
         ]
     } else {
-        // Check if all results are frozen for toggle button state
-        let all_frozen = !results.is_empty() && results.iter().all(|r| current_search_context.freezed_addresses.contains(&r.addr));
+        let frozen_count = results.iter().filter(|r| current_search_context.freezed_addresses.contains(&r.addr)).count();
+        let all_frozen = !results.is_empty() && frozen_count == results.len();
         row![
             container(text(fl!(crate::LANGUAGE_LOADER, "address-heading")).size(14)).width(Length::Fixed(120.0)),
             container(text(fl!(crate::LANGUAGE_LOADER, "value-heading")).size(14)).width(Length::Fixed(120.0)),
@@ -281,7 +281,14 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
             container(
                 row![
                     checkbox(all_frozen).on_toggle(|_| Message::ToggleFreezeAll).size(14),
-                    text(fl!(crate::LANGUAGE_LOADER, "freezed-heading")).size(14)
+                    text(fl!(crate::LANGUAGE_LOADER, "freezed-heading")).size(14),
+                    if frozen_count > 0 {
+                        text(format!("({frozen_count}/{total_results})")).size(11).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                            color: Some(theme.accent.base),
+                        })
+                    } else {
+                        text("").size(11)
+                    }
                 ]
                 .spacing(5)
                 .align_y(alignment::Alignment::Center)
@@ -359,10 +366,15 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                     button(text(fl!(crate::LANGUAGE_LOADER, "edit-button"))).on_press(Message::OpenEditor(i)),
                                     button(text(fl!(crate::LANGUAGE_LOADER, "remove-button"))).on_press(Message::RemoveResult(i))
                                 ]
+                                .height(RESULT_ROW_HEIGHT)
+                                .padding(2)
+                                .spacing(5)
+                                .align_y(alignment::Alignment::Center)
+                                .into()
                             } else {
                                 let is_frozen = current_search_context.freezed_addresses.contains(&result.addr);
                                 let edited_text = app.editing_result.as_ref().and_then(|(idx, buf)| (*idx == i).then_some(buf.clone()));
-                                row![
+                                let inner_row = row![
                                     container(text(format!("0x{:X}", result.addr)).size(14)).width(Length::Fixed(120.0)),
                                     {
                                         if let Some(display_text) = edited_text {
@@ -387,11 +399,29 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                             editor
                                         } else if is_frozen {
                                             let frozen: Element<'_, Message> =
-                                                container(text(value_text).size(14).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                                                    color: Some(theme.background.on.scale_alpha(0.5)),
-                                                }))
+                                                container(
+                                                    row![
+                                                        text("🔒").size(11).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                                                            color: Some(theme.accent.base),
+                                                        }),
+                                                        text(value_text.clone()).size(14).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                                                            color: Some(theme.accent.base),
+                                                        }),
+                                                    ]
+                                                    .spacing(4)
+                                                    .align_y(alignment::Alignment::Center),
+                                                )
                                                 .width(Length::Fixed(120.0))
                                                 .padding([4, 6])
+                                                .style(|theme: &icy_ui::Theme| container::Style {
+                                                    background: Some(theme.accent.base.scale_alpha(0.12).into()),
+                                                    border: icy_ui::Border {
+                                                        radius: 2.0.into(),
+                                                        width: 1.0,
+                                                        color: theme.accent.base.scale_alpha(0.4),
+                                                    },
+                                                    ..Default::default()
+                                                })
                                                 .into();
                                             frozen
                                         } else {
@@ -424,12 +454,22 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                     button(text(fl!(crate::LANGUAGE_LOADER, "edit-button"))).on_press(Message::OpenEditor(i)),
                                     button(text(fl!(crate::LANGUAGE_LOADER, "remove-button"))).on_press(Message::RemoveResult(i))
                                 ]
+                                .height(RESULT_ROW_HEIGHT)
+                                .padding(2)
+                                .spacing(5)
+                                .align_y(alignment::Alignment::Center);
+                                if is_frozen {
+                                    container(inner_row)
+                                        .width(Length::Fill)
+                                        .style(|theme: &icy_ui::Theme| container::Style {
+                                            background: Some(theme.accent.base.scale_alpha(0.07).into()),
+                                            ..Default::default()
+                                        })
+                                        .into()
+                                } else {
+                                    inner_row.into()
+                                }
                             }
-                            .height(RESULT_ROW_HEIGHT)
-                            .padding(2)
-                            .spacing(5)
-                            .align_y(alignment::Alignment::Center)
-                            .into()
                         })
                         .collect::<Vec<Element<'_, Message>>>(),
                 )
