@@ -4,7 +4,7 @@ use std::fmt;
 use crate::SearchValue;
 
 #[repr(u8)]
-#[derive(Debug, PartialEq, Clone, Copy, Eq, Hash)]
+#[derive(Debug, PartialEq, Clone, Copy, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum SearchType {
     Guess,
     Byte,

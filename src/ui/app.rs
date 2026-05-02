@@ -1,4 +1,4 @@
-use std::{sync::atomic::Ordering, thread::sleep, time::Duration};
+use std::{collections::HashMap, sync::atomic::Ordering, thread::sleep, time::{Duration, Instant}};
 
 use i18n_embed_fl::fl;
 use icy_ui::{
@@ -51,6 +51,25 @@ pub struct App {
 
     pub process_sort_column: ProcessSortColumn,
     pub process_sort_direction: SortDirection,
+
+    last_tab_click: Option<(usize, Instant)>,
+
+    /// Brief status shown next to the Save/Load buttons (e.g. path on success, error on failure).
+    pub cheat_table_status: String,
+
+    /// When true, result values are displayed in hexadecimal instead of decimal.
+    pub hex_display: bool,
+
+    /// When true, automatically reattach to a process with the same name when
+    /// the current process exits.
+    pub auto_reattach: bool,
+
+    /// Last-read value string per address for the active search, used to
+    /// detect value changes between refresh ticks.
+    pub value_change_tracker: HashMap<usize, String>,
+    /// Maps address → `refresh_counter` when its value last changed.
+    /// A row is highlighted while `refresh_counter - stored` < CHANGE_HIGHLIGHT_TICKS.
+    pub changed_addresses: HashMap<usize, u64>,
 }
 
 impl App {
@@ -60,7 +79,8 @@ impl App {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         let should_update_processes = self.state.last_process_update.elapsed().map_or(true, |elapsed| elapsed.as_millis() > 500);
-        if self.app_state == AppState::ProcessSelection && should_update_processes {
+        let watching = self.auto_reattach && self.state.pid == 0 && !self.state.process_name.is_empty();
+        if (self.app_state == AppState::ProcessSelection || watching) && should_update_processes {
             self.state.update_process_data();
         }
         // Check and update search modes for all searches
@@ -119,6 +139,13 @@ impl App {
             }
             Message::TickProcess => {
                 self.state.detach_if_gone();
+                // Auto-reattach: scan for the process by name and reattach if found.
+                if self.auto_reattach && self.state.pid == 0 && !self.state.process_name.is_empty() {
+                    let target = self.state.process_name.clone();
+                    if let Some(process) = self.state.processes.iter().find(|p| p.name == target).cloned() {
+                        self.state.select_process(&process);
+                    }
+                }
                 icy_ui::Task::perform(
                     async {
                         sleep(Duration::from_millis(2000));
@@ -128,6 +155,7 @@ impl App {
             }
             Message::NewSearch => {
                 self.state.new_search();
+                self.clear_change_tracker();
                 Task::none()
             }
             Message::CloseSearch(index) => {
@@ -176,8 +204,23 @@ impl App {
 
             Message::SwitchSearch(index) => {
                 if index < self.state.searches.len() {
-                    self.state.current_search = index;
-                    self.editing_result = None;
+                    let now = Instant::now();
+                    let is_double_click = self
+                        .last_tab_click
+                        .is_some_and(|(i, t)| i == index && now.duration_since(t) < Duration::from_millis(300));
+
+                    if is_double_click {
+                        self.last_tab_click = None;
+                        if let Some(search) = self.state.searches.get(index) {
+                            self.rename_search_text = search.description.clone();
+                            self.renaming_search_index = Some(index);
+                        }
+                    } else {
+                        self.last_tab_click = Some((index, now));
+                        self.state.current_search = index;
+                        self.editing_result = None;
+                        self.clear_change_tracker();
+                    }
                 }
                 Task::none()
             }
@@ -228,6 +271,9 @@ impl App {
             Message::Tick => {
                 if matches!(self.app_state, AppState::InProcess) {
                     self.refresh_counter = self.refresh_counter.wrapping_add(1);
+                    if self.state.is_process_running() {
+                        self.update_change_tracker();
+                    }
                 }
                 // If searching, keep scheduling ticks
                 let current_search_context = &mut self.state.searches[self.state.current_search];
@@ -261,6 +307,7 @@ impl App {
                 {
                     search_context.set_cached_results(old);
                 }
+                self.clear_change_tracker();
                 Task::none()
             }
             Message::ClearResults => {
@@ -268,6 +315,7 @@ impl App {
                     search_context.clear_results(&self.state.freeze_sender);
                 }
                 self.editing_result = None;
+                self.clear_change_tracker();
                 Task::none()
             }
             Message::ToggleShowResult => {
@@ -662,7 +710,71 @@ impl App {
             }
             Message::FocusNext => focus_next(),
             Message::FocusPrevious => focus_previous(),
+
+            Message::SaveCheatTable => {
+                let path = crate::default_cheat_table_path(&self.state.process_name);
+                match crate::save_cheat_table(&self.state, &path) {
+                    Ok(()) => self.cheat_table_status = format!("Saved: {}", path.display()),
+                    Err(e) => self.cheat_table_status = format!("Save error: {e}"),
+                }
+                Task::none()
+            }
+
+            Message::LoadCheatTable => {
+                let path = crate::default_cheat_table_path(&self.state.process_name);
+                match crate::load_cheat_table(&path, &self.state.freeze_sender) {
+                    Ok(searches) => {
+                        self.state.searches = searches;
+                        self.state.current_search = 0;
+                        self.editing_result = None;
+                        self.cheat_table_status = format!("Loaded: {}", path.display());
+                    }
+                    Err(e) => self.cheat_table_status = format!("Load error: {e}"),
+                }
+                Task::none()
+            }
+            Message::ToggleHexDisplay => {
+                self.hex_display = !self.hex_display;
+                Task::none()
+            }
+            Message::ToggleAutoReattach => {
+                self.auto_reattach = !self.auto_reattach;
+                Task::none()
+            }
         }
+    }
+
+    fn clear_change_tracker(&mut self) {
+        self.value_change_tracker.clear();
+        self.changed_addresses.clear();
+    }
+
+    /// Read current values for all results in the active search and record
+    /// which addresses changed since the last call.
+    fn update_change_tracker(&mut self) {
+        let results = self.state.searches[self.state.current_search].collect_results();
+        let pid = self.state.pid;
+        let hex_display = self.hex_display;
+        let counter = self.refresh_counter;
+
+        for result in results.iter() {
+            let Some(byte_len) = result.search_type.fixed_byte_length() else { continue };
+            let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle() else { break };
+            let Ok(buf) = copy_address(result.addr, byte_len, &handle) else { continue };
+            let val = SearchValue(result.search_type, buf);
+            let value_str = if hex_display { val.to_hex_string() } else { val.to_string() };
+
+            let prev = self.value_change_tracker.insert(result.addr, value_str.clone());
+            if let Some(prev_val) = prev {
+                if prev_val != value_str {
+                    self.changed_addresses.insert(result.addr, counter);
+                }
+            }
+        }
+
+        // Prune addresses no longer in the result set.
+        self.value_change_tracker.retain(|addr, _| results.iter().any(|r| r.addr == *addr));
+        self.changed_addresses.retain(|addr, _| results.iter().any(|r| r.addr == *addr));
     }
 
     pub fn theme(&self) -> Theme {

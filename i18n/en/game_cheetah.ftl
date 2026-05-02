@@ -36,6 +36,9 @@ remove-button = Remove
 
 add-search-button = Add
 
+save-cheat-table-button = Save
+load-cheat-table-button = Load
+
 generic-error-label = <error>
 invalid-input-error = Invalid input
 invalid-number-error = Invalid number
@@ -63,6 +66,7 @@ address-heading = Address
 value-heading = Value
 freezed-heading = Freezed
 datatype-heading = Data type
+hex-toggle-label = Hex
 
 pid-heading = Pid
 name-heading = Name
@@ -105,6 +109,10 @@ unknown-search-description = Compare memory values without knowing the exact val
 
 process-exited-title = Process has exited
 process-exited-message = The target process is no longer running. Please return to the main menu to select a new process.
+process-exited-watching-title = Watching for { $name }...
+watch-for-button = Watch for { $name }
+stop-watching-button = Stop watching
+auto-reattach-label = Auto-reattach
 back-to-main-button = Back to Main Menu
 
 # Memory editor

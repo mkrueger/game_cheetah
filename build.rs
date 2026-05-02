@@ -12,10 +12,16 @@ fn main() -> io::Result<()> {
     // Compile Windows resources if on Windows
     // This will embed an icon into the executable.
     if env::var_os("CARGO_CFG_WINDOWS").is_some() {
-        WindowsResource::new()
-            // This path can be absolute, or relative to your crate root.
-            .set_icon("build/windows/app.ico")
-            .compile()?;
+        let mut res = WindowsResource::new();
+        res.set_icon("build/windows/app.ico");
+        // When cross-compiling from Linux, use the mingw-prefixed windres.
+        let target = env::var("TARGET").unwrap_or_default();
+        let host = env::var("HOST").unwrap_or_default();
+        if !host.contains("windows") && target.contains("x86_64-pc-windows-gnu") {
+            res.set_windres_path("x86_64-w64-mingw32-windres");
+            res.set_ar_path("x86_64-w64-mingw32-ar");
+        }
+        res.compile()?;
     }
     Ok(())
 }

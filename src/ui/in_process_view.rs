@@ -11,6 +11,8 @@ use crate::{SearchMode, SearchType, SearchValue, app::App, message::Message};
 
 /// Uniform row height used by the virtualized result table.
 const RESULT_ROW_HEIGHT: f32 = 34.0;
+/// Number of 250 ms ticks a changed-value highlight stays visible (~1.5 s).
+const CHANGE_HIGHLIGHT_TICKS: u64 = 6;
 
 fn search_ui(app: &App) -> Element<'_, Message> {
     let search_types = vec![
@@ -268,8 +270,8 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
             container(text(fl!(crate::LANGUAGE_LOADER, "value-heading")).size(14)).width(Length::Fixed(120.0)),
         ]
     } else {
-        // Check if all results are frozen for toggle button state
-        let all_frozen = !results.is_empty() && results.iter().all(|r| current_search_context.freezed_addresses.contains(&r.addr));
+        let frozen_count = results.iter().filter(|r| current_search_context.freezed_addresses.contains(&r.addr)).count();
+        let all_frozen = !results.is_empty() && frozen_count == results.len();
         row![
             container(text(fl!(crate::LANGUAGE_LOADER, "address-heading")).size(14)).width(Length::Fixed(120.0)),
             container(text(fl!(crate::LANGUAGE_LOADER, "value-heading")).size(14)).width(Length::Fixed(120.0)),
@@ -281,12 +283,27 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
             container(
                 row![
                     checkbox(all_frozen).on_toggle(|_| Message::ToggleFreezeAll).size(14),
-                    text(fl!(crate::LANGUAGE_LOADER, "freezed-heading")).size(14)
+                    text(fl!(crate::LANGUAGE_LOADER, "freezed-heading")).size(14),
+                    if frozen_count > 0 {
+                        text(format!("({frozen_count}/{total_results})")).size(11).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                            color: Some(theme.accent.base),
+                        })
+                    } else {
+                        text("").size(11)
+                    }
                 ]
                 .spacing(5)
                 .align_y(alignment::Alignment::Center)
             )
-            .width(Length::Fill)
+            .width(Length::Fill),
+            container(
+                row![
+                    checkbox(app.hex_display).on_toggle(|_| Message::ToggleHexDisplay).size(14),
+                    text(fl!(crate::LANGUAGE_LOADER, "hex-toggle-label")).size(14),
+                ]
+                .spacing(5)
+                .align_y(alignment::Alignment::Center)
+            )
         ]
     }
     .padding(2)
@@ -320,6 +337,7 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
         }
         // Bump the cache so live memory re-reads actually surface in the UI.
         app.refresh_counter.hash(&mut hasher);
+        app.hex_display.hash(&mut hasher);
         hasher.finish()
     };
 
@@ -345,7 +363,7 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                             {
                                 if let Ok(buf) = copy_address(result.addr, byte_len, &handle) {
                                     let val = SearchValue(result.search_type, buf);
-                                    val.to_string()
+                                    if app.hex_display { val.to_hex_string() } else { val.to_string() }
                                 } else {
                                     String::new()
                                 }
@@ -359,10 +377,21 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                     button(text(fl!(crate::LANGUAGE_LOADER, "edit-button"))).on_press(Message::OpenEditor(i)),
                                     button(text(fl!(crate::LANGUAGE_LOADER, "remove-button"))).on_press(Message::RemoveResult(i))
                                 ]
+                                .height(RESULT_ROW_HEIGHT)
+                                .padding(2)
+                                .spacing(5)
+                                .align_y(alignment::Alignment::Center)
+                                .into()
                             } else {
                                 let is_frozen = current_search_context.freezed_addresses.contains(&result.addr);
+                                let is_changed = !is_frozen
+                                    && app
+                                        .changed_addresses
+                                        .get(&result.addr)
+                                        .map(|&tick| app.refresh_counter.saturating_sub(tick) < CHANGE_HIGHLIGHT_TICKS)
+                                        .unwrap_or(false);
                                 let edited_text = app.editing_result.as_ref().and_then(|(idx, buf)| (*idx == i).then_some(buf.clone()));
-                                row![
+                                let inner_row = row![
                                     container(text(format!("0x{:X}", result.addr)).size(14)).width(Length::Fixed(120.0)),
                                     {
                                         if let Some(display_text) = edited_text {
@@ -387,11 +416,29 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                             editor
                                         } else if is_frozen {
                                             let frozen: Element<'_, Message> =
-                                                container(text(value_text).size(14).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                                                    color: Some(theme.background.on.scale_alpha(0.5)),
-                                                }))
+                                                container(
+                                                    row![
+                                                        text("🔒").size(11).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                                                            color: Some(theme.accent.base),
+                                                        }),
+                                                        text(value_text.clone()).size(14).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                                                            color: Some(theme.accent.base),
+                                                        }),
+                                                    ]
+                                                    .spacing(4)
+                                                    .align_y(alignment::Alignment::Center),
+                                                )
                                                 .width(Length::Fixed(120.0))
                                                 .padding([4, 6])
+                                                .style(|theme: &icy_ui::Theme| container::Style {
+                                                    background: Some(theme.accent.base.scale_alpha(0.12).into()),
+                                                    border: icy_ui::Border {
+                                                        radius: 2.0.into(),
+                                                        width: 1.0,
+                                                        color: theme.accent.base.scale_alpha(0.4),
+                                                    },
+                                                    ..Default::default()
+                                                })
                                                 .into();
                                             frozen
                                         } else {
@@ -424,12 +471,30 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                     button(text(fl!(crate::LANGUAGE_LOADER, "edit-button"))).on_press(Message::OpenEditor(i)),
                                     button(text(fl!(crate::LANGUAGE_LOADER, "remove-button"))).on_press(Message::RemoveResult(i))
                                 ]
+                                .height(RESULT_ROW_HEIGHT)
+                                .padding(2)
+                                .spacing(5)
+                                .align_y(alignment::Alignment::Center);
+                                if is_frozen {
+                                    container(inner_row)
+                                        .width(Length::Fill)
+                                        .style(|theme: &icy_ui::Theme| container::Style {
+                                            background: Some(theme.accent.base.scale_alpha(0.07).into()),
+                                            ..Default::default()
+                                        })
+                                        .into()
+                                } else if is_changed {
+                                    container(inner_row)
+                                        .width(Length::Fill)
+                                        .style(|_theme: &icy_ui::Theme| container::Style {
+                                            background: Some(icy_ui::Color { r: 0.95, g: 0.75, b: 0.1, a: 0.18 }.into()),
+                                            ..Default::default()
+                                        })
+                                        .into()
+                                } else {
+                                    inner_row.into()
+                                }
                             }
-                            .height(RESULT_ROW_HEIGHT)
-                            .padding(2)
-                            .spacing(5)
-                            .align_y(alignment::Alignment::Center)
-                            .into()
                         })
                         .collect::<Vec<Element<'_, Message>>>(),
                 )
@@ -445,10 +510,35 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
 }
 
 pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
-    use icy_ui::widget::{button, column, container, row, rule, text};
+    use icy_ui::widget::{button, checkbox, column, container, row, rule, text};
 
     if !app.state.is_process_running() {
-        return container(
+        return container(if app.auto_reattach {
+            column![
+                container(
+                    text(fl!(crate::LANGUAGE_LOADER, "process-exited-watching-title", name = app.state.process_name.as_str()))
+                        .size(18)
+                        .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                            color: Some(theme.accent.base),
+                        })
+                )
+                .padding(10),
+                container(
+                    button(text(fl!(crate::LANGUAGE_LOADER, "stop-watching-button")))
+                        .on_press(Message::ToggleAutoReattach)
+                        .padding(10)
+                )
+                .padding(10),
+                container(
+                    button(text(fl!(crate::LANGUAGE_LOADER, "back-to-main-button")))
+                        .on_press(Message::MainMenu)
+                        .padding(10)
+                )
+                .padding(10)
+            ]
+            .spacing(10)
+            .align_x(icy_ui::alignment::Horizontal::Center)
+        } else {
             column![
                 container(
                     text(fl!(crate::LANGUAGE_LOADER, "process-exited-title"))
@@ -460,16 +550,22 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
                 .padding(10),
                 container(text(fl!(crate::LANGUAGE_LOADER, "process-exited-message")).size(14)).padding(10),
                 container(
+                    button(text(fl!(crate::LANGUAGE_LOADER, "watch-for-button", name = app.state.process_name.as_str())))
+                        .on_press(Message::ToggleAutoReattach)
+                        .padding(10)
+                        .style(|theme: &icy_ui::Theme, status| button::primary(theme, status))
+                )
+                .padding(10),
+                container(
                     button(text(fl!(crate::LANGUAGE_LOADER, "back-to-main-button")))
                         .on_press(Message::MainMenu)
                         .padding(10)
-                        .style(|theme: &icy_ui::Theme, status| button::primary(theme, status))
                 )
                 .padding(10)
             ]
             .spacing(10)
-            .align_x(icy_ui::alignment::Horizontal::Center),
-        )
+            .align_x(icy_ui::alignment::Horizontal::Center)
+        })
         .center_x(Length::Fill)
         .center_y(Length::Fill)
         .into();
@@ -594,6 +690,18 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
                 })
             )
             .width(Length::Fill),
+            if !app.cheat_table_status.is_empty() {
+                container(text(&app.cheat_table_status).size(12).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                    color: Some(theme.background.on.scale_alpha(0.6))
+                }))
+                .padding([0, 6])
+            } else {
+                container(text(""))
+            },
+            checkbox(app.auto_reattach).on_toggle(|_| Message::ToggleAutoReattach).size(14),
+            text(fl!(crate::LANGUAGE_LOADER, "auto-reattach-label")).size(13),
+            button(text(fl!(crate::LANGUAGE_LOADER, "save-cheat-table-button"))).on_press(Message::SaveCheatTable).padding(5),
+            button(text(fl!(crate::LANGUAGE_LOADER, "load-cheat-table-button"))).on_press(Message::LoadCheatTable).padding(5),
             button(text(fl!(crate::LANGUAGE_LOADER, "close-button"))).on_press(Message::MainMenu).padding(5)
         ]
         .spacing(10)
