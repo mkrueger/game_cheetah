@@ -1,3 +1,5 @@
+export PATH := env_var("HOME") + "/.cargo/bin:" + env_var("PATH")
+
 default: build-windows
 
 # Build a Windows release .exe via mingw cross-compilation
