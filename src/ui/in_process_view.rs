@@ -594,6 +594,16 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
                 })
             )
             .width(Length::Fill),
+            if !app.cheat_table_status.is_empty() {
+                container(text(&app.cheat_table_status).size(12).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                    color: Some(theme.background.on.scale_alpha(0.6))
+                }))
+                .padding([0, 6])
+            } else {
+                container(text(""))
+            },
+            button(text(fl!(crate::LANGUAGE_LOADER, "save-cheat-table-button"))).on_press(Message::SaveCheatTable).padding(5),
+            button(text(fl!(crate::LANGUAGE_LOADER, "load-cheat-table-button"))).on_press(Message::LoadCheatTable).padding(5),
             button(text(fl!(crate::LANGUAGE_LOADER, "close-button"))).on_press(Message::MainMenu).padding(5)
         ]
         .spacing(10)

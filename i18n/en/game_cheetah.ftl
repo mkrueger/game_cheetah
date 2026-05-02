@@ -36,6 +36,9 @@ remove-button = Remove
 
 add-search-button = Add
 
+save-cheat-table-button = Save
+load-cheat-table-button = Load
+
 generic-error-label = <error>
 invalid-input-error = Invalid input
 invalid-number-error = Invalid number
