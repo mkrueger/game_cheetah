@@ -1,4 +1,4 @@
-use std::{sync::atomic::Ordering, thread::sleep, time::{Duration, Instant}};
+use std::{collections::HashMap, sync::atomic::Ordering, thread::sleep, time::{Duration, Instant}};
 
 use i18n_embed_fl::fl;
 use icy_ui::{
@@ -63,6 +63,13 @@ pub struct App {
     /// When true, automatically reattach to a process with the same name when
     /// the current process exits.
     pub auto_reattach: bool,
+
+    /// Last-read value string per address for the active search, used to
+    /// detect value changes between refresh ticks.
+    pub value_change_tracker: HashMap<usize, String>,
+    /// Maps address → `refresh_counter` when its value last changed.
+    /// A row is highlighted while `refresh_counter - stored` < CHANGE_HIGHLIGHT_TICKS.
+    pub changed_addresses: HashMap<usize, u64>,
 }
 
 impl App {
@@ -148,6 +155,7 @@ impl App {
             }
             Message::NewSearch => {
                 self.state.new_search();
+                self.clear_change_tracker();
                 Task::none()
             }
             Message::CloseSearch(index) => {
@@ -211,6 +219,7 @@ impl App {
                         self.last_tab_click = Some((index, now));
                         self.state.current_search = index;
                         self.editing_result = None;
+                        self.clear_change_tracker();
                     }
                 }
                 Task::none()
@@ -262,6 +271,9 @@ impl App {
             Message::Tick => {
                 if matches!(self.app_state, AppState::InProcess) {
                     self.refresh_counter = self.refresh_counter.wrapping_add(1);
+                    if self.state.is_process_running() {
+                        self.update_change_tracker();
+                    }
                 }
                 // If searching, keep scheduling ticks
                 let current_search_context = &mut self.state.searches[self.state.current_search];
@@ -295,6 +307,7 @@ impl App {
                 {
                     search_context.set_cached_results(old);
                 }
+                self.clear_change_tracker();
                 Task::none()
             }
             Message::ClearResults => {
@@ -302,6 +315,7 @@ impl App {
                     search_context.clear_results(&self.state.freeze_sender);
                 }
                 self.editing_result = None;
+                self.clear_change_tracker();
                 Task::none()
             }
             Message::ToggleShowResult => {
@@ -728,6 +742,39 @@ impl App {
                 Task::none()
             }
         }
+    }
+
+    fn clear_change_tracker(&mut self) {
+        self.value_change_tracker.clear();
+        self.changed_addresses.clear();
+    }
+
+    /// Read current values for all results in the active search and record
+    /// which addresses changed since the last call.
+    fn update_change_tracker(&mut self) {
+        let results = self.state.searches[self.state.current_search].collect_results();
+        let pid = self.state.pid;
+        let hex_display = self.hex_display;
+        let counter = self.refresh_counter;
+
+        for result in results.iter() {
+            let Some(byte_len) = result.search_type.fixed_byte_length() else { continue };
+            let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle() else { break };
+            let Ok(buf) = copy_address(result.addr, byte_len, &handle) else { continue };
+            let val = SearchValue(result.search_type, buf);
+            let value_str = if hex_display { val.to_hex_string() } else { val.to_string() };
+
+            let prev = self.value_change_tracker.insert(result.addr, value_str.clone());
+            if let Some(prev_val) = prev {
+                if prev_val != value_str {
+                    self.changed_addresses.insert(result.addr, counter);
+                }
+            }
+        }
+
+        // Prune addresses no longer in the result set.
+        self.value_change_tracker.retain(|addr, _| results.iter().any(|r| r.addr == *addr));
+        self.changed_addresses.retain(|addr, _| results.iter().any(|r| r.addr == *addr));
     }
 
     pub fn theme(&self) -> Theme {

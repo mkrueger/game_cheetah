@@ -11,6 +11,8 @@ use crate::{SearchMode, SearchType, SearchValue, app::App, message::Message};
 
 /// Uniform row height used by the virtualized result table.
 const RESULT_ROW_HEIGHT: f32 = 34.0;
+/// Number of 250 ms ticks a changed-value highlight stays visible (~1.5 s).
+const CHANGE_HIGHLIGHT_TICKS: u64 = 6;
 
 fn search_ui(app: &App) -> Element<'_, Message> {
     let search_types = vec![
@@ -382,6 +384,12 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                 .into()
                             } else {
                                 let is_frozen = current_search_context.freezed_addresses.contains(&result.addr);
+                                let is_changed = !is_frozen
+                                    && app
+                                        .changed_addresses
+                                        .get(&result.addr)
+                                        .map(|&tick| app.refresh_counter.saturating_sub(tick) < CHANGE_HIGHLIGHT_TICKS)
+                                        .unwrap_or(false);
                                 let edited_text = app.editing_result.as_ref().and_then(|(idx, buf)| (*idx == i).then_some(buf.clone()));
                                 let inner_row = row![
                                     container(text(format!("0x{:X}", result.addr)).size(14)).width(Length::Fixed(120.0)),
@@ -472,6 +480,14 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                         .width(Length::Fill)
                                         .style(|theme: &icy_ui::Theme| container::Style {
                                             background: Some(theme.accent.base.scale_alpha(0.07).into()),
+                                            ..Default::default()
+                                        })
+                                        .into()
+                                } else if is_changed {
+                                    container(inner_row)
+                                        .width(Length::Fill)
+                                        .style(|_theme: &icy_ui::Theme| container::Style {
+                                            background: Some(icy_ui::Color { r: 0.95, g: 0.75, b: 0.1, a: 0.18 }.into()),
                                             ..Default::default()
                                         })
                                         .into()
