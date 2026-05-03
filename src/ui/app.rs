@@ -310,7 +310,7 @@ impl App {
             }
             Message::ResultEditingBegin(index, text) => {
                 self.editing_result = Some((index, text));
-                icy_ui::widget::operation::focus(icy_ui::widget::Id::from(format!("result-value-{index}")))
+                icy_ui::widget::operation::focus(icy_ui::widget::Id::from(format!("result-value-{}-{index}", self.state.current_search)))
             }
             Message::ResultEditingChanged(index, text) => {
                 // Best-effort live write: if the buffered text parses cleanly,
@@ -702,7 +702,7 @@ impl App {
         // Periodic refresh while showing live result rows so the values
         // re-read memory and update on screen.
         let live_results_tick = if matches!(self.app_state, AppState::InProcess) {
-            icy_ui::time::every(Duration::from_millis(250)).map(|_| Message::Tick)
+            icy_ui::time::every(Duration::from_millis(100)).map(|_| Message::Tick)
         } else {
             icy_ui::Subscription::none()
         };

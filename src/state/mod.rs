@@ -211,6 +211,13 @@ impl GameCheetahEngine {
             ctx_mut.searching = SearchMode::Memory;
             ctx_mut.total_bytes = 0;
             ctx_mut.current_bytes.swap(0, Ordering::SeqCst);
+            // Drop any previously cached results / drain the result channel so
+            // a fresh initial search (e.g. a re-run of a string search) cannot
+            // leak rows from the previous pass into the new result set.
+            ctx_mut.invalidate_cache();
+            let (tx, rx) = SearchContext::result_channel();
+            ctx_mut.results_sender = tx;
+            ctx_mut.results_receiver = rx;
         } else {
             self.error_text = format!("Invalid search index {search_index}");
             return;

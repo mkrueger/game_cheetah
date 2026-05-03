@@ -246,7 +246,8 @@ fn search_ui(app: &App) -> Element<'_, Message> {
 }
 
 fn render_result_table(app: &App) -> Element<'_, Message> {
-    let current_search_context = &app.state.searches[app.state.current_search];
+    let search_index = app.state.current_search;
+    let current_search_context = &app.state.searches[search_index];
     // Don't show results if search is still in progress
     if !matches!(current_search_context.searching, SearchMode::None) {
         return column![].into();
@@ -303,13 +304,20 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
     ];
 
     // Cache key forces VirtualScrollable to rebuild visible rows whenever the
-    // editing buffer changes, the result count changes, or the freeze set
-    // toggles. Without this, our buffered keystrokes / freeze toggles wouldn't
-    // make it past the row cache.
+    // selected search, result list identity, editing buffer, search type, or
+    // freeze set changes. We hash the underlying `Arc<Vec<SearchResult>>`
+    // pointer as an exact, O(1) identity marker — `set_cached_results` /
+    // result-channel drains both produce a fresh `Arc`, so a pointer change
+    // unambiguously means "different result set". Without this, switching to
+    // a newly-filled search with the same row count would keep showing the
+    // previously cached value rows until a later refresh.
     let cache_key = {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
+        search_index.hash(&mut hasher);
+        current_search_context.search_type.hash(&mut hasher);
+        (std::sync::Arc::as_ptr(&results) as usize).hash(&mut hasher);
         total_results.hash(&mut hasher);
         if let Some((idx, buf)) = &app.editing_result {
             idx.hash(&mut hasher);
@@ -325,6 +333,7 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
 
     table_content.push(
         scroll_area()
+            .id(icy_ui::widget::Id::from(format!("result-table-{search_index}")))
             .height(Length::FillPortion(1))
             .show_rows(RESULT_ROW_HEIGHT, total_results, move |visible_range| {
                 column(
@@ -367,8 +376,10 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                     {
                                         if let Some(display_text) = edited_text {
                                             let editor: Element<'_, Message> = text_input("", &display_text)
-                                                .id(icy_ui::widget::Id::from(format!("result-value-{i}")))
+                                                .id(icy_ui::widget::Id::from(format!("result-value-{search_index}-{i}")))
                                                 .width(Length::Fixed(120.0))
+                                                .size(14)
+                                                .padding([4, 6])
                                                 .style(|theme: &icy_ui::Theme, _status| icy_ui::widget::text_input::Style {
                                                     background: theme.background.base.into(),
                                                     border: icy_ui::Border {
