@@ -1,7 +1,11 @@
 use i18n_embed_fl::fl;
 use icy_ui::{
     Element, Length, alignment,
-    widget::{button, column, container, row, rule, scrollable, text, text_input},
+    widget::{
+        button, column, container, row, rule, scroll_area,
+        scrollable::{Direction, Scrollbar},
+        text, text_input,
+    },
 };
 
 use crate::{app::App, message::Message};
@@ -9,6 +13,7 @@ use crate::{app::App, message::Message};
 const COL_PID: f32 = 80.0;
 const COL_NAME: f32 = 260.0;
 const COL_MEM: f32 = 140.0;
+const COL_CMD: f32 = 1200.0;
 const ROW_HEIGHT: f32 = 28.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -156,7 +161,7 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
             header_cell(
                 fl!(crate::LANGUAGE_LOADER, "command-heading"),
                 sort_indicator(ProcessSortColumn::Command),
-                Length::Fill,
+                Length::Fixed(COL_CMD),
                 ProcessSortColumn::Command,
                 false,
             ),
@@ -186,84 +191,97 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
         .height(Length::Fill)
         .into()
     } else {
-        scrollable(column(filtered_processes.iter().enumerate().map(|(idx, process)| {
-            let process_clone = process.clone();
-            let bb = gabi::BytesConfig::default();
-            let memory = bb.bytes(process.memory as u64).to_string();
-            let zebra = idx % 2 == 1;
-            use icy_ui::widget::text::Wrapping;
-            container(
-                button(
-                    row![
-                        container(text(process.pid.to_string()).size(13).font(icy_ui::Font::MONOSPACE).wrapping(Wrapping::None))
-                            .width(Length::Fixed(COL_PID))
-                            .padding([4, 8])
-                            .align_x(alignment::Alignment::End)
-                            .align_y(alignment::Alignment::Center)
-                            .clip(true),
-                        container(
-                            text(process.name.clone())
-                                .size(13)
-                                .font(icy_ui::Font {
-                                    weight: icy_ui::font::Weight::Semibold,
-                                    ..icy_ui::Font::default()
-                                })
-                                .wrapping(Wrapping::None)
-                        )
-                        .width(Length::Fixed(COL_NAME))
-                        .padding([4, 8])
-                        .align_y(alignment::Alignment::Center)
-                        .clip(true),
-                        container(text(memory).size(13).font(icy_ui::Font::MONOSPACE).wrapping(Wrapping::None))
-                            .width(Length::Fixed(COL_MEM))
-                            .padding([4, 8])
-                            .align_x(alignment::Alignment::End)
-                            .align_y(alignment::Alignment::Center)
-                            .clip(true),
-                        container(
-                            text(process.cmd.clone())
-                                .size(12)
-                                .wrapping(Wrapping::None)
-                                .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                                    color: Some(theme.background.on.scale_alpha(0.7)),
-                                })
-                        )
-                        .width(Length::Fill)
-                        .padding([4, 8])
-                        .align_y(alignment::Alignment::Center)
-                        .clip(true),
-                    ]
-                    .height(Length::Fixed(ROW_HEIGHT)),
+        let rows = filtered_processes.clone();
+        let total_rows = rows.len();
+        scroll_area()
+            .direction(Direction::Both {
+                vertical: Scrollbar::default(),
+                horizontal: Scrollbar::default(),
+            })
+            .auto_scroll(true)
+            .height(Length::Fill)
+            .width(Length::Fill)
+            .show_rows(ROW_HEIGHT, total_rows, move |visible_range| {
+                use icy_ui::widget::text::Wrapping;
+                column(
+                    visible_range
+                        .filter_map(|i| rows.get(i).map(|p| (i, p)))
+                        .map(|(idx, process)| {
+                            let process_clone = process.clone();
+                            let bb = gabi::BytesConfig::default();
+                            let memory = bb.bytes(process.memory as u64).to_string();
+                            let zebra = idx % 2 == 1;
+                            button(
+                                row![
+                                    container(text(process.pid.to_string()).size(13).font(icy_ui::Font::MONOSPACE).wrapping(Wrapping::None))
+                                        .width(Length::Fixed(COL_PID))
+                                        .padding([4, 8])
+                                        .align_x(alignment::Alignment::End)
+                                        .align_y(alignment::Alignment::Center)
+                                        .clip(true),
+                                    container(
+                                        text(process.name.clone())
+                                            .size(13)
+                                            .font(icy_ui::Font {
+                                                weight: icy_ui::font::Weight::Semibold,
+                                                ..icy_ui::Font::default()
+                                            })
+                                            .wrapping(Wrapping::None)
+                                    )
+                                    .width(Length::Fixed(COL_NAME))
+                                    .padding([4, 8])
+                                    .align_y(alignment::Alignment::Center)
+                                    .clip(true),
+                                    container(text(memory).size(13).font(icy_ui::Font::MONOSPACE).wrapping(Wrapping::None))
+                                        .width(Length::Fixed(COL_MEM))
+                                        .padding([4, 8])
+                                        .align_x(alignment::Alignment::End)
+                                        .align_y(alignment::Alignment::Center)
+                                        .clip(true),
+                                    container(text(process.cmd.clone()).size(12).wrapping(Wrapping::None).style(|theme: &icy_ui::Theme| {
+                                        icy_ui::widget::text::Style {
+                                            color: Some(theme.background.on.scale_alpha(0.7)),
+                                        }
+                                    }))
+                                    .width(Length::Fixed(COL_CMD))
+                                    .padding([4, 8])
+                                    .align_y(alignment::Alignment::Center)
+                                    .clip(true),
+                                ]
+                                .height(Length::Fixed(ROW_HEIGHT)),
+                            )
+                            .style(move |theme: &icy_ui::Theme, status: icy_ui::widget::button::Status| {
+                                use icy_ui::widget::button::Status;
+                                let base_bg = if zebra {
+                                    theme.background.on.scale_alpha(0.04)
+                                } else {
+                                    icy_ui::Color::TRANSPARENT
+                                };
+                                match status {
+                                    Status::Hovered => button::Style {
+                                        background: Some(theme.accent.base.scale_alpha(0.18).into()),
+                                        border: icy_ui::Border::default(),
+                                        text_color: theme.background.on,
+                                        ..Default::default()
+                                    },
+                                    _ => button::Style {
+                                        background: Some(base_bg.into()),
+                                        border: icy_ui::Border::default(),
+                                        text_color: theme.background.on,
+                                        ..Default::default()
+                                    },
+                                }
+                            })
+                            .on_press(Message::SelectProcess(process_clone))
+                            .padding(0)
+                            .into()
+                        })
+                        .collect::<Vec<Element<'_, Message>>>(),
                 )
-                .style(move |theme: &icy_ui::Theme, status: icy_ui::widget::button::Status| {
-                    use icy_ui::widget::button::Status;
-                    let base_bg = if zebra {
-                        theme.background.on.scale_alpha(0.04)
-                    } else {
-                        icy_ui::Color::TRANSPARENT
-                    };
-                    match status {
-                        Status::Hovered => button::Style {
-                            background: Some(theme.accent.base.scale_alpha(0.18).into()),
-                            border: icy_ui::Border::default(),
-                            text_color: theme.background.on,
-                            ..Default::default()
-                        },
-                        _ => button::Style {
-                            background: Some(base_bg.into()),
-                            border: icy_ui::Border::default(),
-                            text_color: theme.background.on,
-                            ..Default::default()
-                        },
-                    }
-                })
-                .on_press(Message::SelectProcess(process_clone))
-                .width(Length::Fill)
-                .padding(0),
-            )
+                .spacing(0)
+                .into()
+            })
             .into()
-        })))
-        .into()
     };
 
     // Footer
