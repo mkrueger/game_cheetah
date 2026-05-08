@@ -13,24 +13,51 @@ fn menu_label<'a>(label: String, size: u32) -> icy_ui::widget::Text<'a> {
     text(label).size(size).width(Length::Fill).align_x(alignment::Alignment::Center)
 }
 
-pub fn view_main_window(_app: &App) -> Element<'_, Message> {
+pub fn view_main_window(app: &App) -> Element<'_, Message> {
+    let mut header_col = column![
+        text(crate::APP_NAME).size(32),
+        text(fl!(crate::LANGUAGE_LOADER, "main-menu-subtitle"))
+            .size(14)
+            .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                color: Some(theme.background.on.scale_alpha(0.65)),
+            })
+    ]
+    .spacing(6)
+    .width(Length::Fill)
+    .align_x(alignment::Alignment::Center);
+
+    if let Some(latest) = app.latest_version.as_deref() {
+        header_col = header_col.push(
+            button(
+                text(fl!(crate::LANGUAGE_LOADER, "update-available", version = latest.trim_start_matches('v')))
+                    .size(13)
+                    .align_x(alignment::Alignment::Center),
+            )
+            .on_press(Message::OpenLatestRelease)
+            .padding([6, 12])
+            .style(|theme: &icy_ui::Theme, status: icy_ui::widget::button::Status| {
+                use icy_ui::widget::button::Status;
+                let bg = theme.accent.base.scale_alpha(match status {
+                    Status::Hovered => 0.30,
+                    _ => 0.18,
+                });
+                button::Style {
+                    background: Some(bg.into()),
+                    text_color: theme.background.on,
+                    border: icy_ui::Border {
+                        radius: 4.0.into(),
+                        width: 1.0,
+                        color: theme.accent.base.scale_alpha(0.45),
+                    },
+                    ..Default::default()
+                }
+            }),
+        );
+    }
+
     container(
         column![
-            container(
-                column![
-                    text(crate::APP_NAME).size(32),
-                    text(fl!(crate::LANGUAGE_LOADER, "main-menu-subtitle"))
-                        .size(14)
-                        .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                            color: Some(theme.background.on.scale_alpha(0.65)),
-                        })
-                ]
-                .spacing(6)
-                .width(Length::Fill)
-                .align_x(alignment::Alignment::Center)
-            )
-            .width(Length::Fill)
-            .padding([8, 20]),
+            container(header_col).width(Length::Fill).padding([8, 20]),
             column![
                 button(menu_label(fl!(crate::LANGUAGE_LOADER, "attach-button"), 22))
                     .on_press(Message::Attach)
@@ -156,6 +183,27 @@ pub fn view_settings(app: &App) -> Element<'_, Message> {
         .into(),
     );
 
+    let check_for_updates_section = section(
+        column![
+            row![
+                checkbox(app.check_for_updates).on_toggle(|_| Message::ToggleCheckForUpdates).size(16),
+                text(fl!(crate::LANGUAGE_LOADER, "check-for-updates-label")).size(16).font(icy_ui::Font {
+                    weight: icy_ui::font::Weight::Semibold,
+                    ..icy_ui::Font::default()
+                }),
+            ]
+            .spacing(8)
+            .align_y(alignment::Alignment::Center),
+            text(fl!(crate::LANGUAGE_LOADER, "check-for-updates-description"))
+                .size(13)
+                .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                    color: Some(theme.background.on.scale_alpha(0.65)),
+                })
+        ]
+        .spacing(8)
+        .into(),
+    );
+
     let config_dir_section = section(
         column![
             text(fl!(crate::LANGUAGE_LOADER, "config-directory-label")).size(16).font(icy_ui::Font {
@@ -208,6 +256,7 @@ pub fn view_settings(app: &App) -> Element<'_, Message> {
                 .align_x(alignment::Alignment::Center),
                 rule::horizontal(1),
                 auto_reconnect_section,
+                check_for_updates_section,
                 config_dir_section,
                 container(
                     button(text(fl!(crate::LANGUAGE_LOADER, "back-to-main-button")))

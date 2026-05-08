@@ -47,6 +47,8 @@ serde = { version = "1.0", features = ["derive"] }
 toml = "1.1.2"
 dirs = "6.0"
 opener = "0.8"
+ureq = { version = "2.10", default-features = false, features = ["tls"] }
+smol = "2"
 
 [dev-dependencies]
 criterion = { version = "0.8.2", default-features = false, features = [

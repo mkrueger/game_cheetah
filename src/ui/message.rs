@@ -72,7 +72,10 @@ pub enum Message {
     LoadCheatTable,
     ToggleHexDisplay,
     ToggleAutoReconnect,
+    ToggleCheckForUpdates,
     OpenConfigDir,
     CopyConfigDir,
     DismissError,
+    UpdateCheckCompleted(Option<String>),
+    OpenLatestRelease,
 }

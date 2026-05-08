@@ -71,6 +71,19 @@ pub struct App {
     /// This is off by default and only configurable from the main menu settings.
     pub auto_reconnect: bool,
 
+    /// When true, the app contacts the GitHub releases API once per launch
+    /// to check for a newer version. Defaults to true; can be disabled in
+    /// Settings.
+    pub check_for_updates: bool,
+
+    /// Set to true the first time the update check runs so we never fire
+    /// it twice within a single launch.
+    update_check_started: bool,
+
+    /// Tag of the latest release if it is newer than [`crate::VERSION`].
+    /// `None` until the check completes (or if no newer version exists).
+    pub latest_version: Option<String>,
+
     /// Last-read value string per address for the active search, used to
     /// detect value changes between refresh ticks.
     pub value_change_tracker: HashMap<usize, String>,
@@ -87,6 +100,7 @@ impl App {
         Self {
             auto_reconnect: settings.auto_reconnect,
             hex_display: settings.hex_display,
+            check_for_updates: settings.check_for_updates,
             ..Self::default()
         }
     }
@@ -95,6 +109,7 @@ impl App {
         let settings = crate::UserSettings {
             auto_reconnect: self.auto_reconnect,
             hex_display: self.hex_display,
+            check_for_updates: self.check_for_updates,
         };
         if let Err(e) = settings.save() {
             self.state.push_error(AppError::Generic { message: e });
@@ -116,7 +131,20 @@ impl App {
             search_context.update_search_mode();
         }
 
-        match message {
+        // Kick off the update check exactly once per launch (and only if the
+        // user has not opted out). Runs on a background thread so it never
+        // blocks the UI; failures are silent.
+        let update_check_task = if self.check_for_updates && !self.update_check_started {
+            self.update_check_started = true;
+            icy_ui::Task::perform(
+                async { smol::unblock(crate::update_check::fetch_latest_version).await },
+                Message::UpdateCheckCompleted,
+            )
+        } else {
+            Task::none()
+        };
+
+        let message_task = match message {
             Message::Attach => {
                 self.state.update_process_data();
                 self.app_state = AppState::ProcessSelection;
@@ -806,6 +834,23 @@ impl App {
                 self.persist_settings();
                 Task::none()
             }
+            Message::ToggleCheckForUpdates => {
+                self.check_for_updates = !self.check_for_updates;
+                self.persist_settings();
+                Task::none()
+            }
+            Message::UpdateCheckCompleted(latest) => {
+                if let Some(tag) = latest
+                    && crate::update_check::is_newer(&tag, crate::VERSION)
+                {
+                    self.latest_version = Some(tag);
+                }
+                Task::none()
+            }
+            Message::OpenLatestRelease => {
+                let _ = webbrowser::open("https://github.com/mkrueger/game_cheetah/releases/latest");
+                Task::none()
+            }
             Message::OpenConfigDir => {
                 let path = crate::config_dir();
                 if let Err(e) = std::fs::create_dir_all(&path) {
@@ -824,7 +869,8 @@ impl App {
                 self.state.dismiss_error();
                 Task::none()
             }
-        }
+        };
+        Task::batch([update_check_task, message_task])
     }
 
     fn clear_change_tracker(&mut self) {

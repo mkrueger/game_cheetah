@@ -9,6 +9,8 @@ pub use cheat_table::*;
 pub mod user_settings;
 pub use user_settings::*;
 
+pub mod update_check;
+
 pub mod search_value;
 pub use search_value::*;
 
