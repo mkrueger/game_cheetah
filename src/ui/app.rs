@@ -819,6 +819,7 @@ impl App {
                 }
                 Task::none()
             }
+            Message::CopyConfigDir => icy_ui::clipboard::STANDARD.write_text(crate::config_dir().display().to_string()),
             Message::DismissError => {
                 self.state.dismiss_error();
                 Task::none()

@@ -6,64 +6,100 @@ use icy_ui::{
 
 use crate::{app::App, message::Message};
 
+const MAIN_MENU_BUTTON_WIDTH: f32 = 280.0;
+
 pub fn view_main_window(_app: &App) -> Element<'_, Message> {
     container(
         column![
-            // Add title and version at the top
             container(
                 column![
                     text(crate::APP_NAME).size(32),
-                    text(format!("v{}", crate::VERSION))
-                        .size(12)
+                    text(fl!(crate::LANGUAGE_LOADER, "main-menu-subtitle"))
+                        .size(14)
                         .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                            color: Some(theme.background.on.scale_alpha(0.6)),
-                        }),
-                    button(text("github.com/mkrueger/game_cheetah").size(14))
-                        .style(|theme: &icy_ui::Theme, status: icy_ui::widget::button::Status| {
-                            use icy_ui::widget::button::Status;
-                            match status {
-                                Status::Hovered => button::Style {
-                                    background: Some(icy_ui::Color::TRANSPARENT.into()),
-                                    border: icy_ui::Border::default(),
-                                    text_color: theme.accent.base,
-                                    ..Default::default()
-                                },
-                                _ => button::Style {
-                                    background: Some(icy_ui::Color::TRANSPARENT.into()),
-                                    border: icy_ui::Border::default(),
-                                    text_color: theme.secondary.on,
-                                    ..Default::default()
-                                },
-                            }
+                            color: Some(theme.background.on.scale_alpha(0.65)),
                         })
-                        .on_press(Message::OpenGitHub)
-                        .padding(5),
                 ]
-                .spacing(5)
+                .spacing(6)
                 .width(Length::Fill)
                 .align_x(alignment::Alignment::Center)
             )
             .width(Length::Fill)
-            .padding(20),
-            // Menu buttons
+            .padding([8, 20]),
             column![
                 button(text(fl!(crate::LANGUAGE_LOADER, "attach-button")).size(24))
                     .on_press(Message::Attach)
-                    .padding(10),
-                button(text(fl!(crate::LANGUAGE_LOADER, "discuss-button")))
-                    .on_press(Message::Discuss)
-                    .padding(10),
-                button(text(fl!(crate::LANGUAGE_LOADER, "bug-button"))).on_press(Message::ReportBug).padding(10),
+                    .padding([12, 20])
+                    .width(Length::Fixed(MAIN_MENU_BUTTON_WIDTH))
+                    .style(|theme: &icy_ui::Theme, status: icy_ui::widget::button::Status| {
+                        use icy_ui::widget::button::Status;
+                        button::Style {
+                            background: Some(match status {
+                                Status::Hovered => theme.accent.base.scale_alpha(0.9).into(),
+                                _ => theme.accent.base.into(),
+                            }),
+                            text_color: theme.accent.on,
+                            border: icy_ui::Border {
+                                radius: 4.0.into(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }
+                    }),
                 button(text(fl!(crate::LANGUAGE_LOADER, "settings-button")))
                     .on_press(Message::Settings)
-                    .padding(10),
-                button(text(fl!(crate::LANGUAGE_LOADER, "about-button"))).on_press(Message::About).padding(10),
-                button(text(fl!(crate::LANGUAGE_LOADER, "quit-button"))).on_press(Message::Exit).padding(10)
+                    .padding(10)
+                    .width(Length::Fixed(MAIN_MENU_BUTTON_WIDTH)),
+                button(text(fl!(crate::LANGUAGE_LOADER, "about-button")))
+                    .on_press(Message::About)
+                    .padding(10)
+                    .width(Length::Fixed(MAIN_MENU_BUTTON_WIDTH)),
+                button(text(fl!(crate::LANGUAGE_LOADER, "discuss-button")))
+                    .on_press(Message::Discuss)
+                    .padding(10)
+                    .width(Length::Fixed(MAIN_MENU_BUTTON_WIDTH)),
+                button(text(fl!(crate::LANGUAGE_LOADER, "bug-button")))
+                    .on_press(Message::ReportBug)
+                    .padding(10)
+                    .width(Length::Fixed(MAIN_MENU_BUTTON_WIDTH)),
+                button(text(fl!(crate::LANGUAGE_LOADER, "quit-button")))
+                    .on_press(Message::Exit)
+                    .padding(10)
+                    .width(Length::Fixed(MAIN_MENU_BUTTON_WIDTH))
             ]
             .spacing(10)
             .align_x(alignment::Alignment::Center),
+            column![
+                text(format!("v{}", crate::VERSION))
+                    .size(12)
+                    .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                        color: Some(theme.background.on.scale_alpha(0.55)),
+                    }),
+                button(text("github.com/mkrueger/game_cheetah").size(13))
+                    .style(|theme: &icy_ui::Theme, status: icy_ui::widget::button::Status| {
+                        use icy_ui::widget::button::Status;
+                        match status {
+                            Status::Hovered => button::Style {
+                                background: Some(icy_ui::Color::TRANSPARENT.into()),
+                                border: icy_ui::Border::default(),
+                                text_color: theme.accent.base,
+                                ..Default::default()
+                            },
+                            _ => button::Style {
+                                background: Some(icy_ui::Color::TRANSPARENT.into()),
+                                border: icy_ui::Border::default(),
+                                text_color: theme.background.on.scale_alpha(0.55),
+                                ..Default::default()
+                            },
+                        }
+                    })
+                    .on_press(Message::OpenGitHub)
+                    .padding(2),
+            ]
+            .spacing(2)
+            .align_x(alignment::Alignment::Center),
         ]
-        .spacing(20)
+        .spacing(24)
         .align_x(alignment::Alignment::Center),
     )
     .width(Length::Fill)
@@ -136,6 +172,9 @@ pub fn view_settings(app: &App) -> Element<'_, Message> {
                     }),
                 button(text(fl!(crate::LANGUAGE_LOADER, "open-config-directory-button")))
                     .on_press(Message::OpenConfigDir)
+                    .padding([8, 12]),
+                button(text(fl!(crate::LANGUAGE_LOADER, "copy-config-directory-button")))
+                    .on_press(Message::CopyConfigDir)
                     .padding([8, 12]),
             ]
             .spacing(8)

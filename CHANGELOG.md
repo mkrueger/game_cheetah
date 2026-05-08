@@ -19,10 +19,13 @@ Patch release focused on release packaging, cheat-table polish, and post-0.6.0 f
 - Optional automatic reconnect is available as an off-by-default setting from the main menu.
 - The Settings page shows the resolved configuration directory and explains how it is chosen.
 - The Settings page now provides an Open button that reveals the configuration directory in the system file manager (powered by the `opener` crate).
+- The Settings page now provides a Copy path button for the configuration directory.
 - CI now checks i18n key parity between English and German translations.
 
 ### Changed
 
+- Main menu actions now use consistent widths, with Start emphasized as the primary action and version/GitHub moved into a quieter footer.
+- English UI labels now use more consistent sentence-style capitalization.
 - Configuration directory resolution now uses the `dirs` crate. On Linux it moves from `~/.game-cheetah` to `~/.config/game-cheetah`, on macOS to `~/Library/Application Support/game-cheetah`, and on Windows to `%APPDATA%\game-cheetah`. Existing cheat tables under the old `.game-cheetah` directory must be moved manually.
 - Cheat-table loading now validates the saved process name and schema version before loading addresses.
 - Freeze state is no longer persisted in cheat tables. Freezing is treated as runtime state and must be re-enabled explicitly after loading.
@@ -34,6 +37,7 @@ Patch release focused on release packaging, cheat-table polish, and post-0.6.0 f
 
 ### Fixed
 
+- The English result table heading now says "Frozen" instead of "Freezed".
 - macOS release bundles no longer appear damaged/crossed-out in Finder: `CFBundleExecutable` now matches the packaged binary, bundle versions are patched during CI, and the final universal app is ad-hoc signed after `lipo`.
 - The committed macOS `Info.plist` version is checked against Cargo metadata by a regression test.
 - Removed a committed Cargo config that forced Windows cross-compilation as the default target.

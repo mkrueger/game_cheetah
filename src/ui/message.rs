@@ -73,5 +73,6 @@ pub enum Message {
     ToggleHexDisplay,
     ToggleAutoReconnect,
     OpenConfigDir,
+    CopyConfigDir,
     DismissError,
 }

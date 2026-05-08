@@ -4,6 +4,7 @@ settings-button = Einstellungen
 discuss-button = Diskutieren
 bug-button = Fehler melden
 quit-button = Beenden
+main-menu-subtitle = Speicherscanner und Game Trainer
 
 process-label = Prozess:
 filter-processes-hint = Prozesse filtern
@@ -69,7 +70,7 @@ freezed-heading = Eingefroren
 datatype-heading = Datentyp
 hex-toggle-label = Hex
 
-pid-heading = Pid
+pid-heading = PID
 name-heading = Name
 memory-heading = Speicher
 user-heading = Nutzer
@@ -122,6 +123,7 @@ automatic-reconnect-description = Wenn der Zielprozess beendet wird, weiter nach
 config-directory-label = Konfigurationsverzeichnis
 config-directory-description = Cheat-Tabellen werden standardmäßig hier gespeichert. Der Pfad ist das plattformübliche Konfigurationsverzeichnis (bereitgestellt vom Crate dirs) mit einem Unterordner game-cheetah.
 open-config-directory-button = Öffnen
+copy-config-directory-button = Pfad kopieren
 
 # Speichereditor
 memory-editor-title = Speichereditor

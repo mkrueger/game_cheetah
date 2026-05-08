@@ -2,8 +2,9 @@ attach-button = Start
 about-button = About
 settings-button = Settings
 discuss-button = Discuss
-bug-button = Bug/Feature request
+bug-button = Bug / feature request
 quit-button = Quit
+main-menu-subtitle = Memory scanner and game trainer
 
 process-label = Process:
 filter-processes-hint = Filter processes
@@ -29,8 +30,8 @@ initial-search-button = Initial search
 update-button = Update
 clear-button = Clear
 close-button = Close
-hide-results-button = Hide Results
-show-results-button = Show Results
+hide-results-button = Hide results
+show-results-button = Show results
 rename-button = Rename
 edit-button = Edit
 remove-button = Remove
@@ -65,11 +66,11 @@ string-descr = string
 
 address-heading = Address
 value-heading = Value
-freezed-heading = Freezed
+freezed-heading = Frozen
 datatype-heading = Data type
 hex-toggle-label = Hex
 
-pid-heading = Pid
+pid-heading = PID
 name-heading = Name
 memory-heading = Memory
 user-heading = User
@@ -105,13 +106,13 @@ decreased-button = Decreased
 increased-button = Increased
 changed-button = Changed
 unchanged-button = Unchanged
-search-type-label = Search Type:
+search-type-label = Search type:
 unknown-search-description = Compare memory values without knowing the exact value
 
 process-exited-title = Process has exited
 process-exited-message = The target process is no longer running. Please return to the main menu to select a new process.
 automatic-reconnect-waiting-message = Automatic reconnect is enabled in Settings. Waiting for { $name } to appear again…
-back-to-main-button = Back to Main Menu
+back-to-main-button = Back to main menu
 
 # Settings
 settings-title = Settings
@@ -120,9 +121,10 @@ automatic-reconnect-description = When the target process exits, keep watching f
 config-directory-label = Configuration directory
 config-directory-description = Cheat tables are saved here by default. The location is the platform's standard configuration directory (provided by the dirs crate) with a game-cheetah subfolder.
 open-config-directory-button = Open
+copy-config-directory-button = Copy path
 
 # Memory editor
-memory-editor-title = Memory Editor
+memory-editor-title = Memory editor
 memory-editor-pid = PID { $pid }
 memory-editor-address-label = Address
 memory-editor-address-hint = 0x…
