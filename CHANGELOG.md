@@ -16,6 +16,8 @@ Patch release focused on release packaging, cheat-table polish, and post-0.6.0 f
 - Frozen rows now show a lock cue and a highlighted row style.
 - Result rows briefly highlight when their live value changes.
 - Search tabs can be renamed by double-clicking the tab label.
+- Optional automatic reconnect is available as an off-by-default setting from the main menu.
+- The Settings page shows the resolved configuration directory and explains how it is chosen.
 - CI now checks i18n key parity between English and German translations.
 
 ### Changed

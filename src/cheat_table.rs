@@ -30,15 +30,13 @@ pub struct SavedEntry {
     // cleanly because serde ignores unknown TOML fields by default.
 }
 
-/// Returns `~/.game-cheetah/<process_name>.toml` (Linux/macOS) or
-/// `%APPDATA%\game-cheetah\<process_name>.toml` (Windows).
-pub fn default_cheat_table_path(process_name: &str) -> PathBuf {
-    let safe_name: String = process_name
-        .chars()
-        .map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' })
-        .collect();
-    let safe_name = if safe_name.is_empty() { "unnamed".to_owned() } else { safe_name };
-
+/// Returns the directory Game Cheetah uses for persisted user files.
+///
+/// The directory is derived without an extra platform-directory dependency:
+/// Windows uses `APPDATA`, other platforms use `HOME`, and if the relevant
+/// environment variable is unavailable the current working directory is used.
+/// `.game-cheetah` is appended in all cases.
+pub fn config_dir() -> PathBuf {
     let base = {
         #[cfg(windows)]
         {
@@ -50,7 +48,18 @@ pub fn default_cheat_table_path(process_name: &str) -> PathBuf {
         }
     };
 
-    base.join(".game-cheetah").join(format!("{safe_name}.toml"))
+    base.join(".game-cheetah")
+}
+
+/// Returns the default TOML cheat-table path inside [`config_dir`].
+pub fn default_cheat_table_path(process_name: &str) -> PathBuf {
+    let safe_name: String = process_name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' })
+        .collect();
+    let safe_name = if safe_name.is_empty() { "unnamed".to_owned() } else { safe_name };
+
+    config_dir().join(format!("{safe_name}.toml"))
 }
 
 pub fn save_cheat_table(engine: &GameCheetahEngine, path: &Path) -> Result<(), String> {
@@ -138,4 +147,17 @@ pub fn load_cheat_table(path: &Path, expected_process_name: &str) -> Result<Vec<
 fn parse_hex_address(s: &str) -> Result<usize, String> {
     let hex = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
     usize::from_str_radix(hex, 16).map_err(|e| format!("Invalid address '{s}': {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_cheat_table_path_uses_config_dir_and_sanitizes_name() {
+        let path = default_cheat_table_path("Game: Test/1");
+
+        assert!(path.starts_with(config_dir()));
+        assert_eq!(path.file_name().and_then(|name| name.to_str()), Some("Game__Test_1.toml"));
+    }
 }

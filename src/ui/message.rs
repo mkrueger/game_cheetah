@@ -4,6 +4,7 @@ use crate::{ProcessInfo, SearchType, memory_editor::InspectorValueKind, process_
 pub enum Message {
     Attach,
     About,
+    Settings,
     MainMenu,
     Discuss,
     ReportBug,
@@ -70,5 +71,6 @@ pub enum Message {
     SaveCheatTable,
     LoadCheatTable,
     ToggleHexDisplay,
+    ToggleAutoReconnect,
     DismissError,
 }

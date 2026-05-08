@@ -1,5 +1,6 @@
 attach-button = Start
 about-button = Über
+settings-button = Einstellungen
 discuss-button = Diskutieren
 bug-button = Fehler melden
 quit-button = Beenden
@@ -111,7 +112,15 @@ unknown-search-description = Speicherwerte vergleichen ohne den genauen Wert zu 
 
 process-exited-title = Prozess beendet
 process-exited-message = Der Zielprozess läuft nicht mehr. Bitte kehren Sie zum Hauptmenü zurück, um einen neuen Prozess auszuwählen.
+automatic-reconnect-waiting-message = Automatische Wiederverbindung ist in den Einstellungen aktiviert. Warte darauf, dass { $name } wieder erscheint…
 back-to-main-button = Zurück zum Hauptmenü
+
+# Einstellungen
+settings-title = Einstellungen
+automatic-reconnect-label = Automatische Wiederverbindung
+automatic-reconnect-description = Wenn der Zielprozess beendet wird, weiter nach einem Prozess mit demselben Namen suchen und automatisch erneut verbinden. Standardmäßig deaktiviert.
+config-directory-label = Konfigurationsverzeichnis
+config-directory-description = Cheat-Tabellen werden standardmäßig hier gespeichert. Game Cheetah leitet dies unter Windows von APPDATA und unter Linux/macOS von HOME ab und hängt .game-cheetah an. Fehlt die Umgebungsvariable, wird das aktuelle Arbeitsverzeichnis verwendet.
 
 # Speichereditor
 memory-editor-title = Speichereditor

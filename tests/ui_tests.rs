@@ -53,6 +53,24 @@ fn test_toggle_results_visibility() {
 }
 
 #[test]
+fn test_settings_toggle_auto_reconnect() {
+    let mut app = create_test_app();
+
+    assert_eq!(app.app_state, AppState::MainWindow);
+    assert!(!app.auto_reconnect);
+
+    let _ = app.update(Message::Settings);
+    assert_eq!(app.app_state, AppState::Settings);
+
+    let _ = app.update(Message::ToggleAutoReconnect);
+    assert!(app.auto_reconnect);
+
+    let _ = app.update(Message::MainMenu);
+    assert_eq!(app.app_state, AppState::MainWindow);
+    assert!(app.auto_reconnect);
+}
+
+#[test]
 fn test_rename_tab() {
     let mut app = create_test_app();
 

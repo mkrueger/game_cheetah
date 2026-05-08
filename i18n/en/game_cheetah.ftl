@@ -1,5 +1,6 @@
 attach-button = Start
 about-button = About
+settings-button = Settings
 discuss-button = Discuss
 bug-button = Bug/Feature request
 quit-button = Quit
@@ -109,7 +110,15 @@ unknown-search-description = Compare memory values without knowing the exact val
 
 process-exited-title = Process has exited
 process-exited-message = The target process is no longer running. Please return to the main menu to select a new process.
+automatic-reconnect-waiting-message = Automatic reconnect is enabled in Settings. Waiting for { $name } to appear again…
 back-to-main-button = Back to Main Menu
+
+# Settings
+settings-title = Settings
+automatic-reconnect-label = Automatic reconnect
+automatic-reconnect-description = When the target process exits, keep watching for a process with the same name and attach again automatically. Disabled by default.
+config-directory-label = Configuration directory
+config-directory-description = Cheat tables are saved here by default. Game Cheetah derives this from APPDATA on Windows and HOME on Linux/macOS, then appends .game-cheetah. If the environment variable is unavailable, it falls back to the current working directory.
 
 # Memory editor
 memory-editor-title = Memory Editor

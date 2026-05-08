@@ -28,6 +28,7 @@ pub enum AppState {
     #[default]
     MainWindow,
     ProcessSelection,
+    Settings,
     About,
     InProcess,
     MemoryEditor,
@@ -65,6 +66,11 @@ pub struct App {
     /// When true, result values are displayed in hexadecimal instead of decimal.
     pub hex_display: bool,
 
+    /// Optional advanced setting: after the attached process exits, keep
+    /// watching for a process with the same name and attach again automatically.
+    /// This is off by default and only configurable from the main menu settings.
+    pub auto_reconnect: bool,
+
     /// Last-read value string per address for the active search, used to
     /// detect value changes between refresh ticks.
     pub value_change_tracker: HashMap<usize, String>,
@@ -80,7 +86,8 @@ impl App {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         let should_update_processes = self.state.last_process_update.elapsed().map_or(true, |elapsed| elapsed.as_millis() > 500);
-        if self.app_state == AppState::ProcessSelection && should_update_processes {
+        let watching_for_reconnect = self.auto_reconnect && self.state.pid == 0 && !self.state.process_name.is_empty();
+        if (self.app_state == AppState::ProcessSelection || watching_for_reconnect) && should_update_processes {
             self.state.update_process_data();
         }
         // Check and update search modes for all searches
@@ -101,6 +108,10 @@ impl App {
             }
             Message::About => {
                 self.app_state = AppState::About;
+                Task::none()
+            }
+            Message::Settings => {
+                self.app_state = AppState::Settings;
                 Task::none()
             }
             Message::Discuss => {
@@ -139,6 +150,12 @@ impl App {
             }
             Message::TickProcess => {
                 self.state.detach_if_gone();
+                if self.auto_reconnect && self.state.pid == 0 && !self.state.process_name.is_empty() {
+                    let target = self.state.process_name.clone();
+                    if let Some(process) = self.state.processes.iter().find(|p| p.name == target).cloned() {
+                        self.state.select_process(&process);
+                    }
+                }
                 icy_ui::Task::perform(
                     async {
                         sleep(Duration::from_millis(2000));
@@ -762,6 +779,10 @@ impl App {
                 self.hex_display = !self.hex_display;
                 Task::none()
             }
+            Message::ToggleAutoReconnect => {
+                self.auto_reconnect = !self.auto_reconnect;
+                Task::none()
+            }
             Message::DismissError => {
                 self.state.dismiss_error();
                 Task::none()
@@ -827,6 +848,7 @@ impl App {
     pub fn view(&self) -> Element<'_, Message> {
         match self.app_state {
             AppState::MainWindow => crate::main_window::view_main_window(self),
+            AppState::Settings => crate::main_window::view_settings(self),
             AppState::About => container(
                 column![
                     container(text(fl!(crate::LANGUAGE_LOADER, "about-dialog-heading")).size(24))

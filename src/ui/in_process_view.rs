@@ -571,6 +571,22 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
                 )
                 .padding(10),
                 container(text(fl!(crate::LANGUAGE_LOADER, "process-exited-message")).size(14)).padding(10),
+                if app.auto_reconnect {
+                    container(
+                        text(fl!(
+                            crate::LANGUAGE_LOADER,
+                            "automatic-reconnect-waiting-message",
+                            name = app.state.process_name.as_str()
+                        ))
+                        .size(13)
+                        .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                            color: Some(theme.accent.base),
+                        }),
+                    )
+                    .padding(10)
+                } else {
+                    container(text(""))
+                },
                 container(
                     button(text(fl!(crate::LANGUAGE_LOADER, "back-to-main-button")))
                         .on_press(Message::MainMenu)
