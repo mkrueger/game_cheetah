@@ -9,6 +9,19 @@ impl SearchValue {
     fn fixed_bytes<const N: usize>(&self) -> Option<[u8; N]> {
         self.1.get(..N)?.try_into().ok()
     }
+
+    pub fn to_hex_string(&self) -> String {
+        match self.0 {
+            SearchType::Byte => self.1.first().map(|b| format!("0x{b:02X}")),
+            SearchType::Short => self.fixed_bytes::<2>().map(|arr| format!("0x{:04X}", u16::from_le_bytes(arr))),
+            SearchType::Int => self.fixed_bytes::<4>().map(|arr| format!("0x{:08X}", u32::from_le_bytes(arr))),
+            SearchType::Int64 => self.fixed_bytes::<8>().map(|arr| format!("0x{:016X}", u64::from_le_bytes(arr))),
+            SearchType::Float => self.fixed_bytes::<4>().map(|arr| format!("0x{:08X}", u32::from_le_bytes(arr))),
+            SearchType::Double => self.fixed_bytes::<8>().map(|arr| format!("0x{:016X}", u64::from_le_bytes(arr))),
+            _ => None,
+        }
+        .unwrap_or_else(|| self.to_string())
+    }
 }
 
 impl Display for SearchValue {

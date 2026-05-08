@@ -3,6 +3,9 @@
 pub mod search_type;
 pub use search_type::*;
 
+pub mod cheat_table;
+pub use cheat_table::*;
+
 pub mod search_value;
 pub use search_value::*;
 
