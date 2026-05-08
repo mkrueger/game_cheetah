@@ -111,10 +111,6 @@ unknown-search-description = Speicherwerte vergleichen ohne den genauen Wert zu 
 
 process-exited-title = Prozess beendet
 process-exited-message = Der Zielprozess läuft nicht mehr. Bitte kehren Sie zum Hauptmenü zurück, um einen neuen Prozess auszuwählen.
-process-exited-watching-title = Warte auf { $name }...
-watch-for-button = Auf { $name } warten
-stop-watching-button = Warten beenden
-auto-reattach-label = Automatisch wiederverbinden
 back-to-main-button = Zurück zum Hauptmenü
 
 # Speichereditor

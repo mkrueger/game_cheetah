@@ -15,7 +15,6 @@ Patch release focused on release packaging, cheat-table polish, and post-0.6.0 f
 - Result values can be toggled between decimal and hexadecimal display.
 - Frozen rows now show a lock cue and a highlighted row style.
 - Result rows briefly highlight when their live value changes.
-- Optional auto-reattach watches for a process with the same name after the target exits.
 - Search tabs can be renamed by double-clicking the tab label.
 - CI now checks i18n key parity between English and German translations.
 
@@ -37,7 +36,7 @@ Patch release focused on release packaging, cheat-table polish, and post-0.6.0 f
 - Removed unused dependencies (`threadpool`, `sudo`, `boyer-moore-magiclen`).
 - `bytes` was updated to fix RUSTSEC-2026-0007.
 - CI Linux `.deb` packaging no longer masks `cargo deb` failures with `export DEB=$(...)`.
-- German translations were added for save/load, hex display, auto-reattach, and watch-process UI strings.
+- German translations were added for save/load and hex display UI strings.
 
 ## [0.6.0] - 2026-04-25
 

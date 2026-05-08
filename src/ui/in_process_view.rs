@@ -557,39 +557,10 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
 }
 
 pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
-    use icy_ui::widget::{button, checkbox, column, container, row, rule, text};
+    use icy_ui::widget::{button, column, container, row, rule, text};
 
     if !app.state.is_process_running() {
-        return container(if app.auto_reattach {
-            column![
-                container(
-                    text(fl!(
-                        crate::LANGUAGE_LOADER,
-                        "process-exited-watching-title",
-                        name = app.state.process_name.as_str()
-                    ))
-                    .size(18)
-                    .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                        color: Some(theme.accent.base),
-                    })
-                )
-                .padding(10),
-                container(
-                    button(text(fl!(crate::LANGUAGE_LOADER, "stop-watching-button")))
-                        .on_press(Message::ToggleAutoReattach)
-                        .padding(10)
-                )
-                .padding(10),
-                container(
-                    button(text(fl!(crate::LANGUAGE_LOADER, "back-to-main-button")))
-                        .on_press(Message::MainMenu)
-                        .padding(10)
-                )
-                .padding(10)
-            ]
-            .spacing(10)
-            .align_x(icy_ui::alignment::Horizontal::Center)
-        } else {
+        return container(
             column![
                 container(
                     text(fl!(crate::LANGUAGE_LOADER, "process-exited-title"))
@@ -601,13 +572,6 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
                 .padding(10),
                 container(text(fl!(crate::LANGUAGE_LOADER, "process-exited-message")).size(14)).padding(10),
                 container(
-                    button(text(fl!(crate::LANGUAGE_LOADER, "watch-for-button", name = app.state.process_name.as_str())))
-                        .on_press(Message::ToggleAutoReattach)
-                        .padding(10)
-                        .style(|theme: &icy_ui::Theme, status| button::primary(theme, status))
-                )
-                .padding(10),
-                container(
                     button(text(fl!(crate::LANGUAGE_LOADER, "back-to-main-button")))
                         .on_press(Message::MainMenu)
                         .padding(10)
@@ -615,8 +579,8 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
                 .padding(10)
             ]
             .spacing(10)
-            .align_x(icy_ui::alignment::Horizontal::Center)
-        })
+            .align_x(icy_ui::alignment::Horizontal::Center),
+        )
         .center_x(Length::Fill)
         .center_y(Length::Fill)
         .into();
@@ -753,8 +717,6 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
             } else {
                 container(text(""))
             },
-            checkbox(app.auto_reattach).on_toggle(|_| Message::ToggleAutoReattach).size(14),
-            text(fl!(crate::LANGUAGE_LOADER, "auto-reattach-label")).size(13),
             button(text(fl!(crate::LANGUAGE_LOADER, "save-cheat-table-button")))
                 .on_press(Message::SaveCheatTable)
                 .padding(5),
