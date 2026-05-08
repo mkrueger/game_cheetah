@@ -72,5 +72,6 @@ pub enum Message {
     LoadCheatTable,
     ToggleHexDisplay,
     ToggleAutoReconnect,
+    OpenConfigDir,
     DismissError,
 }

@@ -120,7 +120,8 @@ settings-title = Einstellungen
 automatic-reconnect-label = Automatische Wiederverbindung
 automatic-reconnect-description = Wenn der Zielprozess beendet wird, weiter nach einem Prozess mit demselben Namen suchen und automatisch erneut verbinden. Standardmäßig deaktiviert.
 config-directory-label = Konfigurationsverzeichnis
-config-directory-description = Cheat-Tabellen werden standardmäßig hier gespeichert. Game Cheetah leitet dies unter Windows von APPDATA und unter Linux/macOS von HOME ab und hängt .game-cheetah an. Fehlt die Umgebungsvariable, wird das aktuelle Arbeitsverzeichnis verwendet.
+config-directory-description = Cheat-Tabellen werden standardmäßig hier gespeichert. Der Pfad ist das plattformübliche Konfigurationsverzeichnis (bereitgestellt vom Crate dirs) mit einem Unterordner game-cheetah.
+open-config-directory-button = Öffnen
 
 # Speichereditor
 memory-editor-title = Speichereditor

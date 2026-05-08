@@ -32,23 +32,16 @@ pub struct SavedEntry {
 
 /// Returns the directory Game Cheetah uses for persisted user files.
 ///
-/// The directory is derived without an extra platform-directory dependency:
-/// Windows uses `APPDATA`, other platforms use `HOME`, and if the relevant
-/// environment variable is unavailable the current working directory is used.
-/// `.game-cheetah` is appended in all cases.
+/// Resolution is delegated to the `dirs` crate, which yields the
+/// platform's standard config location:
+/// - Linux: `$XDG_CONFIG_HOME` or `~/.config`
+/// - macOS: `~/Library/Application Support`
+/// - Windows: `%APPDATA%` (Roaming)
+///
+/// `game-cheetah` is appended. If `dirs::config_dir()` fails to resolve a
+/// home/config location, the current working directory is used.
 pub fn config_dir() -> PathBuf {
-    let base = {
-        #[cfg(windows)]
-        {
-            std::env::var("APPDATA").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("."))
-        }
-        #[cfg(not(windows))]
-        {
-            std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("."))
-        }
-    };
-
-    base.join(".game-cheetah")
+    dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("game-cheetah")
 }
 
 /// Returns the default TOML cheat-table path inside [`config_dir`].

@@ -45,6 +45,8 @@ wide = "1.4.0"
 bytemuck = "1"
 serde = { version = "1.0", features = ["derive"] }
 toml = "1.1.2"
+dirs = "6.0"
+opener = "0.8"
 
 [dev-dependencies]
 criterion = { version = "0.8.2", default-features = false, features = [

@@ -18,10 +18,12 @@ Patch release focused on release packaging, cheat-table polish, and post-0.6.0 f
 - Search tabs can be renamed by double-clicking the tab label.
 - Optional automatic reconnect is available as an off-by-default setting from the main menu.
 - The Settings page shows the resolved configuration directory and explains how it is chosen.
+- The Settings page now provides an Open button that reveals the configuration directory in the system file manager (powered by the `opener` crate).
 - CI now checks i18n key parity between English and German translations.
 
 ### Changed
 
+- Configuration directory resolution now uses the `dirs` crate. On Linux it moves from `~/.game-cheetah` to `~/.config/game-cheetah`, on macOS to `~/Library/Application Support/game-cheetah`, and on Windows to `%APPDATA%\game-cheetah`. Existing cheat tables under the old `.game-cheetah` directory must be moved manually.
 - Cheat-table loading now validates the saved process name and schema version before loading addresses.
 - Freeze state is no longer persisted in cheat tables. Freezing is treated as runtime state and must be re-enabled explicitly after loading.
 - Result-table live value rendering reuses the change-tracker cache when available, reducing duplicate memory reads.

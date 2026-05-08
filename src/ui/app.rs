@@ -783,6 +783,19 @@ impl App {
                 self.auto_reconnect = !self.auto_reconnect;
                 Task::none()
             }
+            Message::OpenConfigDir => {
+                let path = crate::config_dir();
+                if let Err(e) = std::fs::create_dir_all(&path) {
+                    self.state.push_error(AppError::Generic {
+                        message: format!("Cannot create {}: {e}", path.display()),
+                    });
+                } else if let Err(e) = opener::open(&path) {
+                    self.state.push_error(AppError::Generic {
+                        message: format!("Cannot open {}: {e}", path.display()),
+                    });
+                }
+                Task::none()
+            }
             Message::DismissError => {
                 self.state.dismiss_error();
                 Task::none()

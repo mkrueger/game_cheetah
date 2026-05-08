@@ -118,7 +118,8 @@ settings-title = Settings
 automatic-reconnect-label = Automatic reconnect
 automatic-reconnect-description = When the target process exits, keep watching for a process with the same name and attach again automatically. Disabled by default.
 config-directory-label = Configuration directory
-config-directory-description = Cheat tables are saved here by default. Game Cheetah derives this from APPDATA on Windows and HOME on Linux/macOS, then appends .game-cheetah. If the environment variable is unavailable, it falls back to the current working directory.
+config-directory-description = Cheat tables are saved here by default. The location is the platform's standard configuration directory (provided by the dirs crate) with a game-cheetah subfolder.
+open-config-directory-button = Open
 
 # Memory editor
 memory-editor-title = Memory Editor
