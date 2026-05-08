@@ -98,9 +98,9 @@ pub(super) fn search_f32_simd(memory_data: &[u8], target: f32, epsilon: f32, sta
         let data = f32x8::from(arr);
 
         let diff = (data - target_vec).abs();
-        let in_range = diff.cmp_le(epsilon_vec) & data.is_finite();
+        let in_range = diff.simd_le(epsilon_vec) & data.is_finite();
 
-        let mask = in_range.move_mask();
+        let mask = in_range.to_bitmask();
         if mask != 0 {
             for i in 0..8 {
                 if (mask >> i) & 1 == 1 {
@@ -166,9 +166,9 @@ pub(super) fn search_f64_simd(memory_data: &[u8], target: f64, epsilon: f64, sta
         let data = f64x4::from(arr);
 
         let diff = (data - target_vec).abs();
-        let in_range = diff.cmp_le(epsilon_vec) & data.is_finite();
+        let in_range = diff.simd_le(epsilon_vec) & data.is_finite();
 
-        let mask = in_range.move_mask();
+        let mask = in_range.to_bitmask();
         if mask != 0 {
             for i in 0..4 {
                 if (mask >> i) & 1 == 1 {

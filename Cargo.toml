@@ -1,6 +1,6 @@
 [package]
 name = "game-cheetah"
-version = "0.6.0"
+version = "0.6.1"
 authors = ["Mike Krüger <mkrueger@posteo.de>"]
 edition = "2024"
 rust-version = "1.88"
@@ -26,7 +26,7 @@ icy_ui = { git = "https://github.com/mkrueger/icy_ui", branch = "master", featur
     "smol",
 ] }
 process-memory = "0.5.0"
-sysinfo = "0.37.2"
+sysinfo = "0.39.0"
 gabi = "0.2.6"
 i18n-embed = { version = "0.16.0", features = [
     "fluent-system",
@@ -41,13 +41,13 @@ rayon = "1.11.0"
 memchr = "2.7.6"
 crossbeam = "0.8.4"
 crossbeam-channel = "0.5.15"
-wide = "0.7"
+wide = "1.4.0"
 bytemuck = "1"
 serde = { version = "1.0", features = ["derive"] }
-toml = "0.8"
+toml = "1.1.2"
 
 [dev-dependencies]
-criterion = { version = "0.5", default-features = false, features = [
+criterion = { version = "0.8.2", default-features = false, features = [
     "html_reports",
 ] }
 
