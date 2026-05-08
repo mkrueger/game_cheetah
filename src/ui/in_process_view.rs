@@ -286,9 +286,11 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                     checkbox(all_frozen).on_toggle(|_| Message::ToggleFreezeAll).size(14),
                     text(fl!(crate::LANGUAGE_LOADER, "freezed-heading")).size(14),
                     if frozen_count > 0 {
-                        text(format!("({frozen_count}/{total_results})")).size(11).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                            color: Some(theme.accent.base),
-                        })
+                        text(format!("({frozen_count}/{total_results})"))
+                            .size(11)
+                            .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                                color: Some(theme.accent.base),
+                            })
                     } else {
                         text("").size(11)
                     }
@@ -367,6 +369,10 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                     if utf16_hint { string_len_chars * 2 } else { string_len },
                                 )
                                 .unwrap_or_default()
+                            } else if let Some(cached) = app.value_change_tracker.get(&result.addr) {
+                                // Reuse the value the change tracker already read this tick to
+                                // avoid issuing a second copy_address syscall per visible row.
+                                cached.clone()
                             } else if let Some(byte_len) = result.search_type.fixed_byte_length()
                                 && let Ok(handle) = (app.state.pid as process_memory::Pid).try_into_process_handle()
                             {
@@ -426,31 +432,30 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                                 .into();
                                             editor
                                         } else if is_frozen {
-                                            let frozen: Element<'_, Message> =
-                                                container(
-                                                    row![
-                                                        text("🔒").size(11).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                                                            color: Some(theme.accent.base),
-                                                        }),
-                                                        text(value_text.clone()).size(14).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                                                            color: Some(theme.accent.base),
-                                                        }),
-                                                    ]
-                                                    .spacing(4)
-                                                    .align_y(alignment::Alignment::Center),
-                                                )
-                                                .width(Length::Fixed(120.0))
-                                                .padding([4, 6])
-                                                .style(|theme: &icy_ui::Theme| container::Style {
-                                                    background: Some(theme.accent.base.scale_alpha(0.12).into()),
-                                                    border: icy_ui::Border {
-                                                        radius: 2.0.into(),
-                                                        width: 1.0,
-                                                        color: theme.accent.base.scale_alpha(0.4),
-                                                    },
-                                                    ..Default::default()
-                                                })
-                                                .into();
+                                            let frozen: Element<'_, Message> = container(
+                                                row![
+                                                    text("🔒").size(11).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                                                        color: Some(theme.accent.base),
+                                                    }),
+                                                    text(value_text.clone()).size(14).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                                                        color: Some(theme.accent.base),
+                                                    }),
+                                                ]
+                                                .spacing(4)
+                                                .align_y(alignment::Alignment::Center),
+                                            )
+                                            .width(Length::Fixed(120.0))
+                                            .padding([4, 6])
+                                            .style(|theme: &icy_ui::Theme| container::Style {
+                                                background: Some(theme.accent.base.scale_alpha(0.12).into()),
+                                                border: icy_ui::Border {
+                                                    radius: 2.0.into(),
+                                                    width: 1.0,
+                                                    color: theme.accent.base.scale_alpha(0.4),
+                                                },
+                                                ..Default::default()
+                                            })
+                                            .into();
                                             frozen
                                         } else {
                                             let clickable: Element<'_, Message> =
@@ -498,7 +503,15 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                     container(inner_row)
                                         .width(Length::Fill)
                                         .style(|_theme: &icy_ui::Theme| container::Style {
-                                            background: Some(icy_ui::Color { r: 0.95, g: 0.75, b: 0.1, a: 0.18 }.into()),
+                                            background: Some(
+                                                icy_ui::Color {
+                                                    r: 0.95,
+                                                    g: 0.75,
+                                                    b: 0.1,
+                                                    a: 0.18,
+                                                }
+                                                .into(),
+                                            ),
                                             ..Default::default()
                                         })
                                         .into()
@@ -527,11 +540,15 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
         return container(if app.auto_reattach {
             column![
                 container(
-                    text(fl!(crate::LANGUAGE_LOADER, "process-exited-watching-title", name = app.state.process_name.as_str()))
-                        .size(18)
-                        .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                            color: Some(theme.accent.base),
-                        })
+                    text(fl!(
+                        crate::LANGUAGE_LOADER,
+                        "process-exited-watching-title",
+                        name = app.state.process_name.as_str()
+                    ))
+                    .size(18)
+                    .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                        color: Some(theme.accent.base),
+                    })
                 )
                 .padding(10),
                 container(
@@ -702,17 +719,25 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
             )
             .width(Length::Fill),
             if !app.cheat_table_status.is_empty() {
-                container(text(&app.cheat_table_status).size(12).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                    color: Some(theme.background.on.scale_alpha(0.6))
-                }))
+                container(
+                    text(&app.cheat_table_status)
+                        .size(12)
+                        .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                            color: Some(theme.background.on.scale_alpha(0.6)),
+                        }),
+                )
                 .padding([0, 6])
             } else {
                 container(text(""))
             },
             checkbox(app.auto_reattach).on_toggle(|_| Message::ToggleAutoReattach).size(14),
             text(fl!(crate::LANGUAGE_LOADER, "auto-reattach-label")).size(13),
-            button(text(fl!(crate::LANGUAGE_LOADER, "save-cheat-table-button"))).on_press(Message::SaveCheatTable).padding(5),
-            button(text(fl!(crate::LANGUAGE_LOADER, "load-cheat-table-button"))).on_press(Message::LoadCheatTable).padding(5),
+            button(text(fl!(crate::LANGUAGE_LOADER, "save-cheat-table-button")))
+                .on_press(Message::SaveCheatTable)
+                .padding(5),
+            button(text(fl!(crate::LANGUAGE_LOADER, "load-cheat-table-button")))
+                .on_press(Message::LoadCheatTable)
+                .padding(5),
             button(text(fl!(crate::LANGUAGE_LOADER, "close-button"))).on_press(Message::MainMenu).padding(5)
         ]
         .spacing(10)
