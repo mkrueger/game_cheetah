@@ -16,6 +16,43 @@ const COL_MEM: f32 = 140.0;
 const COL_CMD: f32 = 1200.0;
 const ROW_HEIGHT: f32 = 28.0;
 
+/// Case-insensitive ASCII substring search without allocating.
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    if n.len() > h.len() {
+        return false;
+    }
+    'outer: for i in 0..=h.len() - n.len() {
+        for j in 0..n.len() {
+            if !h[i + j].eq_ignore_ascii_case(&n[j]) {
+                continue 'outer;
+            }
+        }
+        return true;
+    }
+    false
+}
+
+/// Case-insensitive ASCII ordering without allocating.
+fn cmp_ascii_case_insensitive(a: &str, b: &str) -> std::cmp::Ordering {
+    let ab = a.as_bytes();
+    let bb = b.as_bytes();
+    let len = ab.len().min(bb.len());
+    for i in 0..len {
+        let av = ab[i].to_ascii_lowercase();
+        let bv = bb[i].to_ascii_lowercase();
+        match av.cmp(&bv) {
+            std::cmp::Ordering::Equal => continue,
+            other => return other,
+        }
+    }
+    ab.len().cmp(&bb.len())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum ProcessSortColumn {
     Pid,
@@ -59,7 +96,7 @@ fn header_cell<'a>(label: String, indicator: &str, width: Length, sort: ProcessS
 }
 
 pub fn view_process_selection(app: &App) -> Element<'_, Message> {
-    let filter = app.state.process_filter.to_ascii_uppercase();
+    let filter = app.state.process_filter.as_str();
 
     let sort_indicator = |column: ProcessSortColumn| -> &'static str {
         if app.process_sort_column == column {
@@ -72,17 +109,16 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
         }
     };
 
-    let mut filtered_processes: Vec<_> = app
+    let mut filtered_processes: Vec<&crate::ProcessInfo> = app
         .state
         .processes
         .iter()
         .filter(|process| {
             filter.is_empty()
-                || process.name.to_ascii_uppercase().contains(filter.as_str())
-                || process.cmd.to_ascii_uppercase().contains(filter.as_str())
-                || process.pid.to_string().contains(filter.as_str())
+                || contains_ignore_ascii_case(&process.name, filter)
+                || contains_ignore_ascii_case(&process.cmd, filter)
+                || process.pid.to_string().contains(filter)
         })
-        .cloned()
         .collect();
 
     match app.process_sort_column {
@@ -91,16 +127,16 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
             SortDirection::Descending => b.pid.cmp(&a.pid),
         }),
         ProcessSortColumn::Name => filtered_processes.sort_by(|a, b| match app.process_sort_direction {
-            SortDirection::Ascending => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-            SortDirection::Descending => b.name.to_lowercase().cmp(&a.name.to_lowercase()),
+            SortDirection::Ascending => cmp_ascii_case_insensitive(&a.name, &b.name),
+            SortDirection::Descending => cmp_ascii_case_insensitive(&b.name, &a.name),
         }),
         ProcessSortColumn::Memory => filtered_processes.sort_by(|a, b| match app.process_sort_direction {
             SortDirection::Ascending => a.memory.cmp(&b.memory),
             SortDirection::Descending => b.memory.cmp(&a.memory),
         }),
         ProcessSortColumn::Command => filtered_processes.sort_by(|a, b| match app.process_sort_direction {
-            SortDirection::Ascending => a.cmd.to_lowercase().cmp(&b.cmd.to_lowercase()),
-            SortDirection::Descending => b.cmd.to_lowercase().cmp(&a.cmd.to_lowercase()),
+            SortDirection::Ascending => cmp_ascii_case_insensitive(&a.cmd, &b.cmd),
+            SortDirection::Descending => cmp_ascii_case_insensitive(&b.cmd, &a.cmd),
         }),
     }
 
@@ -191,7 +227,7 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
         .height(Length::Fill)
         .into()
     } else {
-        let rows = filtered_processes.clone();
+        let rows = filtered_processes;
         let total_rows = rows.len();
         scroll_area()
             .direction(Direction::Both {
@@ -205,7 +241,7 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
                 use icy_ui::widget::text::Wrapping;
                 column(
                     visible_range
-                        .filter_map(|i| rows.get(i).map(|p| (i, p)))
+                        .filter_map(|i| rows.get(i).map(|p| (i, *p)))
                         .map(|(idx, process)| {
                             let process_clone = process.clone();
                             let bb = gabi::BytesConfig::default();
@@ -220,7 +256,7 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
                                         .align_y(alignment::Alignment::Center)
                                         .clip(true),
                                     container(
-                                        text(process.name.clone())
+                                        text(process.name.as_str())
                                             .size(13)
                                             .font(icy_ui::Font {
                                                 weight: icy_ui::font::Weight::Semibold,
@@ -238,7 +274,7 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
                                         .align_x(alignment::Alignment::End)
                                         .align_y(alignment::Alignment::Center)
                                         .clip(true),
-                                    container(text(process.cmd.clone()).size(12).wrapping(Wrapping::None).style(|theme: &icy_ui::Theme| {
+                                    container(text(process.cmd.as_str()).size(12).wrapping(Wrapping::None).style(|theme: &icy_ui::Theme| {
                                         icy_ui::widget::text::Style {
                                             color: Some(theme.background.on.scale_alpha(0.7)),
                                         }
