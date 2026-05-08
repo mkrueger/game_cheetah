@@ -240,26 +240,9 @@ impl GameCheetahEngine {
 
             match get_process_maps(self.pid) {
                 Ok(maps) => {
-                    let mut regions = Vec::new();
+                    let (regions, total_bytes) = chunk_process_regions(maps, overlap);
                     if let Some(ctx_mut) = self.searches.get_mut(search_index) {
-                        for map in maps {
-                            if skip_memory_region(&map) {
-                                continue;
-                            }
-
-                            let mut size = map.size();
-                            let mut start = map.start();
-                            ctx_mut.total_bytes += size;
-
-                            const MAX_BLOCK: usize = 50 * 1024 * 1024;
-                            let chunk_plus = MAX_BLOCK.saturating_add(overlap);
-                            while size > chunk_plus {
-                                regions.push((start, chunk_plus));
-                                start += MAX_BLOCK;
-                                size = size.saturating_sub(MAX_BLOCK);
-                            }
-                            regions.push((start, size));
-                        }
+                        ctx_mut.total_bytes += total_bytes;
                     } else {
                         self.error_text = format!("Search context vanished for index {search_index}");
                         return;
@@ -287,25 +270,11 @@ impl GameCheetahEngine {
 
         match get_process_maps(self.pid) {
             Ok(maps) => {
-                let mut regions = Vec::new();
+                // Numeric scans need a 7-byte overlap so an 8-byte value straddling
+                // a chunk boundary is still found.
+                let (regions, total_bytes) = chunk_process_regions(maps, 7);
                 if let Some(ctx_mut) = self.searches.get_mut(search_index) {
-                    for map in maps {
-                        if skip_memory_region(&map) {
-                            continue;
-                        }
-
-                        let mut size = map.size();
-                        let mut start = map.start();
-                        ctx_mut.total_bytes += size;
-
-                        const MAX_BLOCK: usize = 50 * 1024 * 1024;
-                        while size > MAX_BLOCK + 7 {
-                            regions.push((start, MAX_BLOCK + 7));
-                            start += MAX_BLOCK;
-                            size -= MAX_BLOCK;
-                        }
-                        regions.push((start, size));
-                    }
+                    ctx_mut.total_bytes += total_bytes;
                 } else {
                     self.error_text = format!("Search context vanished for index {search_index}");
                     return;
@@ -679,17 +648,8 @@ impl GameCheetahEngine {
 
         match get_process_maps(self.pid) {
             Ok(maps) => {
-                let mut total_bytes = 0;
-                let mut regions = Vec::new();
-
-                for map in maps {
-                    if skip_memory_region(&map) {
-                        continue;
-                    }
-
-                    total_bytes += map.size();
-                    regions.push((map.start(), map.size()));
-                }
+                // Snapshot capture reads each region whole; no overlap needed.
+                let (regions, total_bytes) = chunk_process_regions(maps, 0);
 
                 search_context.total_bytes = total_bytes;
                 search_context.current_bytes.store(0, Ordering::SeqCst);
@@ -1177,6 +1137,38 @@ fn lookup_start_time(pid: process_memory::Pid) -> Option<u64> {
 }
 
 static SYSTEM: Lazy<Arc<Mutex<(System, Instant)>>> = Lazy::new(|| Arc::new(Mutex::new((System::new(), Instant::now() - Duration::from_secs(1)))));
+
+/// Maximum bytes per scan chunk handed to a worker thread. Picked to balance
+/// per-task overhead (smaller is worse) against rayon load balancing
+/// (larger is worse). 50 MiB has been the working tuning since 0.6.
+const REGION_MAX_BLOCK: usize = 50 * 1024 * 1024;
+
+/// Splits the readable memory regions of a process into chunks suitable for
+/// parallel scanning. Each chunk overlaps the next by `overlap` bytes so
+/// values straddling a chunk boundary are still found.
+///
+/// Returns `(chunks, total_bytes)` where `total_bytes` is the sum of the
+/// original (non-overlapped) region sizes — used for progress reporting.
+fn chunk_process_regions(maps: Vec<proc_maps::MapRange>, overlap: usize) -> (Vec<(usize, usize)>, usize) {
+    let mut regions = Vec::new();
+    let mut total_bytes = 0usize;
+    let chunk_plus = REGION_MAX_BLOCK.saturating_add(overlap);
+    for map in maps {
+        if skip_memory_region(&map) {
+            continue;
+        }
+        let mut size = map.size();
+        let mut start = map.start();
+        total_bytes += size;
+        while size > chunk_plus {
+            regions.push((start, chunk_plus));
+            start += REGION_MAX_BLOCK;
+            size = size.saturating_sub(REGION_MAX_BLOCK);
+        }
+        regions.push((start, size));
+    }
+    (regions, total_bytes)
+}
 
 fn skip_memory_region(map: &proc_maps::MapRange) -> bool {
     if map.start() == 0xffffffffff600000 {

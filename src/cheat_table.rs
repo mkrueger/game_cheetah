@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
 use i18n_embed_fl::fl;
-use process_memory::{TryIntoProcessHandle, copy_address};
 use serde::{Deserialize, Serialize};
 
 use crate::{GameCheetahEngine, SearchContext, SearchResult, SearchType};
@@ -24,9 +23,11 @@ pub struct SavedEntry {
     /// Hex address string, e.g. "0x7FFF12345678"
     pub address: String,
     pub search_type: SearchType,
-    pub frozen: bool,
-    #[serde(default)]
-    pub frozen_value: Vec<u8>,
+    // NOTE: We deliberately do NOT persist freeze state. Freeze is ephemeral
+    // in-memory behavior; saving it across runs is unsafe (ASLR moves the
+    // target address) and silently restoring it would write to unrelated
+    // memory. Older files with `frozen` / `frozen_value` fields still parse
+    // cleanly because serde ignores unknown TOML fields by default.
 }
 
 /// Returns `~/.game-cheetah/<process_name>.toml` (Linux/macOS) or
@@ -53,10 +54,6 @@ pub fn default_cheat_table_path(process_name: &str) -> PathBuf {
 }
 
 pub fn save_cheat_table(engine: &GameCheetahEngine, path: &Path) -> Result<(), String> {
-    let handle = (engine.pid as process_memory::Pid)
-        .try_into_process_handle()
-        .map_err(|e| format!("Cannot open process: {e}"))?;
-
     let mut saved_searches = Vec::new();
 
     for ctx in &engine.searches {
@@ -64,22 +61,9 @@ pub fn save_cheat_table(engine: &GameCheetahEngine, path: &Path) -> Result<(), S
         let mut entries = Vec::with_capacity(results.len());
 
         for result in results.iter() {
-            let frozen = ctx.freezed_addresses.contains(&result.addr);
-            let frozen_value = if frozen {
-                result
-                    .search_type
-                    .fixed_byte_length()
-                    .and_then(|len| copy_address(result.addr, len, &handle).ok())
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            };
-
             entries.push(SavedEntry {
                 address: format!("0x{:X}", result.addr),
                 search_type: result.search_type,
-                frozen,
-                frozen_value,
             });
         }
 
@@ -111,9 +95,8 @@ pub fn save_cheat_table(engine: &GameCheetahEngine, path: &Path) -> Result<(), S
 /// Safety notes:
 /// - The table's `process_name` must match `expected_process_name`. Loading
 ///   addresses from a different process would write to unrelated memory.
-/// - Saved freeze state is intentionally **not** auto-activated. Users must
-///   re-enable freezing explicitly after loading. This prevents a load action
-///   from silently starting to write into the target process.
+/// - Freeze state is **not** persisted (see `SavedEntry`). After loading,
+///   freezing is always off and the user must re-enable it explicitly.
 pub fn load_cheat_table(path: &Path, expected_process_name: &str) -> Result<Vec<Box<SearchContext>>, String> {
     let toml_str = std::fs::read_to_string(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
 
@@ -139,10 +122,6 @@ pub fn load_cheat_table(path: &Path, expected_process_name: &str) -> Result<Vec<
         for entry in &saved.entries {
             let addr = parse_hex_address(&entry.address)?;
             results.push(SearchResult::new(addr, entry.search_type));
-            // Note: entry.frozen / entry.frozen_value are deliberately ignored here.
-            // Auto-activating freezes on load would silently write to process memory
-            // before the user has a chance to confirm. The saved values remain in the
-            // file for future use; users can re-enable freezing manually.
         }
 
         ctx.set_cached_results(results);
