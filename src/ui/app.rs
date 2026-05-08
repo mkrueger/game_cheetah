@@ -80,6 +80,27 @@ pub struct App {
 }
 
 impl App {
+    /// Construct a fresh `App` and load persisted user preferences from the
+    /// config directory. Used as the icy_ui state factory.
+    pub fn new() -> Self {
+        let settings = crate::UserSettings::load();
+        Self {
+            auto_reconnect: settings.auto_reconnect,
+            hex_display: settings.hex_display,
+            ..Self::default()
+        }
+    }
+
+    fn persist_settings(&mut self) {
+        let settings = crate::UserSettings {
+            auto_reconnect: self.auto_reconnect,
+            hex_display: self.hex_display,
+        };
+        if let Err(e) = settings.save() {
+            self.state.push_error(AppError::Generic { message: e });
+        }
+    }
+
     pub fn title(&self) -> String {
         format!("{} {}", crate::APP_NAME, crate::VERSION)
     }
@@ -777,10 +798,12 @@ impl App {
             }
             Message::ToggleHexDisplay => {
                 self.hex_display = !self.hex_display;
+                self.persist_settings();
                 Task::none()
             }
             Message::ToggleAutoReconnect => {
                 self.auto_reconnect = !self.auto_reconnect;
+                self.persist_settings();
                 Task::none()
             }
             Message::OpenConfigDir => {

@@ -13,6 +13,11 @@ pub fn view_main_window(_app: &App) -> Element<'_, Message> {
             container(
                 column![
                     text(crate::APP_NAME).size(32),
+                    text(format!("v{}", crate::VERSION))
+                        .size(12)
+                        .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                            color: Some(theme.background.on.scale_alpha(0.6)),
+                        }),
                     button(text("github.com/mkrueger/game_cheetah").size(14))
                         .style(|theme: &icy_ui::Theme, status: icy_ui::widget::button::Status| {
                             use icy_ui::widget::button::Status;
