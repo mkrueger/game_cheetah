@@ -71,4 +71,5 @@ pub enum Message {
     LoadCheatTable,
     ToggleHexDisplay,
     ToggleAutoReattach,
+    DismissError,
 }

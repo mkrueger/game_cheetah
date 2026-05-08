@@ -17,7 +17,7 @@ use icy_ui::{
 };
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 
-use crate::{FreezeMessage, GameCheetahEngine, MessageCommand, SearchMode, SearchValue, message::Message};
+use crate::{AppError, FreezeMessage, GameCheetahEngine, MessageCommand, SearchMode, SearchValue, message::Message};
 use crate::{
     SearchType, UnknownComparison,
     ui::process_selection::{ProcessSortColumn, SortDirection},
@@ -347,7 +347,10 @@ impl App {
                         match result.search_type.from_string(&value_text) {
                             Ok(value) => {
                                 if let Err(err) = handle.put_address(result.addr, &value.1) {
-                                    self.state.error_text = format!("Failed to write 0x{:X}: {}", result.addr, err);
+                                    self.state.push_error(AppError::MemoryWrite {
+                                        addr: result.addr,
+                                        source: err.to_string(),
+                                    });
                                 } else if current_search.freezed_addresses.contains(&result.addr)
                                     && let Err(err) = self.state.freeze_sender.send(FreezeMessage {
                                         msg: crate::MessageCommand::Freeze,
@@ -355,15 +358,18 @@ impl App {
                                         value,
                                     })
                                 {
-                                    self.state.error_text = format!("Freeze channel closed: {err}");
+                                    self.state.push_error(AppError::FreezeChannelClosed { source: err.to_string() });
                                 }
                             }
                             Err(err) => {
-                                self.state.error_text = format!("Invalid value '{value_text}': {err}");
+                                self.state.push_error(AppError::InvalidValue {
+                                    value: value_text,
+                                    source: err.to_string(),
+                                });
                             }
                         }
                     } else {
-                        self.state.error_text = format!("Invalid result index {index}");
+                        self.state.push_error(AppError::InvalidResultIndex { index });
                     }
                 }
                 self.editing_result = None;
@@ -429,12 +435,12 @@ impl App {
                                     value: SearchValue(result.search_type, buf),
                                 })
                             {
-                                self.state.error_text = format!("Freeze channel closed: {e}");
+                                self.state.push_error(AppError::FreezeChannelClosed { source: e.to_string() });
                             }
                         } else {
                             search_context.freezed_addresses.remove(&(result.addr));
                             if let Err(e) = self.state.freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr)) {
-                                self.state.error_text = format!("Freeze channel closed: {e}");
+                                self.state.push_error(AppError::FreezeChannelClosed { source: e.to_string() });
                             }
                         }
                     }
@@ -442,6 +448,9 @@ impl App {
                 Task::none()
             }
             Message::ToggleFreezeAll => {
+                let freeze_sender = self.state.freeze_sender.clone();
+                let pid = self.state.pid;
+                let mut send_error = None;
                 if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
                     let results = search_context.collect_results();
                     if results.is_empty() {
@@ -455,14 +464,14 @@ impl App {
                         // Unfreeze all
                         for result in results.iter() {
                             if search_context.freezed_addresses.remove(&result.addr)
-                                && let Err(e) = self.state.freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
+                                && let Err(e) = freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
                             {
-                                self.state.error_text = format!("Freeze channel closed: {e}");
+                                send_error.get_or_insert_with(|| AppError::FreezeChannelClosed { source: e.to_string() });
                             }
                         }
                     } else {
                         // Freeze all
-                        if let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle() {
+                        if let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle() {
                             for result in results.iter() {
                                 if !search_context.freezed_addresses.contains(&result.addr) {
                                     search_context.freezed_addresses.insert(result.addr);
@@ -470,22 +479,27 @@ impl App {
                                         continue;
                                     };
                                     if let Ok(buf) = copy_address(result.addr, byte_len, &handle)
-                                        && let Err(e) = self.state.freeze_sender.send(FreezeMessage {
+                                        && let Err(e) = freeze_sender.send(FreezeMessage {
                                             msg: MessageCommand::Freeze,
                                             addr: result.addr,
                                             value: SearchValue(result.search_type, buf),
                                         })
                                     {
-                                        self.state.error_text = format!("Freeze channel closed: {e}");
+                                        send_error.get_or_insert_with(|| AppError::FreezeChannelClosed { source: e.to_string() });
                                     }
                                 }
                             }
                         }
                     }
                 }
+                if let Some(error) = send_error {
+                    self.state.push_error(error);
+                }
                 Task::none()
             }
             Message::RemoveResult(index) => {
+                let freeze_sender = self.state.freeze_sender.clone();
+                let mut send_error = None;
                 if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
                     // Collect all results - now returns Arc<Vec<SearchResult>>
                     let results = search_context.collect_results();
@@ -495,8 +509,8 @@ impl App {
                         let result = &results[index];
                         if search_context.freezed_addresses.contains(&result.addr) {
                             search_context.freezed_addresses.remove(&result.addr);
-                            if let Err(e) = self.state.freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr)) {
-                                self.state.error_text = format!("Freeze channel closed: {e}");
+                            if let Err(e) = freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr)) {
+                                send_error = Some(AppError::FreezeChannelClosed { source: e.to_string() });
                             }
                         }
 
@@ -512,6 +526,9 @@ impl App {
                         search_context.set_cached_results(new_results);
                     }
                 }
+                if let Some(error) = send_error {
+                    self.state.push_error(error);
+                }
                 Task::none()
             }
             Message::OpenEditor(index) => {
@@ -526,7 +543,7 @@ impl App {
                                 self.app_state = AppState::MemoryEditor;
                                 return Task::batch([self.memory_editor.snap_to_cursor(), Task::done(Message::MemoryEditorTick)]);
                             }
-                            Err(err) => self.state.error_text = err,
+                            Err(err) => self.state.push_error(AppError::memory_editor(err)),
                         }
                     }
                 }
@@ -554,14 +571,17 @@ impl App {
                             .and_then(|()| self.memory_editor.focus_on(new_address as usize))
                         {
                             Ok(()) => {
-                                self.state.error_text.clear();
+                                self.state.clear_errors();
                                 return self.memory_editor.snap_to_cursor();
                             }
-                            Err(err) => self.state.error_text = err,
+                            Err(err) => self.state.push_error(AppError::memory_editor(err)),
                         }
                     }
                     Err(err) => {
-                        self.state.error_text = format!("Invalid address '{raw}': {err}");
+                        self.state.push_error(AppError::InvalidAddress {
+                            raw: raw.to_owned(),
+                            source: err.to_string(),
+                        });
                     }
                 }
                 Task::none()
@@ -575,7 +595,10 @@ impl App {
                     && let Some(address) = self.memory_editor.address_for_offset(offset)
                     && let Err(err) = handle.put_address(address, &[byte_value])
                 {
-                    self.state.error_text = format!("Failed to write 0x{address:X}: {err}");
+                    self.state.push_error(AppError::MemoryWrite {
+                        addr: address,
+                        source: err.to_string(),
+                    });
                 }
                 Task::none()
             }
@@ -616,7 +639,7 @@ impl App {
             Message::MemoryEditorEditHex(hex_digit) => {
                 let cursor_row_before = self.memory_editor.cursor_row();
                 if let Err(err) = self.memory_editor.edit_hex(self.state.pid, hex_digit) {
-                    self.state.error_text = err;
+                    self.state.push_error(AppError::memory_editor(err));
                 }
                 if self.memory_editor.cursor_row() != cursor_row_before {
                     self.memory_editor.ensure_cursor_visible()
@@ -630,8 +653,8 @@ impl App {
             }
             Message::MemoryEditorInspectorValueSubmit(kind) => {
                 match self.memory_editor.submit_inspector_value(self.state.pid, kind) {
-                    Ok(()) => self.state.error_text.clear(),
-                    Err(err) => self.state.error_text = err,
+                    Ok(()) => self.state.clear_errors(),
+                    Err(err) => self.state.push_error(AppError::memory_editor(err)),
                 }
                 Task::none()
             }
@@ -654,26 +677,26 @@ impl App {
             Message::MemoryEditorUndo => {
                 match self.memory_editor.undo(self.state.pid) {
                     Ok(Some(address)) => {
-                        self.state.error_text.clear();
+                        self.state.clear_errors();
                         if self.memory_editor.focus_on(address).is_ok() {
                             return self.memory_editor.ensure_cursor_visible();
                         }
                     }
                     Ok(None) => {}
-                    Err(err) => self.state.error_text = err,
+                    Err(err) => self.state.push_error(AppError::memory_editor(err)),
                 }
                 Task::none()
             }
             Message::MemoryEditorRedo => {
                 match self.memory_editor.redo(self.state.pid) {
                     Ok(Some(address)) => {
-                        self.state.error_text.clear();
+                        self.state.clear_errors();
                         if self.memory_editor.focus_on(address).is_ok() {
                             return self.memory_editor.ensure_cursor_visible();
                         }
                     }
                     Ok(None) => {}
-                    Err(err) => self.state.error_text = err,
+                    Err(err) => self.state.push_error(AppError::memory_editor(err)),
                 }
                 Task::none()
             }
@@ -755,6 +778,10 @@ impl App {
                 self.auto_reattach = !self.auto_reattach;
                 Task::none()
             }
+            Message::DismissError => {
+                self.state.dismiss_error();
+                Task::none()
+            }
         }
     }
 
@@ -796,10 +823,10 @@ impl App {
             let value_str = if hex_display { val.to_hex_string() } else { val.to_string() };
 
             let prev = self.value_change_tracker.insert(result.addr, value_str.clone());
-            if let Some(prev_val) = prev {
-                if prev_val != value_str {
-                    self.changed_addresses.insert(result.addr, counter);
-                }
+            if let Some(prev_val) = prev
+                && prev_val != value_str
+            {
+                self.changed_addresses.insert(result.addr, counter);
             }
         }
 

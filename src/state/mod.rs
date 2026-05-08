@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::{
     cmp::min,
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     thread,
     time::{Duration, SystemTime},
 };
@@ -54,6 +54,65 @@ pub struct ProcessInfo {
     pub memory: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppError {
+    InvalidSearchIndex { index: usize },
+    InvalidResultIndex { index: usize },
+    SearchContextMissing { index: usize },
+    ProcessMapRead { pid: process_memory::Pid, source: String },
+    SearchValueParse { source: String },
+    CurrentPidUnavailable,
+    CurrentProcessMissing,
+    FreezeChannelClosed { source: String },
+    ProcessExited { name: String },
+    MemoryWrite { addr: usize, source: String },
+    InvalidValue { value: String, source: String },
+    InvalidAddress { raw: String, source: String },
+    AttachDiagnostic { message: String },
+    MemoryEditor { message: String },
+    Generic { message: String },
+}
+
+impl AppError {
+    pub fn memory_editor(message: impl Into<String>) -> Self {
+        Self::MemoryEditor { message: message.into() }
+    }
+}
+
+impl From<String> for AppError {
+    fn from(message: String) -> Self {
+        Self::Generic { message }
+    }
+}
+
+impl From<&str> for AppError {
+    fn from(message: &str) -> Self {
+        Self::Generic { message: message.to_owned() }
+    }
+}
+
+impl std::fmt::Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidSearchIndex { index } => write!(f, "Invalid search index {index}"),
+            Self::InvalidResultIndex { index } => write!(f, "Invalid result index {index}"),
+            Self::SearchContextMissing { index } => write!(f, "Search context vanished for index {index}"),
+            Self::ProcessMapRead { pid, source } => write!(f, "Error getting process maps for pid {pid}: {source}"),
+            Self::SearchValueParse { source } => write!(f, "Parse error: {source}"),
+            Self::CurrentPidUnavailable => f.write_str("Failed to get current pid"),
+            Self::CurrentProcessMissing => f.write_str("Current process info not found"),
+            Self::FreezeChannelClosed { source } => write!(f, "Freeze channel closed: {source}"),
+            Self::ProcessExited { name } => write!(f, "Process '{name}' exited; freezes cleared."),
+            Self::MemoryWrite { addr, source } => write!(f, "Failed to write 0x{addr:X}: {source}"),
+            Self::InvalidValue { value, source } => write!(f, "Invalid value '{value}': {source}"),
+            Self::InvalidAddress { raw, source } => write!(f, "Invalid address '{raw}': {source}"),
+            Self::AttachDiagnostic { message } | Self::MemoryEditor { message } | Self::Generic { message } => f.write_str(message),
+        }
+    }
+}
+
+const MAX_ERROR_MESSAGES: usize = 5;
+
 pub struct GameCheetahEngine {
     pub pid: process_memory::Pid,
     pub process_name: String,
@@ -73,7 +132,7 @@ pub struct GameCheetahEngine {
     pub searches: Vec<Box<SearchContext>>,
     // Removed: pub search_threads: ThreadPool,
     pub freeze_sender: crossbeam_channel::Sender<FreezeMessage>,
-    pub error_text: String,
+    pub errors: VecDeque<AppError>,
     pub show_results: bool,
     pub set_focus: bool,
 }
@@ -165,7 +224,7 @@ impl Default for GameCheetahEngine {
             pid: 0,
             process_name: "".to_owned(),
             attached_start_time: 0,
-            error_text: String::new(),
+            errors: VecDeque::new(),
             show_process_window: false,
             process_filter: "".to_owned(),
             processes: Vec::new(),
@@ -182,6 +241,25 @@ impl Default for GameCheetahEngine {
 }
 
 impl GameCheetahEngine {
+    pub fn push_error(&mut self, error: impl Into<AppError>) {
+        if self.errors.len() == MAX_ERROR_MESSAGES {
+            self.errors.pop_front();
+        }
+        self.errors.push_back(error.into());
+    }
+
+    pub fn clear_errors(&mut self) {
+        self.errors.clear();
+    }
+
+    pub fn dismiss_error(&mut self) {
+        self.errors.pop_back();
+    }
+
+    pub fn current_error(&self) -> Option<&AppError> {
+        self.errors.back()
+    }
+
     pub fn new_search(&mut self) {
         let ctx = SearchContext::new(
             fl!(crate::LANGUAGE_LOADER, "search-label", search = (1 + self.searches.len()).to_string())
@@ -196,7 +274,7 @@ impl GameCheetahEngine {
     pub fn initial_search(&mut self, search_index: usize) {
         // Validate index
         let Some(search_context) = self.searches.get(search_index) else {
-            self.error_text = format!("Invalid search index {search_index}");
+            self.push_error(AppError::InvalidSearchIndex { index: search_index });
             return;
         };
         if !matches!(search_context.searching, SearchMode::None) {
@@ -219,7 +297,7 @@ impl GameCheetahEngine {
             ctx_mut.results_sender = tx;
             ctx_mut.results_receiver = rx;
         } else {
-            self.error_text = format!("Invalid search index {search_index}");
+            self.push_error(AppError::InvalidSearchIndex { index: search_index });
             return;
         }
 
@@ -230,7 +308,7 @@ impl GameCheetahEngine {
         };
 
         if search_type == SearchType::String {
-            self.error_text.clear();
+            self.clear_errors();
 
             // Precompute overlaps for chunking so we don't miss boundary-crossing matches
             let utf8_len = search_value_text.len();
@@ -244,7 +322,7 @@ impl GameCheetahEngine {
                     if let Some(ctx_mut) = self.searches.get_mut(search_index) {
                         ctx_mut.total_bytes += total_bytes;
                     } else {
-                        self.error_text = format!("Search context vanished for index {search_index}");
+                        self.push_error(AppError::SearchContextMissing { index: search_index });
                         return;
                     }
 
@@ -252,7 +330,10 @@ impl GameCheetahEngine {
                 }
                 Err(err) => {
                     eprintln!("error getting process maps for pid {}: {}", self.pid, err);
-                    self.error_text = format!("Error getting process maps for pid {}: {}", self.pid, err);
+                    self.push_error(AppError::ProcessMapRead {
+                        pid: self.pid,
+                        source: err.to_string(),
+                    });
                 }
             }
             return;
@@ -262,11 +343,11 @@ impl GameCheetahEngine {
         let search_for_value = match search_type.from_string(&search_value_text) {
             Ok(v) => v,
             Err(e) => {
-                self.error_text = format!("Parse error: {e}");
+                self.push_error(AppError::SearchValueParse { source: e.to_string() });
                 return;
             }
         };
-        self.error_text.clear();
+        self.clear_errors();
 
         match get_process_maps(self.pid) {
             Ok(maps) => {
@@ -276,7 +357,7 @@ impl GameCheetahEngine {
                 if let Some(ctx_mut) = self.searches.get_mut(search_index) {
                     ctx_mut.total_bytes += total_bytes;
                 } else {
-                    self.error_text = format!("Search context vanished for index {search_index}");
+                    self.push_error(AppError::SearchContextMissing { index: search_index });
                     return;
                 }
 
@@ -284,7 +365,10 @@ impl GameCheetahEngine {
             }
             Err(err) => {
                 eprintln!("error getting process maps for pid {}: {}", self.pid, err);
-                self.error_text = format!("Error getting process maps for pid {}: {}", self.pid, err);
+                self.push_error(AppError::ProcessMapRead {
+                    pid: self.pid,
+                    source: err.to_string(),
+                });
             }
         }
     }
@@ -292,7 +376,7 @@ impl GameCheetahEngine {
     pub fn filter_searches(&mut self, search_index: usize) {
         self.remove_freezes(search_index);
         let Some(search_context) = self.searches.get_mut(search_index) else {
-            self.error_text = format!("Invalid search index {search_index}");
+            self.push_error(AppError::InvalidSearchIndex { index: search_index });
             return;
         };
         search_context.searching = SearchMode::Percent;
@@ -340,11 +424,11 @@ impl GameCheetahEngine {
         self.processes.clear();
 
         let Ok(current_pid) = get_current_pid() else {
-            self.error_text = "Failed to get current pid".into();
+            self.push_error(AppError::CurrentPidUnavailable);
             return;
         };
         let Some(cur_process) = sys.process(current_pid) else {
-            self.error_text = "Current process info not found".into();
+            self.push_error(AppError::CurrentProcessMissing);
             return;
         };
 
@@ -430,7 +514,7 @@ impl GameCheetahEngine {
 
     fn spawn_update_search(&mut self, search_index: usize, old_results: Arc<Vec<SearchResult>>, chunks: Vec<(usize, usize)>) {
         let Some(search_context) = self.searches.get_mut(search_index) else {
-            self.error_text = format!("Invalid search index {search_index}");
+            self.push_error(AppError::InvalidSearchIndex { index: search_index });
             return;
         };
         let current_bytes = search_context.current_bytes.clone();
@@ -470,7 +554,7 @@ impl GameCheetahEngine {
 
     fn spawn_parallel_search(&mut self, search_data: SearchValue, regions: Vec<(usize, usize)>, search_index: usize) {
         let Some(search_context) = self.searches.get_mut(search_index) else {
-            self.error_text = format!("Invalid search index {search_index}");
+            self.push_error(AppError::InvalidSearchIndex { index: search_index });
             return;
         };
 
@@ -594,18 +678,18 @@ impl GameCheetahEngine {
         // (with a platform-specific hint) instead of an empty result list when
         // the OS denies ptrace / task_for_pid / OpenProcess.
         match diagnostics::diagnose_attach(process.pid) {
-            Ok(()) => self.error_text.clear(),
-            Err(msg) => self.error_text = msg,
+            Ok(()) => self.clear_errors(),
+            Err(message) => self.push_error(AppError::AttachDiagnostic { message }),
         }
     }
 
     /// Send a freeze-thread message and surface a `SendError` through
-    /// `error_text`. A failure here means the freeze thread died, which is
+    /// the typed error queue. A failure here means the freeze thread died, which is
     /// rare but worth telling the user about instead of silently dropping the
     /// freeze/unfreeze.
     pub fn send_freeze(&mut self, msg: FreezeMessage) {
         if let Err(e) = self.freeze_sender.send(msg) {
-            self.error_text = format!("Freeze channel closed: {e}");
+            self.push_error(AppError::FreezeChannelClosed { source: e.to_string() });
         }
     }
 
@@ -634,32 +718,41 @@ impl GameCheetahEngine {
         if !self.is_process_running() {
             let name = self.process_name.clone();
             self.detach();
-            self.error_text = format!("Process '{name}' exited; freezes cleared.");
+            self.push_error(AppError::ProcessExited { name });
         }
     }
 
     pub fn take_memory_snapshot(&mut self, search_index: usize) {
-        let Some(search_context) = self.searches.get_mut(search_index) else {
-            return;
-        };
+        {
+            let Some(search_context) = self.searches.get_mut(search_index) else {
+                return;
+            };
 
-        search_context.searching = SearchMode::Memory;
-        search_context.clear_memory_snapshot();
+            search_context.searching = SearchMode::Memory;
+            search_context.clear_memory_snapshot();
+        }
 
         match get_process_maps(self.pid) {
             Ok(maps) => {
                 // Snapshot capture reads each region whole; no overlap needed.
                 let (regions, total_bytes) = chunk_process_regions(maps, 0);
 
-                search_context.total_bytes = total_bytes;
-                search_context.current_bytes.store(0, Ordering::SeqCst);
+                if let Some(search_context) = self.searches.get_mut(search_index) {
+                    search_context.total_bytes = total_bytes;
+                    search_context.current_bytes.store(0, Ordering::SeqCst);
+                }
 
                 self.spawn_snapshot_capture(search_index, regions);
             }
             Err(e) => {
-                self.error_text = format!("Failed to get process maps: {e}");
-                // Set search complete even on error so UI doesn't get stuck
-                search_context.search_complete.store(true, Ordering::SeqCst);
+                if let Some(search_context) = self.searches.get_mut(search_index) {
+                    // Set search complete even on error so UI doesn't get stuck
+                    search_context.search_complete.store(true, Ordering::SeqCst);
+                }
+                self.push_error(AppError::ProcessMapRead {
+                    pid: self.pid,
+                    source: e.to_string(),
+                });
             }
         }
     }
@@ -1023,7 +1116,7 @@ impl GameCheetahEngine {
 
     fn spawn_string_search(&mut self, search_text: String, regions: Vec<(usize, usize)>, search_index: usize) {
         let Some(search_context) = self.searches.get_mut(search_index) else {
-            self.error_text = format!("Invalid search index {search_index}");
+            self.push_error(AppError::InvalidSearchIndex { index: search_index });
             return;
         };
 
@@ -1399,5 +1492,28 @@ mod tests {
 
         assert_eq!(map.get(&(0x5678, SearchType::Float)), Some(&[5, 6, 7, 8, 0, 0, 0, 0]));
         assert_eq!(extra_ref.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn app_error_queue_keeps_latest_messages() {
+        let mut engine = GameCheetahEngine::default();
+
+        for i in 0..7 {
+            engine.push_error(AppError::InvalidSearchIndex { index: i });
+        }
+
+        assert_eq!(engine.errors.len(), MAX_ERROR_MESSAGES);
+        assert_eq!(engine.errors.front(), Some(&AppError::InvalidSearchIndex { index: 2 }));
+        assert_eq!(engine.current_error(), Some(&AppError::InvalidSearchIndex { index: 6 }));
+    }
+
+    #[test]
+    fn app_error_formats_context() {
+        let err = AppError::MemoryWrite {
+            addr: 0xABCD,
+            source: "denied".to_owned(),
+        };
+
+        assert_eq!(err.to_string(), "Failed to write 0xABCD: denied");
     }
 }

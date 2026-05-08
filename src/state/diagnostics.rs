@@ -3,8 +3,8 @@
 //! When the user picks a process we silently rely on [`process_memory`] and
 //! [`proc_maps`] to do the right thing. Both crates report opaque OS errors,
 //! so this module probes the target process and turns common failure modes
-//! into a single platform-specific hint that gets surfaced through
-//! `state.error_text`.
+//! into a single platform-specific hint that gets surfaced through the typed
+//! engine error queue.
 //!
 //! The probe is intentionally cheap: open a handle, list memory regions, and
 //! read one byte from the first readable region. Anything more would slow
@@ -16,7 +16,7 @@ use process_memory::{Pid, TryIntoProcessHandle, copy_address};
 /// Run a one-shot attach probe against `pid`.
 ///
 /// Returns `Ok(())` if memory is readable, otherwise a human-readable hint
-/// suitable for direct display in `state.error_text`.
+/// suitable for direct display in the engine error banner.
 pub fn diagnose_attach(pid: Pid) -> Result<(), String> {
     let handle = pid
         .try_into_process_handle()

@@ -247,6 +247,35 @@ fn search_ui(app: &App) -> Element<'_, Message> {
     .into()
 }
 
+fn error_banner(app: &App) -> Element<'_, Message> {
+    if let Some(error) = app.state.current_error() {
+        container(
+            row![
+                text(error.to_string()).size(13).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                    color: Some(theme.destructive.base)
+                }),
+                button(text("×")).on_press(Message::DismissError).padding(2)
+            ]
+            .spacing(8)
+            .align_y(alignment::Alignment::Center),
+        )
+        .width(Length::Fill)
+        .padding([6, 10])
+        .style(|theme: &icy_ui::Theme| container::Style {
+            background: Some(theme.destructive.base.scale_alpha(0.08).into()),
+            border: icy_ui::Border {
+                radius: 2.0.into(),
+                width: 1.0,
+                color: theme.destructive.base.scale_alpha(0.25),
+            },
+            ..Default::default()
+        })
+        .into()
+    } else {
+        column![].into()
+    }
+}
+
 fn render_result_table(app: &App) -> Element<'_, Message> {
     let search_index = app.state.current_search;
     let current_search_context = &app.state.searches[search_index];
@@ -738,6 +767,7 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
         .padding(crate::DIALOG_PADDING)
         .align_y(alignment::Alignment::Center),
         rule::horizontal(1),
+        error_banner(app),
         row![
             column![search_table, column![add_button, rename_button].spacing(5).padding(10)].height(Length::Fill),
             rule::vertical(1),
