@@ -34,12 +34,26 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Check clippy
-        run: cargo clippy --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Run tests
         run: cargo test --all-features
 
+  dependency_audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run cargo audit
+        run: cargo audit
+
   build_linux:
-    needs: run_checks
+    needs: [run_checks, dependency_audit]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -101,7 +115,7 @@ jobs:
             ${{ steps.build-appimage.outputs.app_img }}
 
   build_windows:
-    needs: run_checks
+    needs: [run_checks, dependency_audit]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -135,7 +149,7 @@ jobs:
             file_id.diz
 
   build_mac:
-    needs: run_checks
+    needs: [run_checks, dependency_audit]
     runs-on: macos-latest  # Removed matrix strategy
     steps:
       - uses: actions/checkout@v5
