@@ -79,9 +79,9 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
       - name: Build deb
         run: |
-          export DEB=$(cargo deb)
+          DEB=$(cargo deb)
           echo "Copy $DEB to ${{ env.APP_NAME }}_${VERSION}_amd64.deb"
-          mv $DEB ${{ env.APP_NAME }}_${VERSION}_amd64.deb
+          mv "$DEB" "${{ env.APP_NAME }}_${VERSION}_amd64.deb"
       - name: 'Upload Artifact'
         uses: actions/upload-artifact@v5
         with:
