@@ -5,6 +5,40 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-05-08
+
+Patch release focused on release packaging, cheat-table polish, and post-0.6.0 fixes.
+
+### Added
+
+- Cheat tables can now be saved and loaded as TOML files per target process.
+- Result values can be toggled between decimal and hexadecimal display.
+- Frozen rows now show a lock cue and a highlighted row style.
+- Result rows briefly highlight when their live value changes.
+- Optional auto-reattach watches for a process with the same name after the target exits.
+- Search tabs can be renamed by double-clicking the tab label.
+- CI now checks i18n key parity between English and German translations.
+
+### Changed
+
+- Cheat-table loading now validates the saved process name and schema version before loading addresses.
+- Freeze state is no longer persisted in cheat tables. Freezing is treated as runtime state and must be re-enabled explicitly after loading.
+- Result-table live value rendering reuses the change-tracker cache when available, reducing duplicate memory reads.
+- Per-row change tracking is skipped during active searches and capped for large result sets to keep the UI responsive.
+- Error reporting now uses a typed bounded error queue with a dismissible in-process error banner instead of a single global string.
+- Region chunking for memory scans is shared through a helper to keep string, numeric, and snapshot scan behavior consistent.
+- Updated dependencies where compatible with the project MSRV; `sysinfo` is pinned to `0.38.4` because `0.39.x` requires Rust 1.95.
+
+### Fixed
+
+- macOS release bundles no longer appear damaged/crossed-out in Finder: `CFBundleExecutable` now matches the packaged binary, bundle versions are patched during CI, and the final universal app is ad-hoc signed after `lipo`.
+- The committed macOS `Info.plist` version is checked against Cargo metadata by a regression test.
+- Removed a committed Cargo config that forced Windows cross-compilation as the default target.
+- Removed unused dependencies (`threadpool`, `sudo`, `boyer-moore-magiclen`).
+- `bytes` was updated to fix RUSTSEC-2026-0007.
+- CI Linux `.deb` packaging no longer masks `cargo deb` failures with `export DEB=$(...)`.
+- German translations were added for save/load, hex display, auto-reattach, and watch-process UI strings.
+
 ## [0.6.0] - 2026-04-25
 
 A robustness, performance, and UX release.
