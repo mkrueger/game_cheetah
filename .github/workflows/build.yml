@@ -189,6 +189,12 @@ jobs:
 
           cp build/mac/Info.plist "${app}.app/Contents/Info.plist"
 
+          bundle_plist="${app}.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable ${{ env.APP_NAME }}" "$bundle_plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$bundle_plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$bundle_plist" \
+            || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VERSION" "$bundle_plist"
+
           mkdir -p AppIcon.iconset
           sips -z 16 16 build/mac/128x128@2x.png --out AppIcon.iconset/icon_16x16.png
           sips -z 32 32 build/mac/128x128@2x.png --out AppIcon.iconset/icon_16x16@2x.png
@@ -205,6 +211,16 @@ jobs:
           lipo "target/x86_64-apple-darwin/release/${{ env.APP_NAME }}" \
                "target/aarch64-apple-darwin/release/${{ env.APP_NAME }}" \
                -create -output "$app.app/Contents/MacOS/${{ env.APP_NAME }}"
+
+          plist_executable=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$bundle_plist")
+          test -x "$app.app/Contents/MacOS/$plist_executable"
+          file "$app.app/Contents/MacOS/${{ env.APP_NAME }}"
+
+          # lipo creates a fresh universal Mach-O, so sign the final bundle.
+          # This is an ad-hoc signature (no Apple Developer ID secret needed),
+          # but it avoids shipping an unsigned/incomplete app bundle.
+          codesign --force --deep --sign - "$app.app"
+          codesign --verify --deep --strict --verbose=2 "$app.app"
 
       - name: Sign dmg
         id: sign-bundle
