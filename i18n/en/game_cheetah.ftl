@@ -8,6 +8,10 @@ main-menu-subtitle = Memory scanner and game trainer
 
 process-label = Process:
 filter-processes-hint = Filter processes
+no-processes-loading = Loading processes…
+no-processes-match = No processes match the current filter.
+process-count-total = { $total } processes
+process-count-filtered = { $shown } of { $total } processes
 first-search-label = First search
 searches-heading = Searches
 

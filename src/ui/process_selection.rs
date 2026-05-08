@@ -1,10 +1,15 @@
 use i18n_embed_fl::fl;
 use icy_ui::{
     Element, Length, alignment,
-    widget::{button, column, container, row, scrollable, text, text_input},
+    widget::{button, column, container, row, rule, scrollable, text, text_input},
 };
 
 use crate::{app::App, message::Message};
+
+const COL_PID: f32 = 80.0;
+const COL_NAME: f32 = 260.0;
+const COL_MEM: f32 = 140.0;
+const ROW_HEIGHT: f32 = 28.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum ProcessSortColumn {
@@ -22,22 +27,46 @@ pub enum SortDirection {
     Descending,
 }
 
+fn header_cell<'a>(label: String, indicator: &str, width: Length, sort: ProcessSortColumn, align_right: bool) -> Element<'a, Message> {
+    let txt = text(format!("{label}{indicator}")).size(13).font(icy_ui::Font {
+        weight: icy_ui::font::Weight::Semibold,
+        ..icy_ui::Font::default()
+    });
+    let inner = container(txt).width(width).padding([6, 8]).align_y(alignment::Alignment::Center);
+    let inner = if align_right { inner.align_x(alignment::Alignment::End) } else { inner };
+    button(inner)
+        .on_press(Message::SortProcesses(sort))
+        .width(width)
+        .padding(0)
+        .style(|theme: &icy_ui::Theme, status: icy_ui::widget::button::Status| {
+            use icy_ui::widget::button::Status;
+            button::Style {
+                background: Some(match status {
+                    Status::Hovered => theme.primary.base.scale_alpha(0.85).into(),
+                    _ => theme.primary.base.into(),
+                }),
+                border: icy_ui::Border::default(),
+                text_color: theme.primary.on,
+                ..Default::default()
+            }
+        })
+        .into()
+}
+
 pub fn view_process_selection(app: &App) -> Element<'_, Message> {
     let filter = app.state.process_filter.to_ascii_uppercase();
 
-    // Get sort indicator
-    let sort_indicator = |column: ProcessSortColumn| -> String {
+    let sort_indicator = |column: ProcessSortColumn| -> &'static str {
         if app.process_sort_column == column {
             match app.process_sort_direction {
-                SortDirection::Ascending => " ▲".to_string(),
-                SortDirection::Descending => " ▼".to_string(),
+                SortDirection::Ascending => " ▲",
+                SortDirection::Descending => " ▼",
             }
         } else {
-            String::new()
+            ""
         }
     };
 
-    // Filter processes
     let mut filtered_processes: Vec<_> = app
         .state
         .processes
@@ -51,190 +80,220 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
         .cloned()
         .collect();
 
-    // Sort processes
     match app.process_sort_column {
-        ProcessSortColumn::Pid => {
-            filtered_processes.sort_by(|a, b| match app.process_sort_direction {
-                SortDirection::Ascending => a.pid.cmp(&b.pid),
-                SortDirection::Descending => b.pid.cmp(&a.pid),
-            });
-        }
-        ProcessSortColumn::Name => {
-            filtered_processes.sort_by(|a, b| match app.process_sort_direction {
-                SortDirection::Ascending => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-                SortDirection::Descending => b.name.to_lowercase().cmp(&a.name.to_lowercase()),
-            });
-        }
-        ProcessSortColumn::Memory => {
-            filtered_processes.sort_by(|a, b| match app.process_sort_direction {
-                SortDirection::Ascending => a.memory.cmp(&b.memory),
-                SortDirection::Descending => b.memory.cmp(&a.memory),
-            });
-        }
-        ProcessSortColumn::Command => {
-            filtered_processes.sort_by(|a, b| match app.process_sort_direction {
-                SortDirection::Ascending => a.cmd.to_lowercase().cmp(&b.cmd.to_lowercase()),
-                SortDirection::Descending => b.cmd.to_lowercase().cmp(&a.cmd.to_lowercase()),
-            });
-        }
+        ProcessSortColumn::Pid => filtered_processes.sort_by(|a, b| match app.process_sort_direction {
+            SortDirection::Ascending => a.pid.cmp(&b.pid),
+            SortDirection::Descending => b.pid.cmp(&a.pid),
+        }),
+        ProcessSortColumn::Name => filtered_processes.sort_by(|a, b| match app.process_sort_direction {
+            SortDirection::Ascending => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+            SortDirection::Descending => b.name.to_lowercase().cmp(&a.name.to_lowercase()),
+        }),
+        ProcessSortColumn::Memory => filtered_processes.sort_by(|a, b| match app.process_sort_direction {
+            SortDirection::Ascending => a.memory.cmp(&b.memory),
+            SortDirection::Descending => b.memory.cmp(&a.memory),
+        }),
+        ProcessSortColumn::Command => filtered_processes.sort_by(|a, b| match app.process_sort_direction {
+            SortDirection::Ascending => a.cmd.to_lowercase().cmp(&b.cmd.to_lowercase()),
+            SortDirection::Descending => b.cmd.to_lowercase().cmp(&a.cmd.to_lowercase()),
+        }),
     }
 
-    // Process selection dialog
-    container(
-        column![
-            // Filter input row with Clear and Close buttons
-            row![
-                text(fl!(crate::LANGUAGE_LOADER, "process-label")),
-                text_input(&fl!(crate::LANGUAGE_LOADER, "filter-processes-hint"), &app.state.process_filter)
-                    .on_input(Message::FilterChanged)
-                    .padding(10)
-                    .width(Length::Fill),
-                button(text(fl!(crate::LANGUAGE_LOADER, "clear-button")))
-                    .on_press(Message::FilterChanged(String::new()))
-                    .padding(5),
-                button(text(fl!(crate::LANGUAGE_LOADER, "close-button"))).on_press(Message::MainMenu).padding(5),
-            ]
-            .spacing(10)
-            .align_y(alignment::Alignment::Center),
-            // Table header with sortable columns
-            container(row![
-                button(
-                    container(
-                        text(format!(
-                            "{}{}",
-                            fl!(crate::LANGUAGE_LOADER, "pid-heading"),
-                            sort_indicator(ProcessSortColumn::Pid)
-                        ))
-                        .size(14)
-                    )
-                    .width(Length::Fixed(80.0))
-                    .padding(5)
-                )
-                .on_press(Message::SortProcesses(ProcessSortColumn::Pid))
+    let total = app.state.processes.len();
+    let shown = filtered_processes.len();
+
+    // Search bar
+    let mut search_row = row![
+        container(text("🔍").size(16)).padding([0, 4]).align_y(alignment::Alignment::Center),
+        text_input(&fl!(crate::LANGUAGE_LOADER, "filter-processes-hint"), &app.state.process_filter)
+            .on_input(Message::FilterChanged)
+            .padding([8, 10])
+            .size(14)
+            .width(Length::Fill),
+    ]
+    .spacing(4)
+    .align_y(alignment::Alignment::Center);
+    if !app.state.process_filter.is_empty() {
+        search_row = search_row.push(
+            button(text("✕").size(13))
+                .on_press(Message::FilterChanged(String::new()))
+                .padding([6, 10])
                 .style(|theme: &icy_ui::Theme, _status| button::Style {
-                    background: Some(theme.primary.base.into()),
+                    background: Some(icy_ui::Color::TRANSPARENT.into()),
+                    text_color: theme.background.on.scale_alpha(0.7),
                     border: icy_ui::Border::default(),
-                    text_color: theme.background.on,
                     ..Default::default()
-                })
-                .width(Length::Fixed(80.0))
-                .padding(0),
+                }),
+        );
+    }
+
+    let search_bar = container(search_row).padding(2).style(|theme: &icy_ui::Theme| container::Style {
+        background: Some(theme.background.base.into()),
+        border: icy_ui::Border {
+            radius: 6.0.into(),
+            width: 1.0,
+            color: theme.primary.divider,
+        },
+        ..Default::default()
+    });
+
+    // Header
+    let header = container(
+        row![
+            header_cell(
+                fl!(crate::LANGUAGE_LOADER, "pid-heading"),
+                sort_indicator(ProcessSortColumn::Pid),
+                Length::Fixed(COL_PID),
+                ProcessSortColumn::Pid,
+                true,
+            ),
+            header_cell(
+                fl!(crate::LANGUAGE_LOADER, "name-heading"),
+                sort_indicator(ProcessSortColumn::Name),
+                Length::Fixed(COL_NAME),
+                ProcessSortColumn::Name,
+                false,
+            ),
+            header_cell(
+                fl!(crate::LANGUAGE_LOADER, "memory-heading"),
+                sort_indicator(ProcessSortColumn::Memory),
+                Length::Fixed(COL_MEM),
+                ProcessSortColumn::Memory,
+                true,
+            ),
+            header_cell(
+                fl!(crate::LANGUAGE_LOADER, "command-heading"),
+                sort_indicator(ProcessSortColumn::Command),
+                Length::Fill,
+                ProcessSortColumn::Command,
+                false,
+            ),
+        ]
+        .spacing(0),
+    )
+    .style(|theme: &icy_ui::Theme| container::Style {
+        background: Some(theme.primary.base.into()),
+        ..Default::default()
+    });
+
+    // Body
+    let body: Element<'_, Message> = if filtered_processes.is_empty() {
+        container(
+            text(if total == 0 {
+                fl!(crate::LANGUAGE_LOADER, "no-processes-loading")
+            } else {
+                fl!(crate::LANGUAGE_LOADER, "no-processes-match")
+            })
+            .size(14)
+            .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                color: Some(theme.background.on.scale_alpha(0.6)),
+            }),
+        )
+        .center_x(Length::Fill)
+        .padding(40)
+        .height(Length::Fill)
+        .into()
+    } else {
+        scrollable(column(filtered_processes.iter().enumerate().map(|(idx, process)| {
+            let process_clone = process.clone();
+            let bb = gabi::BytesConfig::default();
+            let memory = bb.bytes(process.memory as u64).to_string();
+            let zebra = idx % 2 == 1;
+            container(
                 button(
-                    container(
-                        text(format!(
-                            "{}{}",
-                            fl!(crate::LANGUAGE_LOADER, "name-heading"),
-                            sort_indicator(ProcessSortColumn::Name)
-                        ))
-                        .size(14)
-                    )
-                    .width(Length::Fixed(250.0))
-                    .padding(5)
+                    row![
+                        container(text(process.pid.to_string()).size(13).font(icy_ui::Font::MONOSPACE))
+                            .width(Length::Fixed(COL_PID))
+                            .padding([4, 8])
+                            .align_x(alignment::Alignment::End)
+                            .align_y(alignment::Alignment::Center),
+                        container(text(process.name.clone()).size(13).font(icy_ui::Font {
+                            weight: icy_ui::font::Weight::Semibold,
+                            ..icy_ui::Font::default()
+                        }))
+                        .width(Length::Fixed(COL_NAME))
+                        .padding([4, 8])
+                        .align_y(alignment::Alignment::Center),
+                        container(text(memory).size(13).font(icy_ui::Font::MONOSPACE))
+                            .width(Length::Fixed(COL_MEM))
+                            .padding([4, 8])
+                            .align_x(alignment::Alignment::End)
+                            .align_y(alignment::Alignment::Center),
+                        container(text(process.cmd.clone()).size(12).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                            color: Some(theme.background.on.scale_alpha(0.7)),
+                        }))
+                        .width(Length::Fill)
+                        .padding([4, 8])
+                        .align_y(alignment::Alignment::Center),
+                    ]
+                    .height(Length::Fixed(ROW_HEIGHT)),
                 )
-                .on_press(Message::SortProcesses(ProcessSortColumn::Name))
-                .style(|theme: &icy_ui::Theme, _status| button::Style {
-                    background: Some(theme.primary.base.into()),
-                    border: icy_ui::Border::default(),
-                    text_color: theme.background.on,
-                    ..Default::default()
+                .style(move |theme: &icy_ui::Theme, status: icy_ui::widget::button::Status| {
+                    use icy_ui::widget::button::Status;
+                    let base_bg = if zebra {
+                        theme.background.on.scale_alpha(0.04)
+                    } else {
+                        icy_ui::Color::TRANSPARENT
+                    };
+                    match status {
+                        Status::Hovered => button::Style {
+                            background: Some(theme.accent.base.scale_alpha(0.18).into()),
+                            border: icy_ui::Border::default(),
+                            text_color: theme.background.on,
+                            ..Default::default()
+                        },
+                        _ => button::Style {
+                            background: Some(base_bg.into()),
+                            border: icy_ui::Border::default(),
+                            text_color: theme.background.on,
+                            ..Default::default()
+                        },
+                    }
                 })
-                .width(Length::Fixed(250.0))
-                .padding(0),
-                button(
-                    container(
-                        text(format!(
-                            "{}{}",
-                            fl!(crate::LANGUAGE_LOADER, "memory-heading"),
-                            sort_indicator(ProcessSortColumn::Memory)
-                        ))
-                        .size(14)
-                    )
-                    .width(Length::Fixed(200.0))
-                    .padding(5)
-                )
-                .on_press(Message::SortProcesses(ProcessSortColumn::Memory))
-                .style(|theme: &icy_ui::Theme, _status| button::Style {
-                    background: Some(theme.primary.base.into()),
-                    border: icy_ui::Border::default(),
-                    text_color: theme.background.on,
-                    ..Default::default()
-                })
-                .width(Length::Fixed(200.0))
-                .padding(0),
-                button(
-                    container(
-                        text(format!(
-                            "{}{}",
-                            fl!(crate::LANGUAGE_LOADER, "command-heading"),
-                            sort_indicator(ProcessSortColumn::Command)
-                        ))
-                        .size(14)
-                    )
-                    .width(Length::Fill)
-                    .padding(5)
-                )
-                .on_press(Message::SortProcesses(ProcessSortColumn::Command))
-                .style(|theme: &icy_ui::Theme, _status| button::Style {
-                    background: Some(theme.primary.base.into()),
-                    border: icy_ui::Border::default(),
-                    text_color: theme.background.on,
-                    ..Default::default()
-                })
+                .on_press(Message::SelectProcess(process_clone))
                 .width(Length::Fill)
                 .padding(0),
-            ])
-            .style(|theme: &icy_ui::Theme| {
-                container::Style {
-                    background: Some(theme.primary.base.into()),
-                    ..Default::default()
-                }
-            }),
-            // Table body
-            scrollable(
-                column(
-                    filtered_processes
-                        .iter()
-                        .map(|process| {
-                            let process_clone = process.clone();
-                            let bb = gabi::BytesConfig::default();
-                            let memory = bb.bytes(process.memory as u64).to_string();
-
-                            container(
-                                button(row![
-                                    container(text(process.pid.to_string()).size(14)).width(Length::Fixed(80.0)).padding(5),
-                                    container(text(process.name.clone()).size(14)).width(Length::Fixed(250.0)).padding(5),
-                                    container(text(memory).size(14)).width(Length::Fixed(200.0)).padding(5),
-                                    container(text(process.cmd.clone()).size(14)).width(Length::Fill).padding(5),
-                                ])
-                                .style(|theme: &icy_ui::Theme, status: icy_ui::widget::button::Status| {
-                                    use icy_ui::widget::button::Status;
-                                    match status {
-                                        Status::Hovered => button::Style {
-                                            background: Some(theme.accent.base.into()),
-                                            border: icy_ui::Border::default(),
-                                            text_color: theme.background.on,
-                                            ..Default::default()
-                                        },
-                                        _ => button::Style {
-                                            background: Some(icy_ui::Color::TRANSPARENT.into()),
-                                            border: icy_ui::Border::default(),
-                                            text_color: theme.background.on,
-                                            ..Default::default()
-                                        },
-                                    }
-                                })
-                                .on_press(Message::SelectProcess(process_clone))
-                                .width(Length::Fill)
-                                .padding(0),
-                            )
-                            .style(move |_theme: &icy_ui::Theme| container::Style::default())
-                            .into()
-                        })
-                        .collect::<Vec<Element<'_, Message>>>()
-                )
-                .spacing(0)
             )
-            .height(Length::FillPortion(1))
+            .into()
+        })))
+        .into()
+    };
+
+    // Footer
+    let footer = row![
+        text(if filter.is_empty() {
+            fl!(crate::LANGUAGE_LOADER, "process-count-total", total = total)
+        } else {
+            fl!(crate::LANGUAGE_LOADER, "process-count-filtered", shown = shown, total = total)
+        })
+        .size(12)
+        .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+            color: Some(theme.background.on.scale_alpha(0.6)),
+        }),
+        container(text("")).width(Length::Fill),
+        button(text(fl!(crate::LANGUAGE_LOADER, "close-button")))
+            .on_press(Message::MainMenu)
+            .padding([6, 14]),
+    ]
+    .spacing(10)
+    .align_y(alignment::Alignment::Center);
+
+    container(
+        column![
+            search_bar,
+            container(column![header, rule::horizontal(1), body].spacing(0))
+                .height(Length::FillPortion(1))
+                .style(|theme: &icy_ui::Theme| container::Style {
+                    background: Some(theme.background.base.into()),
+                    border: icy_ui::Border {
+                        radius: 4.0.into(),
+                        width: 1.0,
+                        color: theme.primary.divider,
+                    },
+                    ..Default::default()
+                })
+                .clip(true),
+            footer,
         ]
         .spacing(10)
         .padding(crate::DIALOG_PADDING),

@@ -8,6 +8,10 @@ main-menu-subtitle = Speicherscanner und Game Trainer
 
 process-label = Prozess:
 filter-processes-hint = Prozesse filtern
+no-processes-loading = Prozesse werden geladen…
+no-processes-match = Keine Prozesse passen zum aktuellen Filter.
+process-count-total = { $total } Prozesse
+process-count-filtered = { $shown } von { $total } Prozessen
 first-search-label = Erste Suche 
 searches-heading = Laufende Suchen
 
