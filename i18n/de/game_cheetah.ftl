@@ -36,6 +36,9 @@ remove-button = Entfernen
 
 add-search-button = Neu
 
+save-cheat-table-button = Speichern
+load-cheat-table-button = Laden
+
 generic-error-label = <Fehler>
 invalid-input-error = Eingabe ungültig
 invalid-number-error = Zahl ungültig
@@ -63,6 +66,7 @@ address-heading = Addresse
 value-heading = Wert
 freezed-heading = Eingefroren
 datatype-heading = Datentyp
+hex-toggle-label = Hex
 
 pid-heading = Pid
 name-heading = Name
@@ -107,6 +111,10 @@ unknown-search-description = Speicherwerte vergleichen ohne den genauen Wert zu 
 
 process-exited-title = Prozess beendet
 process-exited-message = Der Zielprozess läuft nicht mehr. Bitte kehren Sie zum Hauptmenü zurück, um einen neuen Prozess auszuwählen.
+process-exited-watching-title = Warte auf { $name }...
+watch-for-button = Auf { $name } warten
+stop-watching-button = Warten beenden
+auto-reattach-label = Automatisch wiederverbinden
 back-to-main-button = Zurück zum Hauptmenü
 
 # Speichereditor

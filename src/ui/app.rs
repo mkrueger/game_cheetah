@@ -1,4 +1,9 @@
-use std::{collections::HashMap, sync::atomic::Ordering, thread::sleep, time::{Duration, Instant}};
+use std::{
+    collections::HashMap,
+    sync::atomic::Ordering,
+    thread::sleep,
+    time::{Duration, Instant},
+};
 
 use i18n_embed_fl::fl;
 use icy_ui::{
@@ -271,8 +276,16 @@ impl App {
             Message::Tick => {
                 if matches!(self.app_state, AppState::InProcess) {
                     self.refresh_counter = self.refresh_counter.wrapping_add(1);
-                    if self.state.is_process_running() {
+                    // Only track per-row value changes when no search is in progress.
+                    // During a scan, `collect_results()` can return millions of intermediate
+                    // hits and one `copy_address` syscall per result would freeze the UI.
+                    let search_running = self.state.searches.iter().any(|s| !matches!(s.searching, SearchMode::None));
+                    if !search_running && self.state.is_process_running() {
                         self.update_change_tracker();
+                    } else if search_running {
+                        // Keep stale highlights from confusing the user once the search
+                        // finishes and the result set changes.
+                        self.clear_change_tracker();
                     }
                 }
                 // If searching, keep scheduling ticks
@@ -722,11 +735,12 @@ impl App {
 
             Message::LoadCheatTable => {
                 let path = crate::default_cheat_table_path(&self.state.process_name);
-                match crate::load_cheat_table(&path, &self.state.freeze_sender) {
+                match crate::load_cheat_table(&path, &self.state.process_name) {
                     Ok(searches) => {
                         self.state.searches = searches;
                         self.state.current_search = 0;
                         self.editing_result = None;
+                        self.clear_change_tracker();
                         self.cheat_table_status = format!("Loaded: {}", path.display());
                     }
                     Err(e) => self.cheat_table_status = format!("Load error: {e}"),
@@ -751,15 +765,32 @@ impl App {
 
     /// Read current values for all results in the active search and record
     /// which addresses changed since the last call.
+    ///
+    /// Skipped entirely if the result set exceeds `MAX_TRACKED_RESULTS` to keep
+    /// the UI responsive. Callers must also avoid invoking this while a search
+    /// is in progress (intermediate result sets can be enormous).
     fn update_change_tracker(&mut self) {
+        /// Upper bound on the number of results we'll re-read per tick.
+        /// At ~1 syscall per address, going much beyond this stalls the UI thread.
+        const MAX_TRACKED_RESULTS: usize = 4096;
+
         let results = self.state.searches[self.state.current_search].collect_results();
+        if results.len() > MAX_TRACKED_RESULTS {
+            // Too many candidates to poll every tick — user needs to filter further.
+            self.clear_change_tracker();
+            return;
+        }
         let pid = self.state.pid;
         let hex_display = self.hex_display;
         let counter = self.refresh_counter;
 
+        // Open the process handle once for the whole pass instead of per result.
+        let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle() else {
+            return;
+        };
+
         for result in results.iter() {
             let Some(byte_len) = result.search_type.fixed_byte_length() else { continue };
-            let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle() else { break };
             let Ok(buf) = copy_address(result.addr, byte_len, &handle) else { continue };
             let val = SearchValue(result.search_type, buf);
             let value_str = if hex_display { val.to_hex_string() } else { val.to_string() };
@@ -772,9 +803,10 @@ impl App {
             }
         }
 
-        // Prune addresses no longer in the result set.
-        self.value_change_tracker.retain(|addr, _| results.iter().any(|r| r.addr == *addr));
-        self.changed_addresses.retain(|addr, _| results.iter().any(|r| r.addr == *addr));
+        // Prune addresses no longer in the result set (O(n) via a single pass over results).
+        let live: std::collections::HashSet<usize> = results.iter().map(|r| r.addr).collect();
+        self.value_change_tracker.retain(|addr, _| live.contains(addr));
+        self.changed_addresses.retain(|addr, _| live.contains(addr));
     }
 
     pub fn theme(&self) -> Theme {

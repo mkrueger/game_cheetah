@@ -4,7 +4,7 @@ use i18n_embed_fl::fl;
 use process_memory::{TryIntoProcessHandle, copy_address};
 use serde::{Deserialize, Serialize};
 
-use crate::{FreezeMessage, GameCheetahEngine, MessageCommand, SearchContext, SearchResult, SearchType, SearchValue};
+use crate::{GameCheetahEngine, SearchContext, SearchResult, SearchType};
 
 #[derive(Serialize, Deserialize)]
 pub struct CheatTable {
@@ -106,29 +106,43 @@ pub fn save_cheat_table(engine: &GameCheetahEngine, path: &Path) -> Result<(), S
     Ok(())
 }
 
-pub fn load_cheat_table(path: &Path, freeze_sender: &crossbeam_channel::Sender<FreezeMessage>) -> Result<Vec<Box<SearchContext>>, String> {
+/// Load a cheat table from disk.
+///
+/// Safety notes:
+/// - The table's `process_name` must match `expected_process_name`. Loading
+///   addresses from a different process would write to unrelated memory.
+/// - Saved freeze state is intentionally **not** auto-activated. Users must
+///   re-enable freezing explicitly after loading. This prevents a load action
+///   from silently starting to write into the target process.
+pub fn load_cheat_table(path: &Path, expected_process_name: &str) -> Result<Vec<Box<SearchContext>>, String> {
     let toml_str = std::fs::read_to_string(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
 
     let table: CheatTable = toml::from_str(&toml_str).map_err(|e| format!("Parse error: {e}"))?;
 
+    if table.version != 1 {
+        return Err(format!("Unsupported cheat table version {} (expected 1)", table.version));
+    }
+
+    if !expected_process_name.is_empty() && table.process_name != expected_process_name {
+        return Err(format!(
+            "Cheat table was saved for process '{}', but the attached process is '{}'. Refusing to load.",
+            table.process_name, expected_process_name
+        ));
+    }
+
     let mut searches: Vec<Box<SearchContext>> = Vec::new();
 
     for saved in table.searches {
-        let mut ctx = Box::new(SearchContext::new(saved.description));
-        let mut results = Vec::new();
+        let ctx = Box::new(SearchContext::new(saved.description));
+        let mut results = Vec::with_capacity(saved.entries.len());
 
         for entry in &saved.entries {
             let addr = parse_hex_address(&entry.address)?;
             results.push(SearchResult::new(addr, entry.search_type));
-
-            if entry.frozen && !entry.frozen_value.is_empty() {
-                ctx.freezed_addresses.insert(addr);
-                let _ = freeze_sender.send(FreezeMessage {
-                    msg: MessageCommand::Freeze,
-                    addr,
-                    value: SearchValue(entry.search_type, entry.frozen_value.clone()),
-                });
-            }
+            // Note: entry.frozen / entry.frozen_value are deliberately ignored here.
+            // Auto-activating freezes on load would silently write to process memory
+            // before the user has a chance to confirm. The saved values remain in the
+            // file for future use; users can re-enable freezing manually.
         }
 
         ctx.set_cached_results(results);
