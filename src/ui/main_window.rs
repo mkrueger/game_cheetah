@@ -6,7 +6,12 @@ use icy_ui::{
 
 use crate::{app::App, message::Message};
 
-const MAIN_MENU_BUTTON_WIDTH: f32 = 280.0;
+const MAIN_MENU_BUTTON_WIDTH: f32 = 220.0;
+
+/// Wraps button label text so it expands and centers within a fixed-width button.
+fn menu_label<'a>(label: String, size: u32) -> icy_ui::widget::Text<'a> {
+    text(label).size(size).width(Length::Fill).align_x(alignment::Alignment::Center)
+}
 
 pub fn view_main_window(_app: &App) -> Element<'_, Message> {
     container(
@@ -27,9 +32,9 @@ pub fn view_main_window(_app: &App) -> Element<'_, Message> {
             .width(Length::Fill)
             .padding([8, 20]),
             column![
-                button(text(fl!(crate::LANGUAGE_LOADER, "attach-button")).size(24))
+                button(menu_label(fl!(crate::LANGUAGE_LOADER, "attach-button"), 22))
                     .on_press(Message::Attach)
-                    .padding([12, 20])
+                    .padding([10, 16])
                     .width(Length::Fixed(MAIN_MENU_BUTTON_WIDTH))
                     .style(|theme: &icy_ui::Theme, status: icy_ui::widget::button::Status| {
                         use icy_ui::widget::button::Status;
@@ -46,28 +51,28 @@ pub fn view_main_window(_app: &App) -> Element<'_, Message> {
                             ..Default::default()
                         }
                     }),
-                button(text(fl!(crate::LANGUAGE_LOADER, "settings-button")))
+                button(menu_label(fl!(crate::LANGUAGE_LOADER, "settings-button"), 16))
                     .on_press(Message::Settings)
-                    .padding(10)
+                    .padding(8)
                     .width(Length::Fixed(MAIN_MENU_BUTTON_WIDTH)),
-                button(text(fl!(crate::LANGUAGE_LOADER, "about-button")))
+                button(menu_label(fl!(crate::LANGUAGE_LOADER, "about-button"), 16))
                     .on_press(Message::About)
-                    .padding(10)
+                    .padding(8)
                     .width(Length::Fixed(MAIN_MENU_BUTTON_WIDTH)),
-                button(text(fl!(crate::LANGUAGE_LOADER, "discuss-button")))
+                button(menu_label(fl!(crate::LANGUAGE_LOADER, "discuss-button"), 16))
                     .on_press(Message::Discuss)
-                    .padding(10)
+                    .padding(8)
                     .width(Length::Fixed(MAIN_MENU_BUTTON_WIDTH)),
-                button(text(fl!(crate::LANGUAGE_LOADER, "bug-button")))
+                button(menu_label(fl!(crate::LANGUAGE_LOADER, "bug-button"), 16))
                     .on_press(Message::ReportBug)
-                    .padding(10)
+                    .padding(8)
                     .width(Length::Fixed(MAIN_MENU_BUTTON_WIDTH)),
-                button(text(fl!(crate::LANGUAGE_LOADER, "quit-button")))
+                button(menu_label(fl!(crate::LANGUAGE_LOADER, "quit-button"), 16))
                     .on_press(Message::Exit)
-                    .padding(10)
+                    .padding(8)
                     .width(Length::Fixed(MAIN_MENU_BUTTON_WIDTH))
             ]
-            .spacing(10)
+            .spacing(8)
             .align_x(alignment::Alignment::Center),
             column![
                 text(format!("v{}", crate::VERSION))
