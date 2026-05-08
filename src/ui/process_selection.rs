@@ -102,7 +102,7 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
     let total = app.state.processes.len();
     let shown = filtered_processes.len();
 
-    // Search bar
+    // Search bar (no extra outer border — text_input draws its own)
     let mut search_row = row![
         container(text("🔍").size(16)).padding([0, 4]).align_y(alignment::Alignment::Center),
         text_input(&fl!(crate::LANGUAGE_LOADER, "filter-processes-hint"), &app.state.process_filter)
@@ -111,7 +111,7 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
             .size(14)
             .width(Length::Fill),
     ]
-    .spacing(4)
+    .spacing(6)
     .align_y(alignment::Alignment::Center);
     if !app.state.process_filter.is_empty() {
         search_row = search_row.push(
@@ -127,15 +127,7 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
         );
     }
 
-    let search_bar = container(search_row).padding(2).style(|theme: &icy_ui::Theme| container::Style {
-        background: Some(theme.background.base.into()),
-        border: icy_ui::Border {
-            radius: 6.0.into(),
-            width: 1.0,
-            color: theme.primary.divider,
-        },
-        ..Default::default()
-    });
+    let search_bar = container(search_row);
 
     // Header
     let header = container(
@@ -199,32 +191,47 @@ pub fn view_process_selection(app: &App) -> Element<'_, Message> {
             let bb = gabi::BytesConfig::default();
             let memory = bb.bytes(process.memory as u64).to_string();
             let zebra = idx % 2 == 1;
+            use icy_ui::widget::text::Wrapping;
             container(
                 button(
                     row![
-                        container(text(process.pid.to_string()).size(13).font(icy_ui::Font::MONOSPACE))
+                        container(text(process.pid.to_string()).size(13).font(icy_ui::Font::MONOSPACE).wrapping(Wrapping::None))
                             .width(Length::Fixed(COL_PID))
                             .padding([4, 8])
                             .align_x(alignment::Alignment::End)
-                            .align_y(alignment::Alignment::Center),
-                        container(text(process.name.clone()).size(13).font(icy_ui::Font {
-                            weight: icy_ui::font::Weight::Semibold,
-                            ..icy_ui::Font::default()
-                        }))
+                            .align_y(alignment::Alignment::Center)
+                            .clip(true),
+                        container(
+                            text(process.name.clone())
+                                .size(13)
+                                .font(icy_ui::Font {
+                                    weight: icy_ui::font::Weight::Semibold,
+                                    ..icy_ui::Font::default()
+                                })
+                                .wrapping(Wrapping::None)
+                        )
                         .width(Length::Fixed(COL_NAME))
                         .padding([4, 8])
-                        .align_y(alignment::Alignment::Center),
-                        container(text(memory).size(13).font(icy_ui::Font::MONOSPACE))
+                        .align_y(alignment::Alignment::Center)
+                        .clip(true),
+                        container(text(memory).size(13).font(icy_ui::Font::MONOSPACE).wrapping(Wrapping::None))
                             .width(Length::Fixed(COL_MEM))
                             .padding([4, 8])
                             .align_x(alignment::Alignment::End)
-                            .align_y(alignment::Alignment::Center),
-                        container(text(process.cmd.clone()).size(12).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                            color: Some(theme.background.on.scale_alpha(0.7)),
-                        }))
+                            .align_y(alignment::Alignment::Center)
+                            .clip(true),
+                        container(
+                            text(process.cmd.clone())
+                                .size(12)
+                                .wrapping(Wrapping::None)
+                                .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                                    color: Some(theme.background.on.scale_alpha(0.7)),
+                                })
+                        )
                         .width(Length::Fill)
                         .padding([4, 8])
-                        .align_y(alignment::Alignment::Center),
+                        .align_y(alignment::Alignment::Center)
+                        .clip(true),
                     ]
                     .height(Length::Fixed(ROW_HEIGHT)),
                 )
