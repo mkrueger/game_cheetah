@@ -502,16 +502,10 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                 } else if is_changed {
                                     container(inner_row)
                                         .width(Length::Fill)
-                                        .style(|_theme: &icy_ui::Theme| container::Style {
-                                            background: Some(
-                                                icy_ui::Color {
-                                                    r: 0.95,
-                                                    g: 0.75,
-                                                    b: 0.1,
-                                                    a: 0.18,
-                                                }
-                                                .into(),
-                                            ),
+                                        .style(|theme: &icy_ui::Theme| container::Style {
+                                            // Match the memory editor's "changed bytes" highlight
+                                            // so changed-value cues are consistent across views.
+                                            background: Some(theme.destructive.base.scale_alpha(0.18).into()),
                                             ..Default::default()
                                         })
                                         .into()
