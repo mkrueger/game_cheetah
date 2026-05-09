@@ -350,13 +350,19 @@ impl App {
                 }
 
                 if current_search_context.search_complete.load(Ordering::SeqCst) {
-                    // Collect any final results before marking as complete
-                    let final_results = current_search_context.collect_results();
-
-                    // If we have results but they're not in the channel anymore, put them back
-                    if current_search_context.get_result_count() > 0 && final_results.is_empty() {
-                        // The results were already collected, so we need to ensure they stay available
-                        current_search_context.invalidate_cache();
+                    // Drain the channel until it's empty so we don't keep
+                    // re-sorting the cache (and visibly shifting addresses)
+                    // for the next few ticks while the last few worker
+                    // batches trickle in. Workers may have queued up to
+                    // RESULTS_CHANNEL_CAPACITY batches that were not yet
+                    // consumed when `search_complete` flipped.
+                    loop {
+                        let before = current_search_context.get_result_count();
+                        let _ = current_search_context.collect_results();
+                        let after = current_search_context.get_result_count();
+                        if before == after {
+                            break;
+                        }
                     }
 
                     current_search_context.searching = SearchMode::None;

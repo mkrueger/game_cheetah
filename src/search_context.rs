@@ -132,7 +132,14 @@ impl SearchContext {
         self.invalidate_cache();
     }
 
-    pub fn set_cached_results(&self, results: Vec<SearchResult>) {
+    pub fn set_cached_results(&self, mut results: Vec<SearchResult>) {
+        // Keep displayed results sorted by address (then by type for Guess
+        // hits that produce multiple typed entries at the same address) so
+        // the visible list doesn't shuffle when parallel workers stream
+        // batches in. Dedup exact duplicates that any double-emission in the
+        // streaming path could have produced.
+        results.sort_by_key(|r| (r.addr, r.search_type as u8));
+        results.dedup_by_key(|r| (r.addr, r.search_type as u8));
         // Wrap in Arc for cheap future clones
         let arc_results = Arc::new(results);
 
@@ -172,6 +179,15 @@ impl SearchContext {
         } // Read lock definitely dropped here
 
         all_results.extend(new_results);
+
+        // Keep results sorted by address so the displayed list is stable as
+        // parallel workers stream more hits in. Without this, the order
+        // depends on worker completion order and rows visibly shuffle when
+        // a refresh tick or filter pass merges fresh batches in. Sort by
+        // (addr, search_type as u8) so Guess hits that produce multiple
+        // typed entries at the same address keep a deterministic order.
+        all_results.sort_by_key(|r| (r.addr, r.search_type as u8));
+        all_results.dedup_by_key(|r| (r.addr, r.search_type as u8));
 
         // Wrap in Arc for cheap future clones
         let arc_results = Arc::new(all_results);
