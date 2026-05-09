@@ -334,9 +334,8 @@ impl MemoryEditor {
                 let mut row_bytes = [0u8; BYTES_PER_ROW];
                 row_bytes[..available].copy_from_slice(&buf[row_offset..row_offset + available]);
 
-                for col_idx in 0..available {
+                for (col_idx, &new_byte) in row_bytes.iter().enumerate().take(available) {
                     let cell_addr = row_addr.saturating_add(col_idx);
-                    let new_byte = row_bytes[col_idx];
                     match tracker.get(&cell_addr).copied() {
                         Some((prev_byte, _)) => {
                             if prev_byte != new_byte {
@@ -1044,13 +1043,13 @@ impl MemoryEditor {
                     {
                         let tracker_borrow = tracker.borrow();
                         let now = Instant::now();
-                        for col_idx in 0..bytes_in_region {
+                        for (col_idx, alpha) in change_alphas.iter_mut().enumerate().take(bytes_in_region) {
                             let cell_addr = row_addr.saturating_add(col_idx);
                             if let Some((_, Some(last_change))) = tracker_borrow.get(&cell_addr).copied() {
                                 let elapsed = now.saturating_duration_since(last_change);
                                 if elapsed < CHANGE_FADE {
                                     let frac = elapsed.as_secs_f32() / CHANGE_FADE.as_secs_f32();
-                                    change_alphas[col_idx] = 0.55 * (1.0 - frac);
+                                    *alpha = 0.55 * (1.0 - frac);
                                 }
                             }
                         }
