@@ -26,6 +26,7 @@ Patch release focused on memory editor responsiveness and per-result data type e
 
 - Memory editor keyboard handling: arrow keys, page up/down, hex digits, Enter, Escape, and `Ctrl/Cmd+Z`/`Shift+Ctrl/Cmd+Z` now reliably reach the grid via the focusable area instead of being filtered by the global keyboard subscription.
 - Default focus ring no longer appears as a tiny circle in the corner; the grid now draws a proper border around the scrollable area when focused.
+- Escape key now reliably dismisses the About, Settings, and process picker dialogs even when a focused widget (e.g. the process filter input) had captured the event.
 
 ## [0.6.1] - 2026-05-08
 
