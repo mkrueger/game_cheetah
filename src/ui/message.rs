@@ -68,6 +68,7 @@ pub enum Message {
 
     FocusNext,
     FocusPrevious,
+    DismissDialog,
 
     SaveCheatTable,
     LoadCheatTable,

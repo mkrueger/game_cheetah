@@ -163,6 +163,12 @@ impl App {
                 self.state = GameCheetahEngine::default();
                 Task::none()
             }
+            Message::DismissDialog => {
+                if matches!(self.app_state, AppState::ProcessSelection | AppState::About | AppState::Settings) {
+                    self.app_state = AppState::MainWindow;
+                }
+                Task::none()
+            }
             Message::About => {
                 self.app_state = AppState::About;
                 Task::none()
@@ -1224,6 +1230,23 @@ impl App {
                 }
             })
         };
-        icy_ui::Subscription::batch([live_results_tick, process_list_tick, memory_editor_fade_tick, keyboard_sub])
+        // Escape on dismissable dialogs (process picker, About, Settings)
+        // needs to fire regardless of whether some focused widget already
+        // marked the event as captured, so use `event::listen_with` instead
+        // of `keyboard::listen()` (which only sees Status::Ignored events).
+        // The handler must be a non-capturing `fn`, so the AppState filter
+        // happens in `update` (`Message::DismissDialog`).
+        let dismiss_sub = if matches!(self.app_state, AppState::ProcessSelection | AppState::About | AppState::Settings) {
+            icy_ui::event::listen_with(|event, _status, _window| match event {
+                icy_ui::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::DismissDialog),
+                _ => None,
+            })
+        } else {
+            icy_ui::Subscription::none()
+        };
+        icy_ui::Subscription::batch([live_results_tick, process_list_tick, memory_editor_fade_tick, dismiss_sub, keyboard_sub])
     }
 }

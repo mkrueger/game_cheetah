@@ -1422,7 +1422,7 @@ checksum = "9e743af71c7d812c9011a316a641b54d945555f5a933084e965e6e7253635e9d"
 
 [[package]]
 name = "game-cheetah"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "bytemuck",
  "criterion",
