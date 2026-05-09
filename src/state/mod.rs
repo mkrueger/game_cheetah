@@ -394,6 +394,31 @@ impl GameCheetahEngine {
         search_context.results_receiver = rx;
         search_context.invalidate_cache();
 
+        // For small refinement passes, do the update immediately on the UI
+        // thread. Spawning a worker thread + rayon task for a handful of
+        // addresses costs noticeably more than the actual memory reads and
+        // leaves the UI sitting on "Aktualisiere N/N" until the next tick.
+        const INLINE_UPDATE_LIMIT: usize = 1024;
+        if old_results.len() <= INLINE_UPDATE_LIMIT {
+            match (self.pid as process_memory::Pid).try_into_process_handle() {
+                Ok(handle) => {
+                    let updated = update_results(&old_results, &search_context.search_value_text, &handle);
+                    search_context.set_cached_results(updated);
+                    search_context.current_bytes.store(old_results.len(), Ordering::SeqCst);
+                    search_context.search_complete.store(true, Ordering::SeqCst);
+                    search_context.searching = SearchMode::None;
+                }
+                Err(err) => {
+                    search_context.search_complete.store(true, Ordering::SeqCst);
+                    search_context.searching = SearchMode::None;
+                    self.push_error(AppError::Generic {
+                        message: format!("Failed to open process {}: {err}", self.pid),
+                    });
+                }
+            }
+            return;
+        }
+
         let max_block = 200 * 1024;
         let chunks: Vec<(usize, usize)> = (0..old_results.len())
             .step_by(max_block)

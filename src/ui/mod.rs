@@ -1,4 +1,5 @@
 pub mod app;
+pub mod focusable_area;
 pub mod message;
 
 pub mod in_process_view;

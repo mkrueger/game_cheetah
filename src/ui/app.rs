@@ -61,6 +61,7 @@ pub struct App {
     pub refresh_counter: u64,
 
     memory_editor: super::memory_editor::MemoryEditor,
+    memory_editor_result_index: Option<usize>,
 
     pub process_sort_column: ProcessSortColumn,
     pub process_sort_direction: SortDirection,
@@ -298,10 +299,11 @@ impl App {
             }
 
             Message::SwitchSearchType(search_type) => {
-                self.state.remove_freezes(self.state.current_search);
+                // The picker is only visible while no search has been started
+                // yet (see `show_type_picker` in `in_process_view`), so this
+                // never has to worry about preserving an existing result set.
                 if let Some(current_search) = self.state.searches.get_mut(self.state.current_search) {
                     current_search.search_type = search_type;
-                    current_search.clear_results(&self.state.freeze_sender);
                 }
                 Task::none()
             }
@@ -618,7 +620,12 @@ impl App {
                         match self.memory_editor.initialize(self.state.pid, result.addr, result.search_type) {
                             Ok(()) => {
                                 self.app_state = AppState::MemoryEditor;
-                                return Task::batch([self.memory_editor.snap_to_cursor(), Task::done(Message::MemoryEditorTick)]);
+                                self.memory_editor_result_index = Some(index);
+                                return Task::batch([
+                                    self.memory_editor.snap_to_cursor(),
+                                    self.memory_editor.focus_grid(),
+                                    Task::done(Message::MemoryEditorTick),
+                                ]);
                             }
                             Err(err) => self.state.push_error(AppError::memory_editor(err)),
                         }
@@ -628,42 +635,10 @@ impl App {
             }
             Message::CloseMemoryEditor => {
                 self.app_state = AppState::InProcess;
+                self.memory_editor_result_index = None;
                 self.memory_editor.reset_change_tracker();
                 Task::none()
             }
-            Message::MemoryEditorAddressChanged(text) => {
-                self.memory_editor.address_text = text;
-                Task::none()
-            }
-
-            Message::MemoryEditorJumpToAddress => {
-                // Parse the address from the text input
-                let raw = self.memory_editor.address_text.trim();
-                let stripped = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")).unwrap_or(raw);
-                match u64::from_str_radix(stripped, 16) {
-                    Ok(new_address) => {
-                        match self
-                            .memory_editor
-                            .refresh_regions(self.state.pid)
-                            .and_then(|()| self.memory_editor.focus_on(new_address as usize))
-                        {
-                            Ok(()) => {
-                                self.state.clear_errors();
-                                return self.memory_editor.snap_to_cursor();
-                            }
-                            Err(err) => self.state.push_error(AppError::memory_editor(err)),
-                        }
-                    }
-                    Err(err) => {
-                        self.state.push_error(AppError::InvalidAddress {
-                            raw: raw.to_owned(),
-                            source: err.to_string(),
-                        });
-                    }
-                }
-                Task::none()
-            }
-
             Message::MemoryEditorCellChanged(offset, value) => {
                 // Validate and update the byte at the given offset
                 if value.len() <= 2
@@ -681,6 +656,9 @@ impl App {
             }
 
             Message::MemoryEditorScroll(rows) => {
+                if !self.memory_editor.is_grid_focused() {
+                    return Task::none();
+                }
                 let offset = icy_ui::widget::operation::AbsoluteOffset {
                     x: 0.0,
                     y: rows as f32 * super::memory_editor::ROW_HEIGHT,
@@ -689,16 +667,25 @@ impl App {
             }
 
             Message::MemoryEditorPageUp => {
+                if !self.memory_editor.is_grid_focused() {
+                    return Task::none();
+                }
                 self.memory_editor.move_cursor(-(super::memory_editor::PAGE_ROWS as i32), 0);
                 self.memory_editor.ensure_cursor_visible()
             }
 
             Message::MemoryEditorPageDown => {
+                if !self.memory_editor.is_grid_focused() {
+                    return Task::none();
+                }
                 self.memory_editor.move_cursor(super::memory_editor::PAGE_ROWS as i32, 0);
                 self.memory_editor.ensure_cursor_visible()
             }
 
             Message::MemoryEditorMoveCursor(row_delta, col_delta) => {
+                if !self.memory_editor.is_grid_focused() {
+                    return Task::none();
+                }
                 let row_changed = self.memory_editor.move_cursor(row_delta, col_delta);
                 if row_changed {
                     self.memory_editor.ensure_cursor_visible()
@@ -709,11 +696,106 @@ impl App {
 
             Message::MemoryEditorSetCursor(row, col) => {
                 self.memory_editor.set_cursor(row, col);
-                self.memory_editor.ensure_cursor_visible()
+                Task::batch([self.memory_editor.ensure_cursor_visible(), self.memory_editor.focus_grid()])
             }
-            Message::MemoryEditorBeginEdit => Task::none(),
-            Message::MemoryEditorEndEdit => Task::none(),
+            Message::MemoryEditorBeginEdit => self.memory_editor.focus_grid(),
+            Message::MemoryEditorEndEdit => {
+                self.memory_editor.set_grid_focused(false);
+                Task::none()
+            }
+            Message::MemoryEditorKeyPressed(key, modifiers) => {
+                if modifiers.command()
+                    && let keyboard::Key::Character(c) = &key
+                    && matches!(c.as_str(), "z" | "Z")
+                {
+                    return if modifiers.shift() {
+                        Task::done(Message::MemoryEditorRedo)
+                    } else {
+                        Task::done(Message::MemoryEditorUndo)
+                    };
+                }
+
+                match key {
+                    keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                        self.app_state = AppState::InProcess;
+                        self.memory_editor_result_index = None;
+                        self.memory_editor.reset_change_tracker();
+                        Task::none()
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::Enter) => self.memory_editor.focus_grid(),
+                    keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                        let row_changed = self.memory_editor.move_cursor(-1, 0);
+                        if row_changed {
+                            Task::batch([self.memory_editor.ensure_cursor_visible(), self.memory_editor.focus_grid()])
+                        } else {
+                            self.memory_editor.focus_grid()
+                        }
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                        let row_changed = self.memory_editor.move_cursor(1, 0);
+                        if row_changed {
+                            Task::batch([self.memory_editor.ensure_cursor_visible(), self.memory_editor.focus_grid()])
+                        } else {
+                            self.memory_editor.focus_grid()
+                        }
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+                        self.memory_editor.move_cursor(0, -1);
+                        self.memory_editor.focus_grid()
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::ArrowRight) | keyboard::Key::Named(keyboard::key::Named::Tab) => {
+                        self.memory_editor.move_cursor(0, 1);
+                        self.memory_editor.focus_grid()
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::PageUp) => {
+                        self.memory_editor.move_cursor(-(super::memory_editor::PAGE_ROWS as i32), 0);
+                        Task::batch([self.memory_editor.ensure_cursor_visible(), self.memory_editor.focus_grid()])
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::PageDown) => {
+                        self.memory_editor.move_cursor(super::memory_editor::PAGE_ROWS as i32, 0);
+                        Task::batch([self.memory_editor.ensure_cursor_visible(), self.memory_editor.focus_grid()])
+                    }
+                    keyboard::Key::Character(c) => {
+                        let hex_digit = match c.as_str() {
+                            "0" => Some(0),
+                            "1" => Some(1),
+                            "2" => Some(2),
+                            "3" => Some(3),
+                            "4" => Some(4),
+                            "5" => Some(5),
+                            "6" => Some(6),
+                            "7" => Some(7),
+                            "8" => Some(8),
+                            "9" => Some(9),
+                            "a" | "A" => Some(10),
+                            "b" | "B" => Some(11),
+                            "c" | "C" => Some(12),
+                            "d" | "D" => Some(13),
+                            "e" | "E" => Some(14),
+                            "f" | "F" => Some(15),
+                            _ => None,
+                        };
+                        if let Some(hex_digit) = hex_digit {
+                            let cursor_row_before = self.memory_editor.cursor_row();
+                            if let Err(err) = self.memory_editor.edit_hex(self.state.pid, hex_digit) {
+                                self.state.push_error(AppError::memory_editor(err));
+                            }
+                            if self.memory_editor.cursor_row() != cursor_row_before {
+                                Task::batch([self.memory_editor.ensure_cursor_visible(), self.memory_editor.focus_grid()])
+                            } else {
+                                self.memory_editor.focus_grid()
+                            }
+                        } else {
+                            Task::none()
+                        }
+                    }
+                    _ => Task::none(),
+                }
+            }
             Message::MemoryEditorEditHex(hex_digit) => {
+                if !self.memory_editor.is_grid_focused() {
+                    return Task::none();
+                }
                 let cursor_row_before = self.memory_editor.cursor_row();
                 if let Err(err) = self.memory_editor.edit_hex(self.state.pid, hex_digit) {
                     self.state.push_error(AppError::memory_editor(err));
@@ -726,21 +808,43 @@ impl App {
             }
             Message::MemoryEditorInspectorValueChanged(kind, value) => {
                 self.memory_editor.set_inspector_value_text(kind, value);
+                self.memory_editor.set_grid_focused(false);
                 Task::none()
             }
             Message::MemoryEditorInspectorValueSubmit(kind) => {
                 match self.memory_editor.submit_inspector_value(self.state.pid, kind) {
-                    Ok(()) => self.state.clear_errors(),
+                    Ok(()) => {
+                        self.state.clear_errors();
+                        return self.memory_editor.focus_grid();
+                    }
                     Err(err) => self.state.push_error(AppError::memory_editor(err)),
                 }
                 Task::none()
             }
+            Message::MemoryEditorDataTypeChanged(search_type) => {
+                self.memory_editor.set_data_type(search_type);
+
+                if let Some(index) = self.memory_editor_result_index
+                    && let Some(current_search) = self.state.searches.get_mut(self.state.current_search)
+                {
+                    let results = current_search.collect_results();
+                    let mut updated_results = (*results).clone();
+                    if let Some(result) = updated_results.get_mut(index) {
+                        result.search_type = search_type;
+                        current_search.set_cached_results(updated_results);
+                        self.refresh_counter = self.refresh_counter.wrapping_add(1);
+                    }
+                }
+
+                self.memory_editor.focus_grid()
+            }
             Message::MemoryEditorScrolled(viewport) => {
-                self.memory_editor.set_viewport(viewport);
-                Task::none()
+                self.memory_editor.set_viewport_and_refresh(viewport, self.state.pid as process_memory::Pid);
+                self.memory_editor.focus_grid()
             }
             Message::MemoryEditorTick => {
                 if matches!(self.app_state, AppState::MemoryEditor) {
+                    self.memory_editor.tick(self.state.pid as process_memory::Pid);
                     icy_ui::Task::perform(
                         async {
                             sleep(super::memory_editor::TICK_INTERVAL);
@@ -751,13 +855,27 @@ impl App {
                     Task::none()
                 }
             }
+            Message::MemoryEditorFadeTick => {
+                if matches!(self.app_state, AppState::MemoryEditor) {
+                    self.memory_editor.tick_fade_animation();
+                }
+                Task::none()
+            }
             Message::MemoryEditorUndo => {
+                if !self.memory_editor.is_grid_focused() {
+                    return Task::none();
+                }
                 match self.memory_editor.undo(self.state.pid) {
                     Ok(Some(address)) => {
                         self.state.clear_errors();
                         if self.memory_editor.focus_on(address).is_ok() {
-                            return self.memory_editor.ensure_cursor_visible();
+                            return Task::batch([
+                                self.memory_editor.ensure_cursor_visible(),
+                                self.memory_editor.focus_grid(),
+                                Task::done(Message::MemoryEditorFadeTick),
+                            ]);
                         }
+                        return Task::done(Message::MemoryEditorFadeTick);
                     }
                     Ok(None) => {}
                     Err(err) => self.state.push_error(AppError::memory_editor(err)),
@@ -765,12 +883,20 @@ impl App {
                 Task::none()
             }
             Message::MemoryEditorRedo => {
+                if !self.memory_editor.is_grid_focused() {
+                    return Task::none();
+                }
                 match self.memory_editor.redo(self.state.pid) {
                     Ok(Some(address)) => {
                         self.state.clear_errors();
                         if self.memory_editor.focus_on(address).is_ok() {
-                            return self.memory_editor.ensure_cursor_visible();
+                            return Task::batch([
+                                self.memory_editor.ensure_cursor_visible(),
+                                self.memory_editor.focus_grid(),
+                                Task::done(Message::MemoryEditorFadeTick),
+                            ]);
                         }
+                        return Task::done(Message::MemoryEditorFadeTick);
                     }
                     Ok(None) => {}
                     Err(err) => self.state.push_error(AppError::memory_editor(err)),
@@ -1048,56 +1174,18 @@ impl App {
             icy_ui::Subscription::none()
         };
 
+        // Fade highlights are time-based (`Instant::now()` in the view), so
+        // they need redraws even when the memory bytes themselves are not
+        // changing. This drives only the animation; it does not re-read target
+        // process memory.
+        let memory_editor_fade_tick = if matches!(self.app_state, AppState::MemoryEditor) && self.memory_editor.has_active_fades() {
+            icy_ui::time::every(Duration::from_millis(16)).map(|_| Message::MemoryEditorFadeTick)
+        } else {
+            icy_ui::Subscription::none()
+        };
+
         let keyboard_sub: icy_ui::Subscription<Message> = if matches!(self.app_state, AppState::MemoryEditor) {
-            keyboard::listen().filter_map(|event| {
-                let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
-                    return None;
-                };
-                // Ctrl/Cmd + Z / Shift+Ctrl/Cmd + Z drive undo / redo. Match
-                // these before plain character handling so a `Z` keystroke
-                // with the modifier doesn't fall through to the hex editor.
-                if modifiers.command()
-                    && let keyboard::Key::Character(c) = &key
-                    && matches!(c.as_str(), "z" | "Z")
-                {
-                    return if modifiers.shift() {
-                        Some(Message::MemoryEditorRedo)
-                    } else {
-                        Some(Message::MemoryEditorUndo)
-                    };
-                }
-                match key {
-                    keyboard::Key::Named(keyboard::key::Named::ArrowUp) => Some(Message::MemoryEditorMoveCursor(-1, 0)),
-                    keyboard::Key::Named(keyboard::key::Named::ArrowDown) => Some(Message::MemoryEditorMoveCursor(1, 0)),
-                    keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => Some(Message::MemoryEditorMoveCursor(0, -1)),
-                    keyboard::Key::Named(keyboard::key::Named::ArrowRight) => Some(Message::MemoryEditorMoveCursor(0, 1)),
-                    keyboard::Key::Named(keyboard::key::Named::PageUp) => Some(Message::MemoryEditorPageUp),
-                    keyboard::Key::Named(keyboard::key::Named::PageDown) => Some(Message::MemoryEditorPageDown),
-                    keyboard::Key::Named(keyboard::key::Named::Tab) => Some(Message::MemoryEditorMoveCursor(0, 1)),
-                    keyboard::Key::Named(keyboard::key::Named::Enter) => Some(Message::MemoryEditorBeginEdit),
-                    keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::CloseMemoryEditor),
-                    keyboard::Key::Character(c) => match c.as_str() {
-                        "0" => Some(Message::MemoryEditorEditHex(0)),
-                        "1" => Some(Message::MemoryEditorEditHex(1)),
-                        "2" => Some(Message::MemoryEditorEditHex(2)),
-                        "3" => Some(Message::MemoryEditorEditHex(3)),
-                        "4" => Some(Message::MemoryEditorEditHex(4)),
-                        "5" => Some(Message::MemoryEditorEditHex(5)),
-                        "6" => Some(Message::MemoryEditorEditHex(6)),
-                        "7" => Some(Message::MemoryEditorEditHex(7)),
-                        "8" => Some(Message::MemoryEditorEditHex(8)),
-                        "9" => Some(Message::MemoryEditorEditHex(9)),
-                        "a" | "A" => Some(Message::MemoryEditorEditHex(10)),
-                        "b" | "B" => Some(Message::MemoryEditorEditHex(11)),
-                        "c" | "C" => Some(Message::MemoryEditorEditHex(12)),
-                        "d" | "D" => Some(Message::MemoryEditorEditHex(13)),
-                        "e" | "E" => Some(Message::MemoryEditorEditHex(14)),
-                        "f" | "F" => Some(Message::MemoryEditorEditHex(15)),
-                        _ => None,
-                    },
-                    _ => None,
-                }
-            })
+            icy_ui::Subscription::none()
         } else if self.renaming_search_index.is_some() {
             // Only subscribe to ESC when renaming
             keyboard::listen().filter_map(|event| {
@@ -1136,6 +1224,6 @@ impl App {
                 }
             })
         };
-        icy_ui::Subscription::batch([live_results_tick, process_list_tick, keyboard_sub])
+        icy_ui::Subscription::batch([live_results_tick, process_list_tick, memory_editor_fade_tick, keyboard_sub])
     }
 }

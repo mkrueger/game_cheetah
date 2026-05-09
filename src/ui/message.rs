@@ -41,8 +41,6 @@ pub enum Message {
     OpenEditor(usize),
     RemoveResult(usize),
     CloseMemoryEditor,
-    MemoryEditorAddressChanged(String),
-    MemoryEditorJumpToAddress,
     MemoryEditorCellChanged(usize, String), // offset, new hex value
     MemoryEditorScroll(i32),                // scroll by n rows (positive = down, negative = up)
     MemoryEditorScrolled(icy_ui::widget::scrollable::Viewport),
@@ -51,11 +49,14 @@ pub enum Message {
     MemoryEditorMoveCursor(i32, i32), // (row_delta, col_delta)
     MemoryEditorSetCursor(usize, usize),
     MemoryEditorEditHex(u8), // hex digit input
+    MemoryEditorKeyPressed(icy_ui::keyboard::Key, icy_ui::keyboard::Modifiers),
     MemoryEditorBeginEdit,
     MemoryEditorEndEdit,
     MemoryEditorInspectorValueChanged(InspectorValueKind, String),
     MemoryEditorInspectorValueSubmit(InspectorValueKind),
+    MemoryEditorDataTypeChanged(SearchType),
     MemoryEditorTick,
+    MemoryEditorFadeTick,
     MemoryEditorUndo,
     MemoryEditorRedo,
     SortProcesses(ProcessSortColumn),
