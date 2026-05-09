@@ -973,6 +973,16 @@ impl App {
             icy_ui::Subscription::none()
         };
 
+        // Keep the process list fresh while the user is picking a process so
+        // newly launched games appear and exited ones disappear without a
+        // manual refresh. The actual scan is throttled inside `update()` to
+        // at most once every 500 ms.
+        let process_list_tick = if matches!(self.app_state, AppState::ProcessSelection) {
+            icy_ui::time::every(Duration::from_millis(1000)).map(|_| Message::TickProcess)
+        } else {
+            icy_ui::Subscription::none()
+        };
+
         let keyboard_sub: icy_ui::Subscription<Message> = if matches!(self.app_state, AppState::MemoryEditor) {
             keyboard::listen().filter_map(|event| {
                 let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
@@ -1052,6 +1062,6 @@ impl App {
                 }
             })
         };
-        icy_ui::Subscription::batch([live_results_tick, keyboard_sub])
+        icy_ui::Subscription::batch([live_results_tick, process_list_tick, keyboard_sub])
     }
 }
