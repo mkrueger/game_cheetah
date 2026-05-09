@@ -11,8 +11,8 @@ use crate::{SearchMode, SearchType, SearchValue, app::App, message::Message};
 
 /// Uniform row height used by the virtualized result table.
 const RESULT_ROW_HEIGHT: f32 = 34.0;
-/// Number of 250 ms ticks a changed-value highlight stays visible (~1.5 s).
-const CHANGE_HIGHLIGHT_TICKS: u64 = 6;
+/// Number of 33 ms ticks a changed-value highlight stays visible (~1.5 s).
+const CHANGE_HIGHLIGHT_TICKS: u64 = 45;
 
 fn search_ui(app: &App) -> Element<'_, Message> {
     let search_types = vec![
@@ -409,7 +409,7 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
         current_search_context.search_type.hash(&mut hasher);
         (std::sync::Arc::as_ptr(&results) as usize).hash(&mut hasher);
         total_results.hash(&mut hasher);
-        if let Some((idx, buf)) = &app.editing_result {
+        if let Some((idx, buf, _)) = &app.editing_result {
             idx.hash(&mut hasher);
             buf.hash(&mut hasher);
         }
@@ -476,7 +476,7 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                         .get(&result.addr)
                                         .map(|&tick| app.refresh_counter.saturating_sub(tick) < CHANGE_HIGHLIGHT_TICKS)
                                         .unwrap_or(false);
-                                let edited_text = app.editing_result.as_ref().and_then(|(idx, buf)| (*idx == i).then_some(buf.clone()));
+                                let edited_text = app.editing_result.as_ref().and_then(|(idx, buf, _)| (*idx == i).then_some(buf.clone()));
                                 let inner_row = row![
                                     container(text(format!("0x{:X}", result.addr)).size(14)).width(Length::Fixed(120.0)),
                                     {
@@ -587,8 +587,14 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                         })
                         .collect::<Vec<Element<'_, Message>>>(),
                 )
-                .spacing(5)
-                .padding(5)
+                // Must not add spacing/padding here: `show_rows` was told the
+                // total content height is `RESULT_ROW_HEIGHT * total_rows`, so
+                // any extra per-row gap or outer padding makes the rendered
+                // column taller than the scrollable's content area, and the
+                // bottom rows visibly drift past the clip (showing as
+                // "stacked" freeze checkboxes below the last visible row).
+                .spacing(0)
+                .padding(0)
                 .into()
             })
             .cache_key(cache_key)

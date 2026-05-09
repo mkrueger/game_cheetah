@@ -23,7 +23,7 @@ use crate::{
     ui::process_selection::{ProcessSortColumn, SortDirection},
 };
 
-#[derive(Default, PartialEq, Debug, Clone, Copy)]
+#[derive(Default, PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub enum AppState {
     #[default]
     MainWindow,
@@ -42,11 +42,18 @@ pub struct App {
     pub renaming_search_index: Option<usize>,
     pub rename_search_text: String,
 
-    /// In-progress edit of a result row's value field: `(row_index, typed_text)`.
+    /// In-progress edit of a result row's value field:
+    /// `(row_index, typed_buffer, last_synced_live_value)`.
+    ///
     /// Buffering keystrokes here keeps the `text_input` from being re-bound to
     /// the freshly-read memory value on every render, which would otherwise
-    /// look like the field is losing focus mid-edit.
-    pub editing_result: Option<(usize, String)>,
+    /// look like the field is losing focus mid-edit. The third element stores
+    /// the live value the buffer was last synchronized with: as long as the
+    /// user hasn't typed since (`buffer == last_synced`), the periodic Tick
+    /// re-syncs both fields to the latest memory read so the editor keeps
+    /// reflecting external changes. Once the user types, the buffer diverges
+    /// from the snapshot and is left untouched until commit/cancel.
+    pub editing_result: Option<(usize, String, String)>,
 
     /// Counter bumped on every periodic Tick while the in-process view is
     /// shown. Folded into the result table's cache key so the virtualized row
@@ -341,6 +348,13 @@ impl App {
                         // finishes and the result set changes.
                         self.clear_change_tracker();
                     }
+                    // Pull live memory into the in-progress edit buffer
+                    // independently of `update_change_tracker` — the tracker
+                    // bails out for huge result sets and during searches, but
+                    // an open editor only needs a single address re-read.
+                    if !search_running {
+                        self.sync_editing_buffer();
+                    }
                 }
                 // If searching, keep scheduling ticks
                 let current_search_context = &mut self.state.searches[self.state.current_search];
@@ -436,7 +450,7 @@ impl App {
                 Task::none()
             }
             Message::ResultEditingBegin(index, text) => {
-                self.editing_result = Some((index, text));
+                self.editing_result = Some((index, text.clone(), text));
                 icy_ui::widget::operation::focus(icy_ui::widget::Id::from(format!("result-value-{}-{index}", self.state.current_search)))
             }
             Message::ResultEditingChanged(index, text) => {
@@ -461,11 +475,14 @@ impl App {
                         }
                     }
                 }
-                self.editing_result = Some((index, text));
+                // User typed — break the link to the live snapshot so the
+                // periodic Tick stops overwriting the buffer until commit/cancel.
+                let snapshot = self.editing_result.as_ref().map(|(_, _, s)| s.clone()).unwrap_or_default();
+                self.editing_result = Some((index, text, snapshot));
                 Task::none()
             }
             Message::ResultEditingCommit(index) => {
-                if let Some((i, text)) = self.editing_result.take()
+                if let Some((i, text, _)) = self.editing_result.take()
                     && i == index
                 {
                     return self.update(Message::ResultValueChanged(index, text));
@@ -930,6 +947,52 @@ impl App {
         self.changed_addresses.retain(|addr, _| live.contains(addr));
     }
 
+    /// While a row is being edited, refresh the buffered text from the live
+    /// memory value as long as the user hasn't typed since the last sync.
+    /// Without this the input keeps showing the value that was current when
+    /// editing began, even after the game has changed memory many times.
+    ///
+    /// Reads memory directly instead of going through `value_change_tracker`
+    /// so the editor stays current even when the tracker is skipped (large
+    /// result sets, in-flight searches, briefly stale `is_process_running`
+    /// throttle window).
+    fn sync_editing_buffer(&mut self) {
+        let Some((idx, buffer, snapshot)) = self.editing_result.as_mut() else {
+            return;
+        };
+        let Some(search_context) = self.state.searches.get(self.state.current_search) else {
+            return;
+        };
+        let results = search_context.collect_results();
+        let Some(result) = results.get(*idx) else { return };
+        let Some(byte_len) = result.search_type.fixed_byte_length() else {
+            return;
+        };
+        let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle() else {
+            return;
+        };
+        let Ok(buf) = copy_address(result.addr, byte_len, &handle) else {
+            return;
+        };
+        let val = SearchValue(result.search_type, buf);
+        let live = if self.hex_display { val.to_hex_string() } else { val.to_string() };
+
+        if buffer == snapshot {
+            // User has not typed since the last sync — adopt the new live
+            // value (even if equal to the snapshot, the assignment is a
+            // no-op so the early-out is just an optimization).
+            if *buffer != live {
+                *buffer = live.clone();
+            }
+            *snapshot = live;
+        } else {
+            // User typed; just keep the snapshot up to date so the next
+            // time the typed buffer happens to coincide with live again,
+            // sync resumes (e.g., after they erase their edit).
+            *snapshot = live;
+        }
+    }
+
     pub fn theme(&self) -> Theme {
         Theme::dark().clone()
     }
@@ -966,9 +1029,11 @@ impl App {
 
     pub fn subscription(&self) -> icy_ui::Subscription<Message> {
         // Periodic refresh while showing live result rows so the values
-        // re-read memory and update on screen.
+        // re-read memory and update on screen. ~30 Hz keeps fast-changing
+        // game values (position, velocity, ammo) visually fluid without
+        // overwhelming the memory-read path.
         let live_results_tick = if matches!(self.app_state, AppState::InProcess) {
-            icy_ui::time::every(Duration::from_millis(100)).map(|_| Message::Tick)
+            icy_ui::time::every(Duration::from_millis(33)).map(|_| Message::Tick)
         } else {
             icy_ui::Subscription::none()
         };
@@ -1045,11 +1110,19 @@ impl App {
                 }
             })
         } else {
-            // Tab/Shift+Tab for focus navigation in normal mode
-            keyboard::listen().filter_map(|event| {
+            // Tab/Shift+Tab for focus navigation in normal mode. Also map
+            // Escape to "back to main menu" while showing the secondary
+            // dialogs (process picker, About, Settings) so the user can
+            // dismiss them without reaching for the close button.
+            //
+            // The closure must be non-capturing per icy_ui's Subscription
+            // contract, so the current AppState is plumbed through with
+            // `Subscription::with` and matched inside the closure.
+            keyboard::listen().with(self.app_state).filter_map(|(state, event)| {
                 let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
                     return None;
                 };
+                let dismissable = matches!(state, AppState::ProcessSelection | AppState::About | AppState::Settings);
                 match key {
                     keyboard::Key::Named(keyboard::key::Named::Tab) => {
                         if modifiers.shift() {
@@ -1058,6 +1131,7 @@ impl App {
                             Some(Message::FocusNext)
                         }
                     }
+                    keyboard::Key::Named(keyboard::key::Named::Escape) if dismissable => Some(Message::MainMenu),
                     _ => None,
                 }
             })

@@ -1184,14 +1184,18 @@ impl GameCheetahEngine {
         if self.pid == 0 {
             return false;
         }
-        const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+        const REFRESH_INTERVAL: Duration = Duration::from_millis(100);
         if let Ok(mut system_guard) = SYSTEM.lock() {
             let (system, last_refresh) = &mut *system_guard;
             let now = Instant::now();
 
-            // Only refresh if enough time has passed
+            // Only refresh if enough time has passed. Restrict the refresh
+            // to *only* the attached PID — refreshing all processes here is
+            // ridiculously expensive and stalls the UI thread (this is
+            // called once per ~30 Hz redraw tick).
             if now.duration_since(*last_refresh) >= REFRESH_INTERVAL {
-                system.refresh_processes(ProcessesToUpdate::All, true);
+                let pid = Pid::from(self.pid as usize);
+                system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
                 *last_refresh = now;
             }
             match system.process(Pid::from(self.pid as usize)) {

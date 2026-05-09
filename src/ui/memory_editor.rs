@@ -20,7 +20,7 @@ pub const PAGE_ROWS: usize = 16;
 /// Cadence at which the editor re-reads visible bytes to drive change
 /// highlighting. Trades responsiveness against the cost of issuing one
 /// `copy_address` per visible row.
-pub const TICK_INTERVAL: Duration = Duration::from_millis(150);
+pub const TICK_INTERVAL: Duration = Duration::from_millis(50);
 /// How long a byte change stays visibly tinted before fading back to the
 /// regular cell appearance.
 const CHANGE_FADE: Duration = Duration::from_millis(1500);
