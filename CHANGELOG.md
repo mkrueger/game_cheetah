@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-05-09
+
+Patch release focused on memory editor responsiveness and per-result data type editing.
+
+### Added
+
+- Memory editor toolbar now shows the opened search hit address (read-only) alongside a data-type pick list. Switching the type re-tags that result in the cached result list so the same address can be viewed/written as a different numeric type without re-scanning (issue #26).
+- Inspector row matching the selected data type is highlighted so the active interpretation is obvious at a glance.
+- Hex grid uses a custom focusable widget so it actually owns keyboard focus and draws a real focus ring around the scroll area. Click inside the grid to focus, click outside to blur.
+- Fade-tick subscription drives change-highlight animations even when target memory is idle, so highlights smoothly fade out instead of waiting for the next memory refresh.
+
+### Changed
+
+- Memory editor reads visible rows in contiguous spans during the editor tick instead of issuing one `copy_address` per row per redraw, dropping the cost of a typical viewport from ~25 syscalls to roughly one per mapped region.
+- Hex / inspector / undo / redo writes update the visible cache immediately instead of waiting for the next refresh tick, so direct edits no longer feel delayed.
+- Small refinement passes (≤1024 addresses) now update inline on the UI thread; the worker-thread overhead was dominating the actual memory reads and left the UI sitting on "Updating N/N" until the next tick.
+
+### Fixed
+
+- Memory editor keyboard handling: arrow keys, page up/down, hex digits, Enter, Escape, and `Ctrl/Cmd+Z`/`Shift+Ctrl/Cmd+Z` now reliably reach the grid via the focusable area instead of being filtered by the global keyboard subscription.
+- Default focus ring no longer appears as a tiny circle in the corner; the grid now draws a proper border around the scrollable area when focused.
+
 ## [0.6.1] - 2026-05-08
 
 Patch release focused on release packaging, cheat-table polish, and post-0.6.0 fixes.
