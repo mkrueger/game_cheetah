@@ -38,6 +38,17 @@ fn search_ui(app: &App) -> Element<'_, Message> {
             .is_err()
         && selected_type != SearchType::Unknown; // Don't show error for Unknown type
     let auto_show_treshold = 20;
+    // The global search-type picker drives scan semantics. Once a scan is in
+    // progress or has produced results, switching it would discard the current
+    // result set and confuse the user. Show it only at the start of a new
+    // search (no in-flight scan and no results yet); otherwise show the
+    // current type as a static label.
+    let show_type_picker = matches!(current_search_context.searching, SearchMode::None) && search_results == 0;
+    let search_type_label: Element<'_, Message> = if show_type_picker {
+        pick_list(search_types.clone(), Some(selected_type), Message::SwitchSearchType).into()
+    } else {
+        text(selected_type.get_description_text()).into()
+    };
 
     // Get the current search name for the header
     let current_search_name = current_search_context.description.clone();
@@ -59,7 +70,7 @@ fn search_ui(app: &App) -> Element<'_, Message> {
         if selected_type == SearchType::Unknown {
             row![
                 text(fl!(crate::LANGUAGE_LOADER, "search-type-label")),
-                pick_list(search_types.clone(), Some(selected_type), Message::SwitchSearchType),
+                search_type_label,
                 text(fl!(crate::LANGUAGE_LOADER, "unknown-search-description"))
             ]
             .spacing(10)
@@ -75,7 +86,7 @@ fn search_ui(app: &App) -> Element<'_, Message> {
                 .on_submit(Message::Search)
                 .padding(10)
                 .width(Length::Fill),
-                pick_list(search_types.clone(), Some(selected_type), Message::SwitchSearchType),
+                search_type_label,
                 if show_error {
                     text(fl!(crate::LANGUAGE_LOADER, "invalid-number-error")).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
                         color: Some(theme.destructive.base),
