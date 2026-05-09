@@ -31,12 +31,12 @@ fn search_ui(app: &App) -> Element<'_, Message> {
     let search_results = current_search_context.get_result_count();
     let is_search_complete = current_search_context.search_complete.load(Ordering::SeqCst);
     let can_undo = !current_search_context.old_results.is_empty();
-    let show_error = !current_search_context.search_value_text.is_empty()
-        && current_search_context
-            .search_type
-            .from_string(&current_search_context.search_value_text)
-            .is_err()
-        && selected_type != SearchType::Unknown; // Don't show error for Unknown type
+    let parse_error: Option<String> = if !current_search_context.search_value_text.is_empty() && selected_type != SearchType::Unknown {
+        current_search_context.search_type.from_string(&current_search_context.search_value_text).err()
+    } else {
+        None
+    };
+    let show_error = parse_error.is_some();
     let auto_show_treshold = 20;
     // The global search-type picker drives scan semantics. Once a scan is in
     // progress or has produced results, switching it would discard the current
@@ -68,35 +68,66 @@ fn search_ui(app: &App) -> Element<'_, Message> {
         rule::horizontal(1),
         // Conditionally show value input or unknown search info
         if selected_type == SearchType::Unknown {
-            row![
+            let r: Element<'_, Message> = row![
                 text(fl!(crate::LANGUAGE_LOADER, "search-type-label")),
                 search_type_label,
                 text(fl!(crate::LANGUAGE_LOADER, "unknown-search-description"))
             ]
             .spacing(10)
             .align_y(alignment::Alignment::Center)
+            .into();
+            r
         } else {
-            row![
-                text(fl!(crate::LANGUAGE_LOADER, "value-label")),
-                text_input(
-                    &fl!(crate::LANGUAGE_LOADER, "search-value-label", valuetype = selected_type.get_description_text()),
-                    value_text
-                )
-                .on_input(Message::SearchValueChanged)
-                .on_submit(Message::Search)
-                .padding(10)
-                .width(Length::Fill),
-                search_type_label,
-                if show_error {
-                    text(fl!(crate::LANGUAGE_LOADER, "invalid-number-error")).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                        color: Some(theme.destructive.base),
-                    })
+            let c: Element<'_, Message> = column![
+                row![
+                    text(fl!(crate::LANGUAGE_LOADER, "value-label")),
+                    text_input(
+                        &fl!(crate::LANGUAGE_LOADER, "search-value-label", valuetype = selected_type.get_description_text()),
+                        value_text
+                    )
+                    .on_input(Message::SearchValueChanged)
+                    .on_submit(Message::Search)
+                    .padding(10)
+                    .width(Length::Fill)
+                    .style(move |theme: &icy_ui::Theme, status| {
+                        // Tint the entered value red when it can't be parsed as the
+                        // selected search type so the user immediately sees that
+                        // pressing Search would fail.
+                        let mut style = icy_ui::widget::text_input::default(theme, status);
+                        if show_error {
+                            style.value = theme.destructive.base;
+                            style.border.color = theme.destructive.base;
+                        }
+                        style
+                    }),
+                    search_type_label,
+                ]
+                .spacing(10)
+                .align_y(alignment::Alignment::Center),
+                if let Some(err) = &parse_error {
+                    // Render the parse error on its own line under the input
+                    // with a small warning glyph so it doesn't crowd the row
+                    // and stays readable at any window width.
+                    container(
+                        row![
+                            text("⚠").size(13).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                                color: Some(theme.destructive.base)
+                            }),
+                            text(err.clone()).size(13).style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
+                                color: Some(theme.destructive.base)
+                            }),
+                        ]
+                        .spacing(6)
+                        .align_y(alignment::Alignment::Center),
+                    )
+                    .padding(icy_ui::Padding::default().left(60))
                 } else {
-                    text("")
+                    container(text(""))
                 }
             ]
-            .spacing(10)
-            .align_y(alignment::Alignment::Center)
+            .spacing(4)
+            .into();
+            c
         },
         if !matches!(current_search_context.searching, SearchMode::None) {
             let current_bytes = current_search_context.current_bytes.load(Ordering::Acquire);

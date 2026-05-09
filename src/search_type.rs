@@ -94,7 +94,14 @@ impl SearchType {
                 Ok(SearchValue(*self, val.to_le_bytes().to_vec()))
             }
             SearchType::Guess => {
-                // For Guess, we don't parse here - it's handled in spawn_parallel_search
+                // For Guess, we don't decide the concrete numeric type here —
+                // the parallel search uses every type that successfully parses
+                // the text. Reject input that doesn't look like a number for
+                // any of the supported numeric types so the UI can flag it.
+                let parses_as_number = txt.parse::<i64>().is_ok() || txt.parse::<u64>().is_ok() || txt.parse::<f64>().is_ok();
+                if !parses_as_number {
+                    return Err(format!("Invalid number value: {txt}"));
+                }
                 Ok(SearchValue(*self, txt.as_bytes().to_vec()))
             }
             SearchType::Unknown => {
