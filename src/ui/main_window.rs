@@ -1,279 +1,227 @@
 use i18n_embed_fl::fl;
-use icy_ui::{
-    Element, Length, alignment,
-    widget::{button, checkbox, column, container, row, rule, text},
-};
 
-use crate::{app::App, message::Message};
+use crate::ui::app::{App, AppState};
 
-const MAIN_MENU_BUTTON_WIDTH: f32 = 220.0;
+const MAIN_MENU_BUTTON_WIDTH: f32 = 240.0;
+const MAIN_MENU_BUTTON_HEIGHT: f32 = 36.0;
 
-/// Wraps button label text so it expands and centers within a fixed-width button.
-fn menu_label<'a>(label: String, size: u32) -> icy_ui::widget::Text<'a> {
-    text(label).size(size).width(Length::Fill).align_x(alignment::Alignment::Center)
-}
+pub fn view_main_window(app: &mut App, ui: &mut egui::Ui) {
+    egui::CentralPanel::default().show_inside(ui, |ui| {
+        ui.add_space(40.0);
+        ui.vertical_centered(|ui| {
+            ui.heading(egui::RichText::new(crate::APP_NAME).size(32.0));
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "main-menu-subtitle"))
+                    .size(13.0)
+                    .weak(),
+            );
 
-pub fn view_main_window(app: &App) -> Element<'_, Message> {
-    let mut header_col = column![
-        text(crate::APP_NAME).size(32),
-        text(fl!(crate::LANGUAGE_LOADER, "main-menu-subtitle"))
-            .size(14)
-            .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                color: Some(theme.background.on.scale_alpha(0.65)),
-            })
-    ]
-    .spacing(6)
-    .width(Length::Fill)
-    .align_x(alignment::Alignment::Center);
-
-    if let Some(latest) = app.latest_version.as_deref() {
-        header_col = header_col.push(
-            button(
-                text(fl!(crate::LANGUAGE_LOADER, "update-available", version = latest.trim_start_matches('v')))
-                    .size(13)
-                    .align_x(alignment::Alignment::Center),
-            )
-            .on_press(Message::OpenLatestRelease)
-            .padding([6, 12])
-            .style(|theme: &icy_ui::Theme, status: icy_ui::widget::button::Status| {
-                use icy_ui::widget::button::Status;
-                let bg = theme.accent.base.scale_alpha(match status {
-                    Status::Hovered => 0.30,
-                    _ => 0.18,
-                });
-                button::Style {
-                    background: Some(bg.into()),
-                    text_color: theme.background.on,
-                    border: icy_ui::Border {
-                        radius: 4.0.into(),
-                        width: 1.0,
-                        color: theme.accent.base.scale_alpha(0.45),
-                    },
-                    ..Default::default()
+            // Optional "update available" pill — visible only when the
+            // background update check found a newer release.
+            if let Some(latest) = app.latest_version.clone() {
+                ui.add_space(8.0);
+                let label = fl!(
+                    crate::LANGUAGE_LOADER,
+                    "update-available",
+                    version = latest.trim_start_matches('v')
+                );
+                if ui
+                    .add(
+                        egui::Button::new(egui::RichText::new(label).size(13.0))
+                            .fill(egui::Color32::from_rgb(60, 80, 130)),
+                    )
+                    .clicked()
+                {
+                    let _ = webbrowser::open("https://github.com/mkrueger/game_cheetah/releases/latest");
                 }
-            }),
-        );
-    }
+            }
 
-    container(
-        column![
-            container(header_col).width(Length::Fill).padding([8, 20]),
-            column![
-                button(menu_label(fl!(crate::LANGUAGE_LOADER, "attach-button"), 22))
-                    .on_press(Message::Attach)
-                    .padding([10, 16])
-                    .width(Length::Fixed(MAIN_MENU_BUTTON_WIDTH))
-                    .style(|theme: &icy_ui::Theme, status: icy_ui::widget::button::Status| {
-                        use icy_ui::widget::button::Status;
-                        button::Style {
-                            background: Some(match status {
-                                Status::Hovered => theme.accent.base.scale_alpha(0.9).into(),
-                                _ => theme.accent.base.into(),
-                            }),
-                            text_color: theme.accent.on,
-                            border: icy_ui::Border {
-                                radius: 4.0.into(),
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        }
-                    }),
-                button(menu_label(fl!(crate::LANGUAGE_LOADER, "settings-button"), 16))
-                    .on_press(Message::Settings)
-                    .padding(8)
-                    .width(Length::Fixed(MAIN_MENU_BUTTON_WIDTH)),
-                button(menu_label(fl!(crate::LANGUAGE_LOADER, "about-button"), 16))
-                    .on_press(Message::About)
-                    .padding(8)
-                    .width(Length::Fixed(MAIN_MENU_BUTTON_WIDTH)),
-                button(menu_label(fl!(crate::LANGUAGE_LOADER, "discuss-button"), 16))
-                    .on_press(Message::Discuss)
-                    .padding(8)
-                    .width(Length::Fixed(MAIN_MENU_BUTTON_WIDTH)),
-                button(menu_label(fl!(crate::LANGUAGE_LOADER, "bug-button"), 16))
-                    .on_press(Message::ReportBug)
-                    .padding(8)
-                    .width(Length::Fixed(MAIN_MENU_BUTTON_WIDTH)),
-                button(menu_label(fl!(crate::LANGUAGE_LOADER, "quit-button"), 16))
-                    .on_press(Message::Exit)
-                    .padding(8)
-                    .width(Length::Fixed(MAIN_MENU_BUTTON_WIDTH))
-            ]
-            .spacing(8)
-            .align_x(alignment::Alignment::Center),
-            column![
-                text(format!("v{}", crate::VERSION))
-                    .size(12)
-                    .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                        color: Some(theme.background.on.scale_alpha(0.55)),
-                    }),
-                button(text("github.com/mkrueger/game_cheetah").size(13))
-                    .style(|theme: &icy_ui::Theme, status: icy_ui::widget::button::Status| {
-                        use icy_ui::widget::button::Status;
-                        match status {
-                            Status::Hovered => button::Style {
-                                background: Some(icy_ui::Color::TRANSPARENT.into()),
-                                border: icy_ui::Border::default(),
-                                text_color: theme.accent.base,
-                                ..Default::default()
-                            },
-                            _ => button::Style {
-                                background: Some(icy_ui::Color::TRANSPARENT.into()),
-                                border: icy_ui::Border::default(),
-                                text_color: theme.background.on.scale_alpha(0.55),
-                                ..Default::default()
-                            },
-                        }
-                    })
-                    .on_press(Message::OpenGitHub)
-                    .padding(2),
-            ]
-            .spacing(2)
-            .align_x(alignment::Alignment::Center),
-        ]
-        .spacing(24)
-        .align_x(alignment::Alignment::Center),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .align_x(alignment::Alignment::Center)
-    .align_y(alignment::Alignment::Center)
-    .into()
+            ui.add_space(28.0);
+
+            let button = |ui: &mut egui::Ui, label: String, primary: bool| -> egui::Response {
+                let mut btn = egui::Button::new(egui::RichText::new(label).size(if primary { 18.0 } else { 14.0 }))
+                    .min_size(egui::vec2(MAIN_MENU_BUTTON_WIDTH, MAIN_MENU_BUTTON_HEIGHT));
+                if primary {
+                    btn = btn.fill(ui.visuals().selection.bg_fill);
+                }
+                ui.add(btn)
+            };
+
+            if button(ui, fl!(crate::LANGUAGE_LOADER, "attach-button"), true).clicked() {
+                app.attach_action();
+            }
+            ui.add_space(6.0);
+            if button(ui, fl!(crate::LANGUAGE_LOADER, "settings-button"), false).clicked() {
+                app.app_state = AppState::Settings;
+            }
+            ui.add_space(6.0);
+            if button(ui, fl!(crate::LANGUAGE_LOADER, "about-button"), false).clicked() {
+                app.app_state = AppState::About;
+            }
+            ui.add_space(6.0);
+            if button(ui, fl!(crate::LANGUAGE_LOADER, "discuss-button"), false).clicked() {
+                let _ = webbrowser::open("https://github.com/mkrueger/game_cheetah/discussions");
+            }
+            ui.add_space(6.0);
+            if button(ui, fl!(crate::LANGUAGE_LOADER, "bug-button"), false).clicked() {
+                let _ = webbrowser::open("https://github.com/mkrueger/game_cheetah/issues/new");
+            }
+            ui.add_space(6.0);
+            if button(ui, fl!(crate::LANGUAGE_LOADER, "quit-button"), false).clicked() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+
+            ui.add_space(36.0);
+            ui.label(
+                egui::RichText::new(format!("v{}", crate::VERSION))
+                    .size(11.0)
+                    .weak(),
+            );
+            if ui
+                .link(egui::RichText::new("github.com/mkrueger/game_cheetah").size(12.0))
+                .clicked()
+            {
+                let _ = webbrowser::open("https://github.com/mkrueger/game_cheetah");
+            }
+        });
+    });
 }
 
-pub fn view_settings(app: &App) -> Element<'_, Message> {
-    let config_dir = crate::config_dir().display().to_string();
+pub fn view_settings(app: &mut App, ui: &mut egui::Ui) {
+    egui::CentralPanel::default().show_inside(ui, |ui| {
+        ui.add_space(20.0);
+        ui.vertical_centered(|ui| {
+            ui.heading(fl!(crate::LANGUAGE_LOADER, "settings-title"));
+        });
+        ui.add_space(10.0);
+        ui.separator();
 
-    // Group with a faint card-style background and a subtle divider so each
-    // setting reads as one unit instead of free-floating widgets.
-    fn section<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
-        container(content)
-            .width(Length::Fill)
-            .padding(16)
-            .style(|theme: &icy_ui::Theme| icy_ui::widget::container::Style {
-                background: Some(theme.background.on.scale_alpha(0.04).into()),
-                border: icy_ui::Border {
-                    radius: 4.0.into(),
-                    width: 1.0,
-                    color: theme.primary.divider,
-                },
-                ..Default::default()
-            })
-            .into()
-    }
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            section(ui, |ui| {
+                let mut changed = false;
+                ui.horizontal(|ui| {
+                    if ui
+                        .checkbox(
+                            &mut app.auto_reconnect,
+                            egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "automatic-reconnect-label")).strong(),
+                        )
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                });
+                ui.label(
+                    egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "automatic-reconnect-description"))
+                        .size(12.0)
+                        .weak(),
+                );
+                if changed {
+                    app.persist_settings();
+                }
+            });
 
-    let auto_reconnect_section = section(
-        column![
-            row![
-                checkbox(app.auto_reconnect).on_toggle(|_| Message::ToggleAutoReconnect).size(16),
-                text(fl!(crate::LANGUAGE_LOADER, "automatic-reconnect-label")).size(16).font(icy_ui::Font {
-                    weight: icy_ui::font::Weight::Semibold,
-                    ..icy_ui::Font::default()
-                }),
-            ]
-            .spacing(8)
-            .align_y(alignment::Alignment::Center),
-            text(fl!(crate::LANGUAGE_LOADER, "automatic-reconnect-description"))
-                .size(13)
-                .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                    color: Some(theme.background.on.scale_alpha(0.65)),
-                })
-        ]
-        .spacing(8)
-        .into(),
-    );
+            section(ui, |ui| {
+                let mut changed = false;
+                ui.horizontal(|ui| {
+                    if ui
+                        .checkbox(
+                            &mut app.check_for_updates,
+                            egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "check-for-updates-label")).strong(),
+                        )
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                });
+                ui.label(
+                    egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "check-for-updates-description"))
+                        .size(12.0)
+                        .weak(),
+                );
+                if changed {
+                    app.persist_settings();
+                }
+            });
 
-    let check_for_updates_section = section(
-        column![
-            row![
-                checkbox(app.check_for_updates).on_toggle(|_| Message::ToggleCheckForUpdates).size(16),
-                text(fl!(crate::LANGUAGE_LOADER, "check-for-updates-label")).size(16).font(icy_ui::Font {
-                    weight: icy_ui::font::Weight::Semibold,
-                    ..icy_ui::Font::default()
-                }),
-            ]
-            .spacing(8)
-            .align_y(alignment::Alignment::Center),
-            text(fl!(crate::LANGUAGE_LOADER, "check-for-updates-description"))
-                .size(13)
-                .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                    color: Some(theme.background.on.scale_alpha(0.65)),
-                })
-        ]
-        .spacing(8)
-        .into(),
-    );
+            section(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "config-directory-label")).strong(),
+                );
+                let config_dir = crate::config_dir().display().to_string();
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut config_dir.clone())
+                            .desired_width(ui.available_width() - 220.0)
+                            .font(egui::TextStyle::Monospace),
+                    );
+                    if ui
+                        .button(fl!(crate::LANGUAGE_LOADER, "open-config-directory-button"))
+                        .clicked()
+                    {
+                        let path = crate::config_dir();
+                        let _ = std::fs::create_dir_all(&path);
+                        let _ = opener::open(&path);
+                    }
+                    if ui
+                        .button(fl!(crate::LANGUAGE_LOADER, "copy-config-directory-button"))
+                        .clicked()
+                    {
+                        ui.ctx().copy_text(config_dir.clone());
+                    }
+                });
+                ui.label(
+                    egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "config-directory-description"))
+                        .size(12.0)
+                        .weak(),
+                );
+            });
+        });
 
-    let config_dir_section = section(
-        column![
-            text(fl!(crate::LANGUAGE_LOADER, "config-directory-label")).size(16).font(icy_ui::Font {
-                weight: icy_ui::font::Weight::Semibold,
-                ..icy_ui::Font::default()
-            }),
-            row![
-                container(text(config_dir).size(13).font(icy_ui::Font::MONOSPACE))
-                    .width(Length::Fill)
-                    .padding([8, 10])
-                    .style(|theme: &icy_ui::Theme| icy_ui::widget::container::Style {
-                        background: Some(theme.background.base.into()),
-                        border: icy_ui::Border {
-                            radius: 2.0.into(),
-                            width: 1.0,
-                            color: theme.primary.divider,
-                        },
-                        ..Default::default()
-                    }),
-                button(text(fl!(crate::LANGUAGE_LOADER, "open-config-directory-button")))
-                    .on_press(Message::OpenConfigDir)
-                    .padding([8, 12]),
-                button(text(fl!(crate::LANGUAGE_LOADER, "copy-config-directory-button")))
-                    .on_press(Message::CopyConfigDir)
-                    .padding([8, 12]),
-            ]
-            .spacing(8)
-            .align_y(alignment::Alignment::Center),
-            text(fl!(crate::LANGUAGE_LOADER, "config-directory-description"))
-                .size(13)
-                .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                    color: Some(theme.background.on.scale_alpha(0.65)),
-                })
-        ]
-        .spacing(8)
-        .into(),
-    );
+        ui.add_space(10.0);
+        ui.separator();
+        ui.vertical_centered(|ui| {
+            if ui
+                .button(fl!(crate::LANGUAGE_LOADER, "back-to-main-button"))
+                .clicked()
+            {
+                app.app_state = AppState::MainWindow;
+            }
+        });
+    });
+}
 
-    container(
-        container(
-            column![
-                container(
-                    text(fl!(crate::LANGUAGE_LOADER, "settings-title"))
-                        .size(28)
-                        .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                            color: Some(theme.accent.base)
-                        })
-                )
-                .width(Length::Fill)
-                .align_x(alignment::Alignment::Center),
-                rule::horizontal(1),
-                auto_reconnect_section,
-                check_for_updates_section,
-                config_dir_section,
-                container(
-                    button(text(fl!(crate::LANGUAGE_LOADER, "back-to-main-button")))
-                        .on_press(Message::MainMenu)
-                        .padding([8, 16])
-                )
-                .width(Length::Fill)
-                .align_x(alignment::Alignment::Center)
-            ]
-            .spacing(16)
-            .padding(crate::DIALOG_PADDING),
-        )
-        .width(Length::Fixed(640.0)),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .align_x(alignment::Alignment::Center)
-    .align_y(alignment::Alignment::Center)
-    .into()
+pub fn view_about(app: &mut App, ui: &mut egui::Ui) {
+    egui::CentralPanel::default().show_inside(ui, |ui| {
+        ui.add_space(40.0);
+        ui.vertical_centered(|ui| {
+            ui.heading(fl!(crate::LANGUAGE_LOADER, "about-dialog-heading"));
+            ui.add_space(16.0);
+            ui.label(fl!(crate::LANGUAGE_LOADER, "about-dialog-description"));
+            ui.add_space(24.0);
+            ui.label(
+                egui::RichText::new(format!("v{}", crate::VERSION))
+                    .size(12.0)
+                    .weak(),
+            );
+            ui.add_space(20.0);
+            if ui
+                .button(fl!(crate::LANGUAGE_LOADER, "close-button"))
+                .clicked()
+            {
+                app.app_state = AppState::MainWindow;
+            }
+        });
+    });
+}
+
+/// Card-style section container used to group settings.
+fn section(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::group(ui.style())
+        .inner_margin(egui::Margin::same(12))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            contents(ui);
+        });
+    ui.add_space(8.0);
 }

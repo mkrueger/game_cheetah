@@ -7,7 +7,7 @@ rust-version = "1.88"
 description = "High-performance memory scanner/editor and game trainer for Linux, Windows, and macOS"
 license = "Apache-2.0"
 repository = "https://github.com/mkrueger/game_cheetah"
-# Not published on crates.io: depends on icy_ui (git-only). Distribute via GitHub releases.
+# Not published on crates.io: depends on icy_ui's git fork. Distribute via GitHub releases.
 publish = false
 
 [package.metadata.bundle]
@@ -22,10 +22,14 @@ Allows to alter values in computer games or freeze them to certain values.
 """
 
 [dependencies]
-icy_ui = { git = "https://github.com/mkrueger/icy_ui", branch = "master", features = [
-    "smol",
-    "advanced",
+eframe = { version = "0.34.2", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "wayland",
+    "x11",
 ] }
+egui = "0.34.2"
+egui_extras = { version = "0.34.2", features = ["all_loaders"] }
 process-memory = "0.5.0"
 sysinfo = "0.38.4"
 gabi = "0.2.6"
@@ -88,7 +92,10 @@ opt-level = 3
 codegen-units = 1
 strip = "symbols"
 
-[profile.release.package.icy_ui]
+[profile.release.package.eframe]
+opt-level = 3
+
+[profile.release.package.egui]
 opt-level = 3
 
 [profile.release.package.rayon]

@@ -1,26 +1,19 @@
 use std::{
     collections::HashMap,
     sync::atomic::Ordering,
-    thread::sleep,
     time::{Duration, Instant},
 };
 
-use i18n_embed_fl::fl;
-use icy_ui::{
-    Element, Length, Task, Theme, alignment, keyboard,
-    widget::{
-        button, column, container,
-        operation::{focus_next, focus_previous},
-        text,
-    },
-    window,
-};
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 
-use crate::{AppError, FreezeMessage, GameCheetahEngine, MessageCommand, SearchMode, SearchValue, message::Message};
 use crate::{
-    SearchType, UnknownComparison,
-    ui::process_selection::{ProcessSortColumn, SortDirection},
+    AppError, FreezeMessage, GameCheetahEngine, MessageCommand, SearchMode, SearchType, SearchValue,
+    ui::{
+        in_process_view, main_window,
+        memory_editor::MemoryEditor,
+        process_selection,
+        process_selection::{ProcessSortColumn, SortDirection},
+    },
 };
 
 #[derive(Default, PartialEq, Eq, Hash, Debug, Clone, Copy)]
@@ -34,7 +27,12 @@ pub enum AppState {
     MemoryEditor,
 }
 
-#[derive(Default)]
+/// Visible duration of a "value changed" row highlight.
+pub const CHANGE_HIGHLIGHT: Duration = Duration::from_millis(1500);
+
+/// Channel used by the background update-check thread to report results.
+type UpdateCheckRx = crossbeam_channel::Receiver<Option<String>>;
+
 pub struct App {
     pub app_state: AppState,
     pub state: GameCheetahEngine,
@@ -42,78 +40,102 @@ pub struct App {
     pub renaming_search_index: Option<usize>,
     pub rename_search_text: String,
 
-    /// In-progress edit of a result row's value field:
-    /// `(row_index, typed_buffer, last_synced_live_value)`.
-    ///
-    /// Buffering keystrokes here keeps the `text_input` from being re-bound to
-    /// the freshly-read memory value on every render, which would otherwise
-    /// look like the field is losing focus mid-edit. The third element stores
-    /// the live value the buffer was last synchronized with: as long as the
-    /// user hasn't typed since (`buffer == last_synced`), the periodic Tick
-    /// re-syncs both fields to the latest memory read so the editor keeps
-    /// reflecting external changes. Once the user types, the buffer diverges
-    /// from the snapshot and is left untouched until commit/cancel.
-    pub editing_result: Option<(usize, String, String)>,
-
-    /// Counter bumped on every periodic Tick while the in-process view is
-    /// shown. Folded into the result table's cache key so the virtualized row
-    /// list rebuilds even when only the live-read values changed.
-    pub refresh_counter: u64,
-
-    memory_editor: super::memory_editor::MemoryEditor,
-    memory_editor_result_index: Option<usize>,
+    /// `(row_index, typed_buffer)` while a result row's value is being
+    /// edited. We don't read the live value into this buffer per frame —
+    /// once the user clicks/focuses the field, it owns the keystrokes
+    /// until they commit (Enter) or cancel (Escape / focus loss).
+    pub editing_result: Option<(usize, String)>,
 
     pub process_sort_column: ProcessSortColumn,
     pub process_sort_direction: SortDirection,
 
-    last_tab_click: Option<(usize, Instant)>,
-
-    /// Brief status shown next to the Save/Load buttons (e.g. path on success, error on failure).
+    /// Brief status next to the Save/Load buttons.
     pub cheat_table_status: String,
 
-    /// When true, result values are displayed in hexadecimal instead of decimal.
+    /// When true, result values are displayed in hexadecimal.
     pub hex_display: bool,
 
-    /// Optional advanced setting: after the attached process exits, keep
-    /// watching for a process with the same name and attach again automatically.
-    /// This is off by default and only configurable from the main menu settings.
+    /// Reattach to a process with the same name after the attached one exits.
     pub auto_reconnect: bool,
 
-    /// When true, the app contacts the GitHub releases API once per launch
-    /// to check for a newer version. Defaults to true; can be disabled in
-    /// Settings.
+    /// Check the GitHub releases API once per launch.
     pub check_for_updates: bool,
 
-    /// Set to true the first time the update check runs so we never fire
-    /// it twice within a single launch.
-    update_check_started: bool,
-
+    update_check_rx: Option<UpdateCheckRx>,
     /// Tag of the latest release if it is newer than [`crate::VERSION`].
-    /// `None` until the check completes (or if no newer version exists).
     pub latest_version: Option<String>,
 
-    /// Last-read value string per address for the active search, used to
-    /// detect value changes between refresh ticks.
+    /// Last-read value string per address for the active search.
     pub value_change_tracker: HashMap<usize, String>,
-    /// Maps address → `refresh_counter` when its value last changed.
-    /// A row is highlighted while `refresh_counter - stored` < CHANGE_HIGHLIGHT_TICKS.
-    pub changed_addresses: HashMap<usize, u64>,
+    /// Address → time when the value last changed. A row is highlighted
+    /// while `Instant::now() - stored < CHANGE_HIGHLIGHT`.
+    pub changed_addresses: HashMap<usize, Instant>,
+
+    /// Throttle process-list refresh in [`AppState::ProcessSelection`].
+    last_process_refresh: Instant,
+
+    /// Last attempt to find the previously-attached process by name.
+    last_reattach_attempt: Instant,
+
+    pub memory_editor: MemoryEditor,
+    pub memory_editor_result_index: Option<usize>,
+
+    /// Tracks if a search just completed last frame, so the next frame can
+    /// repopulate the value cache before the row callback runs.
+    pub last_searching_was_active: bool,
+}
+
+impl Default for App {
+    /// Returns an `App` with all settings at their built-in defaults.
+    ///
+    /// Note: does **not** read persisted user settings — that's what
+    /// [`App::new`] is for. Keeping `Default` settings-free makes
+    /// unit tests deterministic regardless of the developer's local
+    /// config dir.
+    fn default() -> Self {
+        Self {
+            app_state: AppState::default(),
+            state: GameCheetahEngine::default(),
+            renaming_search_index: None,
+            rename_search_text: String::new(),
+            editing_result: None,
+            process_sort_column: ProcessSortColumn::default(),
+            process_sort_direction: SortDirection::default(),
+            cheat_table_status: String::new(),
+            hex_display: false,
+            auto_reconnect: false,
+            check_for_updates: false,
+            update_check_rx: None,
+            latest_version: None,
+            value_change_tracker: HashMap::new(),
+            changed_addresses: HashMap::new(),
+            last_process_refresh: Instant::now() - Duration::from_secs(10),
+            last_reattach_attempt: Instant::now() - Duration::from_secs(10),
+            memory_editor: MemoryEditor::default(),
+            memory_editor_result_index: None,
+            last_searching_was_active: false,
+        }
+    }
 }
 
 impl App {
-    /// Construct a fresh `App` and load persisted user preferences from the
-    /// config directory. Used as the icy_ui state factory.
     pub fn new() -> Self {
         let settings = crate::UserSettings::load();
         Self {
-            auto_reconnect: settings.auto_reconnect,
             hex_display: settings.hex_display,
+            auto_reconnect: settings.auto_reconnect,
             check_for_updates: settings.check_for_updates,
             ..Self::default()
         }
     }
 
-    fn persist_settings(&mut self) {
+    pub fn title(&self) -> String {
+        format!("{} {}", crate::APP_NAME, crate::VERSION)
+    }
+
+    /// Persist user-settings to disk; logs an error into the in-app error
+    /// stack on failure.
+    pub(crate) fn persist_settings(&mut self) {
         let settings = crate::UserSettings {
             auto_reconnect: self.auto_reconnect,
             hex_display: self.hex_display,
@@ -124,970 +146,132 @@ impl App {
         }
     }
 
-    pub fn title(&self) -> String {
-        format!("{} {}", crate::APP_NAME, crate::VERSION)
+    /// Kick off the once-per-launch update check on a worker thread.
+    fn start_update_check_if_needed(&mut self) {
+        if !self.check_for_updates || self.update_check_rx.is_some() || self.latest_version.is_some() {
+            return;
+        }
+        let (tx, rx) = crossbeam_channel::bounded::<Option<String>>(1);
+        std::thread::spawn(move || {
+            let result = crate::update_check::fetch_latest_version();
+            let _ = tx.send(result);
+        });
+        self.update_check_rx = Some(rx);
     }
 
-    pub fn update(&mut self, message: Message) -> Task<Message> {
-        let should_update_processes = self.state.last_process_update.elapsed().map_or(true, |elapsed| elapsed.as_millis() > 500);
-        let watching_for_reconnect = self.auto_reconnect && self.state.pid == 0 && !self.state.process_name.is_empty();
-        if (self.app_state == AppState::ProcessSelection || watching_for_reconnect) && should_update_processes {
-            self.state.update_process_data();
+    fn poll_update_check(&mut self) {
+        if let Some(rx) = &self.update_check_rx
+            && let Ok(latest) = rx.try_recv()
+        {
+            self.update_check_rx = None;
+            if let Some(tag) = latest
+                && crate::update_check::is_newer(&tag, crate::VERSION)
+            {
+                self.latest_version = Some(tag);
+            }
         }
-        // Check and update search modes for all searches
+    }
+
+    /// Periodic per-frame housekeeping run before the view code.
+    fn tick(&mut self, ctx: &egui::Context) {
+        // Search context state machine: cycle each context's search-mode
+        // flag back to `None` once `search_complete` flips.
         for search_context in &mut self.state.searches {
             search_context.update_search_mode();
         }
 
-        // Kick off the update check exactly once per launch (and only if the
-        // user has not opted out). Runs on a background thread so it never
-        // blocks the UI; failures are silent.
-        let update_check_task = if self.check_for_updates && !self.update_check_started {
-            self.update_check_started = true;
-            icy_ui::Task::perform(
-                async { smol::unblock(crate::update_check::fetch_latest_version).await },
-                Message::UpdateCheckCompleted,
-            )
-        } else {
-            Task::none()
-        };
-
-        let message_task = match message {
-            Message::Attach => {
-                self.state.update_process_data();
-                self.app_state = AppState::ProcessSelection;
-                Task::none()
-            }
-            Message::MainMenu => {
-                self.app_state = AppState::MainWindow;
-                self.state = GameCheetahEngine::default();
-                Task::none()
-            }
-            Message::DismissDialog => {
-                if matches!(self.app_state, AppState::ProcessSelection | AppState::About | AppState::Settings) {
-                    self.app_state = AppState::MainWindow;
+        match self.app_state {
+            AppState::ProcessSelection => {
+                if self.last_process_refresh.elapsed() >= Duration::from_millis(1000) {
+                    self.state.update_process_data();
+                    self.last_process_refresh = Instant::now();
                 }
-                Task::none()
+                ctx.request_repaint_after(Duration::from_millis(500));
             }
-            Message::About => {
-                self.app_state = AppState::About;
-                Task::none()
-            }
-            Message::Settings => {
-                self.app_state = AppState::Settings;
-                Task::none()
-            }
-            Message::Discuss => {
-                if let Err(err) = webbrowser::open("https://github.com/mkrueger/game_cheetah/discussions") {
-                    println!("Failed to open discussion page: {err}");
-                }
-                Task::none()
-            }
-            Message::ReportBug => {
-                if let Err(err) = webbrowser::open("https://github.com/mkrueger/game_cheetah/issues/new") {
-                    println!("Failed to open bug report page: {err}");
-                }
-                Task::none()
-            }
-            Message::OpenGitHub => {
-                if let Err(err) = webbrowser::open("https://github.com/mkrueger/game_cheetah") {
-                    println!("Failed to open GitHub page: {err}");
-                }
-                Task::none()
-            }
-            Message::Exit => window::latest().and_then(window::close),
-            Message::FilterChanged(filter) => {
-                self.state.process_filter = filter;
-                Task::none()
-            }
-            Message::SelectProcess(process) => {
-                self.state.select_process(&process);
-                self.app_state = AppState::InProcess;
-                self.state.process_filter.clear();
-                icy_ui::Task::perform(
-                    async {
-                        sleep(Duration::from_millis(2000));
-                    },
-                    |_| Message::TickProcess,
-                )
-            }
-            Message::TickProcess => {
+            AppState::InProcess => {
                 self.state.detach_if_gone();
-                if self.auto_reconnect && self.state.pid == 0 && !self.state.process_name.is_empty() {
+                if self.auto_reconnect
+                    && self.state.pid == 0
+                    && !self.state.process_name.is_empty()
+                    && self.last_reattach_attempt.elapsed() >= Duration::from_secs(1)
+                {
+                    self.last_reattach_attempt = Instant::now();
+                    self.state.update_process_data();
                     let target = self.state.process_name.clone();
                     if let Some(process) = self.state.processes.iter().find(|p| p.name == target).cloned() {
                         self.state.select_process(&process);
                     }
                 }
-                icy_ui::Task::perform(
-                    async {
-                        sleep(Duration::from_millis(2000));
-                    },
-                    |_| Message::TickProcess,
-                )
-            }
-            Message::NewSearch => {
-                self.state.new_search();
-                self.clear_change_tracker();
-                Task::none()
-            }
-            Message::CloseSearch(index) => {
-                if index >= self.state.searches.len() {
-                    return Task::none();
-                }
-                self.state.remove_freezes(index);
-                self.state.searches.remove(index);
-                if self.state.searches.is_empty() {
-                    self.state.current_search = 0;
-                } else if self.state.current_search > index {
-                    self.state.current_search -= 1;
-                } else if self.state.current_search >= self.state.searches.len() {
-                    self.state.current_search = self.state.searches.len() - 1;
-                }
-                Task::none()
-            }
-
-            Message::RenameSearch => {
-                if let Some(search) = self.state.searches.get(self.state.current_search) {
-                    self.rename_search_text = search.description.clone();
-                    self.renaming_search_index = Some(self.state.current_search);
-                }
-                Task::none()
-            }
-            Message::RenameSearchTextChanged(text) => {
-                self.rename_search_text = text;
-                Task::none()
-            }
-            Message::ConfirmRenameSearch => {
-                if let Some(index) = self.renaming_search_index
-                    && let Some(search) = self.state.searches.get_mut(index)
+                // Finalize in-flight searches so the tracker refresh below
+                // sees the final result set.
                 {
-                    search.description = self.rename_search_text.clone();
-                }
-                self.renaming_search_index = None;
-                self.rename_search_text.clear();
-                Task::none()
-            }
-
-            Message::CancelRenameSearch => {
-                self.renaming_search_index = None;
-                self.rename_search_text.clear();
-                Task::none()
-            }
-
-            Message::SwitchSearch(index) => {
-                if index < self.state.searches.len() {
-                    let now = Instant::now();
-                    let is_double_click = self
-                        .last_tab_click
-                        .is_some_and(|(i, t)| i == index && now.duration_since(t) < Duration::from_millis(300));
-
-                    if is_double_click {
-                        self.last_tab_click = None;
-                        if let Some(search) = self.state.searches.get(index) {
-                            self.rename_search_text = search.description.clone();
-                            self.renaming_search_index = Some(index);
-                        }
-                    } else {
-                        self.last_tab_click = Some((index, now));
-                        self.state.current_search = index;
-                        self.editing_result = None;
-                        self.clear_change_tracker();
+                    let ctx_search = &mut self.state.searches[self.state.current_search];
+                    if !matches!(ctx_search.searching, SearchMode::None) {
+                        let _ = ctx_search.collect_results();
                     }
-                }
-                Task::none()
-            }
-            Message::SearchValueChanged(value) => {
-                if let Some(current_search) = self.state.searches.get_mut(self.state.current_search) {
-                    current_search.search_value_text = value;
-                }
-                Task::none()
-            }
-
-            Message::SwitchSearchType(search_type) => {
-                // The picker is only visible while no search has been started
-                // yet (see `show_type_picker` in `in_process_view`), so this
-                // never has to worry about preserving an existing result set.
-                if let Some(current_search) = self.state.searches.get_mut(self.state.current_search) {
-                    current_search.search_type = search_type;
-                }
-                Task::none()
-            }
-            Message::Search => {
-                let search_index = self.state.current_search;
-                if let Some(current_search) = self.state.searches.get_mut(search_index) {
-                    let search_type = current_search.search_type;
-                    if current_search.search_type == SearchType::Unknown {
-                        self.state.take_memory_snapshot(self.state.current_search);
-                        return Task::none();
-                    }
-                    if current_search.search_value_text.is_empty() {
-                        return Task::none();
-                    }
-                    match search_type.from_string(&current_search.search_value_text) {
-                        Ok(_search_value) => {
-                            // Check the actual result count, not just search_results
-                            let has_results = current_search.get_result_count() > 0;
-
-                            if !has_results || current_search.search_type == SearchType::String {
-                                self.state.initial_search(search_index);
-                            } else {
-                                self.state.filter_searches(search_index);
+                    if ctx_search.search_complete.load(Ordering::SeqCst) {
+                        // Drain trailing batches so addresses don't keep
+                        // shifting after the search ends.
+                        loop {
+                            let before = ctx_search.get_result_count();
+                            let _ = ctx_search.collect_results();
+                            let after = ctx_search.get_result_count();
+                            if before == after {
+                                break;
                             }
                         }
-                        Err(err) => {
-                            println!("Error parsing search value: {err}");
-                        }
-                    }
-                }
-                Task::done(Message::Tick)
-            }
-            Message::Tick => {
-                if matches!(self.app_state, AppState::InProcess) {
-                    self.refresh_counter = self.refresh_counter.wrapping_add(1);
-
-                    // Finalize any in-flight search BEFORE refreshing the
-                    // value tracker. Previously the order was reversed:
-                    // tracker was refreshed first while `searching` was
-                    // still flagged, then the search was marked complete
-                    // in the same tick, then the search-running branch had
-                    // cleared the tracker. The very next render frame then
-                    // saw `searching == None` but an empty tracker and
-                    // every visible row fell back to a per-row
-                    // `copy_address` — those transient failures produced
-                    // the brief blank cells the user perceived as flicker.
-                    {
-                        let current_search_context = &mut self.state.searches[self.state.current_search];
-                        if !matches!(current_search_context.searching, SearchMode::None) {
-                            current_search_context.collect_results();
-                        }
-                        if current_search_context.search_complete.load(Ordering::SeqCst) {
-                            // Drain the channel until it's empty so we don't keep
-                            // re-sorting the cache (and visibly shifting addresses)
-                            // for the next few ticks while the last few worker
-                            // batches trickle in. Workers may have queued up to
-                            // RESULTS_CHANNEL_CAPACITY batches that were not yet
-                            // consumed when `search_complete` flipped.
-                            loop {
-                                let before = current_search_context.get_result_count();
-                                let _ = current_search_context.collect_results();
-                                let after = current_search_context.get_result_count();
-                                if before == after {
-                                    break;
-                                }
-                            }
-
-                            current_search_context.searching = SearchMode::None;
-                        }
-                    }
-
-                    // Now refresh the live-value tracker with the finalized
-                    // result set. While a scan is actually running we
-                    // simply skip the refresh — `collect_results()` can
-                    // return millions of intermediate hits and one
-                    // `copy_address` syscall per result would freeze the
-                    // UI. We *do not* clear the tracker in that case: the
-                    // result table is hidden during a scan anyway, and
-                    // keeping the prior values means the first frame after
-                    // the search ends already has cached strings for every
-                    // surviving address (instead of a blank flash).
-                    let search_running = self.state.searches.iter().any(|s| !matches!(s.searching, SearchMode::None));
-                    if !search_running && self.state.is_process_running() {
-                        self.update_change_tracker();
-                    }
-                    // Pull live memory into the in-progress edit buffer
-                    // independently of `update_change_tracker` — the tracker
-                    // bails out for huge result sets and during searches, but
-                    // an open editor only needs a single address re-read.
-                    if !search_running {
-                        self.sync_editing_buffer();
+                        ctx_search.searching = SearchMode::None;
                     }
                 }
 
-                let current_search_context = &self.state.searches[self.state.current_search];
-                if !matches!(current_search_context.searching, SearchMode::None) {
-                    sleep(Duration::from_millis(100));
-                    return Task::done(Message::Tick);
-                }
-                Task::none()
-            }
-            Message::Undo => {
-                if let Some(search_context) = self.state.searches.get_mut(self.state.current_search)
-                    && let Some(old) = search_context.old_results.pop()
-                {
-                    search_context.set_cached_results(old);
-                }
-                self.clear_change_tracker();
-                Task::none()
-            }
-            Message::ClearResults => {
-                if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
-                    search_context.clear_results(&self.state.freeze_sender);
-                }
-                self.editing_result = None;
-                self.clear_change_tracker();
-                Task::none()
-            }
-            Message::ToggleShowResult => {
-                self.state.show_results = !self.state.show_results;
-                Task::none()
-            }
-            Message::ResultValueChanged(index, value_text) => {
-                if let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle()
-                    && let Some(current_search) = self.state.searches.get_mut(self.state.current_search)
-                {
-                    // Collect all results
-                    let results = current_search.collect_results();
-
-                    if index < results.len() {
-                        let result = &results[index];
-                        match result.search_type.from_string(&value_text) {
-                            Ok(value) => {
-                                if let Err(err) = handle.put_address(result.addr, &value.1) {
-                                    self.state.push_error(AppError::MemoryWrite {
-                                        addr: result.addr,
-                                        source: err.to_string(),
-                                    });
-                                } else if current_search.freezed_addresses.contains(&result.addr)
-                                    && let Err(err) = self.state.freeze_sender.send(FreezeMessage {
-                                        msg: crate::MessageCommand::Freeze,
-                                        addr: result.addr,
-                                        value,
-                                    })
-                                {
-                                    self.state.push_error(AppError::FreezeChannelClosed { source: err.to_string() });
-                                }
-                            }
-                            Err(err) => {
-                                self.state.push_error(AppError::InvalidValue {
-                                    value: value_text,
-                                    source: err.to_string(),
-                                });
-                            }
-                        }
-                    } else {
-                        self.state.push_error(AppError::InvalidResultIndex { index });
-                    }
-                }
-                self.editing_result = None;
-                Task::none()
-            }
-            Message::ResultEditingBegin(index, text) => {
-                self.editing_result = Some((index, text.clone(), text));
-                icy_ui::widget::operation::focus(icy_ui::widget::Id::from(format!("result-value-{}-{index}", self.state.current_search)))
-            }
-            Message::ResultEditingChanged(index, text) => {
-                // Best-effort live write: if the buffered text parses cleanly,
-                // commit it to memory immediately so the user sees the value
-                // change in the running game while they're typing. Parse
-                // failures are silent here — the user is mid-edit.
-                if let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle()
-                    && let Some(current_search) = self.state.searches.get_mut(self.state.current_search)
-                {
-                    let results = current_search.collect_results();
-                    if let Some(result) = results.get(index)
-                        && let Ok(value) = result.search_type.from_string(&text)
-                    {
-                        let _ = handle.put_address(result.addr, &value.1);
-                        if current_search.freezed_addresses.contains(&result.addr) {
-                            let _ = self.state.freeze_sender.send(FreezeMessage {
-                                msg: crate::MessageCommand::Freeze,
-                                addr: result.addr,
-                                value,
-                            });
-                        }
-                    }
-                }
-                // User typed — break the link to the live snapshot so the
-                // periodic Tick stops overwriting the buffer until commit/cancel.
-                let snapshot = self.editing_result.as_ref().map(|(_, _, s)| s.clone()).unwrap_or_default();
-                self.editing_result = Some((index, text, snapshot));
-                Task::none()
-            }
-            Message::ResultEditingCommit(index) => {
-                if let Some((i, text, _)) = self.editing_result.take()
-                    && i == index
-                {
-                    return self.update(Message::ResultValueChanged(index, text));
-                }
-                Task::none()
-            }
-            Message::ResultEditingCancel => {
-                self.editing_result = None;
-                Task::none()
-            }
-            Message::ToggleFreeze(index) => {
-                if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
-                    // Collect all results
-                    let results = search_context.collect_results();
-
-                    if index < results.len() {
-                        let result = &results[index];
-                        let b = !search_context.freezed_addresses.contains(&result.addr);
-                        if b {
-                            search_context.freezed_addresses.insert(result.addr);
-                            if let Some(byte_len) = result.search_type.fixed_byte_length()
-                                && let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle()
-                                && let Ok(buf) = copy_address(result.addr, byte_len, &handle)
-                                && let Err(e) = self.state.freeze_sender.send(FreezeMessage {
-                                    msg: MessageCommand::Freeze,
-                                    addr: result.addr,
-                                    value: SearchValue(result.search_type, buf),
-                                })
-                            {
-                                self.state.push_error(AppError::FreezeChannelClosed { source: e.to_string() });
-                            }
-                        } else {
-                            search_context.freezed_addresses.remove(&(result.addr));
-                            if let Err(e) = self.state.freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr)) {
-                                self.state.push_error(AppError::FreezeChannelClosed { source: e.to_string() });
-                            }
-                        }
-                    }
-                }
-                Task::none()
-            }
-            Message::ToggleFreezeAll => {
-                let freeze_sender = self.state.freeze_sender.clone();
-                let pid = self.state.pid;
-                let mut send_error = None;
-                if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
-                    let results = search_context.collect_results();
-                    if results.is_empty() {
-                        return Task::none();
-                    }
-
-                    // Check if all are frozen - if so, unfreeze all; otherwise freeze all
-                    let all_frozen = results.iter().all(|r| search_context.freezed_addresses.contains(&r.addr));
-
-                    if all_frozen {
-                        // Unfreeze all
-                        for result in results.iter() {
-                            if search_context.freezed_addresses.remove(&result.addr)
-                                && let Err(e) = freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
-                            {
-                                send_error.get_or_insert_with(|| AppError::FreezeChannelClosed { source: e.to_string() });
-                            }
-                        }
-                    } else {
-                        // Freeze all
-                        if let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle() {
-                            for result in results.iter() {
-                                if !search_context.freezed_addresses.contains(&result.addr) {
-                                    search_context.freezed_addresses.insert(result.addr);
-                                    let Some(byte_len) = result.search_type.fixed_byte_length() else {
-                                        continue;
-                                    };
-                                    if let Ok(buf) = copy_address(result.addr, byte_len, &handle)
-                                        && let Err(e) = freeze_sender.send(FreezeMessage {
-                                            msg: MessageCommand::Freeze,
-                                            addr: result.addr,
-                                            value: SearchValue(result.search_type, buf),
-                                        })
-                                    {
-                                        send_error.get_or_insert_with(|| AppError::FreezeChannelClosed { source: e.to_string() });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if let Some(error) = send_error {
-                    self.state.push_error(error);
-                }
-                Task::none()
-            }
-            Message::RemoveResult(index) => {
-                let freeze_sender = self.state.freeze_sender.clone();
-                let mut send_error = None;
-                if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
-                    // Collect all results - now returns Arc<Vec<SearchResult>>
-                    let results = search_context.collect_results();
-
-                    if index < results.len() {
-                        // Remove any freeze for this address before removing it
-                        let result = &results[index];
-                        if search_context.freezed_addresses.contains(&result.addr) {
-                            search_context.freezed_addresses.remove(&result.addr);
-                            if let Err(e) = freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr)) {
-                                send_error = Some(AppError::FreezeChannelClosed { source: e.to_string() });
-                            }
-                        }
-
-                        // Save current results to old_results for undo functionality
-                        // Need to clone the underlying Vec here since we're modifying it
-                        search_context.old_results.push((*results).clone());
-
-                        // Create a new vector without the removed item
-                        let mut new_results = (*results).clone();
-                        new_results.remove(index);
-
-                        // Update the cached results
-                        search_context.set_cached_results(new_results);
-                    }
-                }
-                if let Some(error) = send_error {
-                    self.state.push_error(error);
-                }
-                Task::none()
-            }
-            Message::OpenEditor(index) => {
-                if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
-                    // Collect all results
-                    let results = search_context.collect_results();
-
-                    if index < results.len() {
-                        let result = &results[index];
-                        match self.memory_editor.initialize(self.state.pid, result.addr, result.search_type) {
-                            Ok(()) => {
-                                self.app_state = AppState::MemoryEditor;
-                                self.memory_editor_result_index = Some(index);
-                                return Task::batch([
-                                    self.memory_editor.snap_to_cursor(),
-                                    self.memory_editor.focus_grid(),
-                                    Task::done(Message::MemoryEditorTick),
-                                ]);
-                            }
-                            Err(err) => self.state.push_error(AppError::memory_editor(err)),
-                        }
-                    }
-                }
-                Task::none()
-            }
-            Message::CloseMemoryEditor => {
-                self.app_state = AppState::InProcess;
-                self.memory_editor_result_index = None;
-                self.memory_editor.reset_change_tracker();
-                Task::none()
-            }
-            Message::MemoryEditorCellChanged(offset, value) => {
-                // Validate and update the byte at the given offset
-                if value.len() <= 2
-                    && let Ok(byte_value) = u8::from_str_radix(&value, 16)
-                    && let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle()
-                    && let Some(address) = self.memory_editor.address_for_offset(offset)
-                    && let Err(err) = handle.put_address(address, &[byte_value])
-                {
-                    self.state.push_error(AppError::MemoryWrite {
-                        addr: address,
-                        source: err.to_string(),
-                    });
-                }
-                Task::none()
-            }
-
-            Message::MemoryEditorScroll(rows) => {
-                if !self.memory_editor.is_grid_focused() {
-                    return Task::none();
-                }
-                let offset = icy_ui::widget::operation::AbsoluteOffset {
-                    x: 0.0,
-                    y: rows as f32 * super::memory_editor::ROW_HEIGHT,
-                };
-                icy_ui::widget::operation::scroll_by(icy_ui::widget::Id::new("memory-editor-scroll"), offset)
-            }
-
-            Message::MemoryEditorPageUp => {
-                if !self.memory_editor.is_grid_focused() {
-                    return Task::none();
-                }
-                self.memory_editor.move_cursor(-(super::memory_editor::PAGE_ROWS as i32), 0);
-                self.memory_editor.ensure_cursor_visible()
-            }
-
-            Message::MemoryEditorPageDown => {
-                if !self.memory_editor.is_grid_focused() {
-                    return Task::none();
-                }
-                self.memory_editor.move_cursor(super::memory_editor::PAGE_ROWS as i32, 0);
-                self.memory_editor.ensure_cursor_visible()
-            }
-
-            Message::MemoryEditorMoveCursor(row_delta, col_delta) => {
-                if !self.memory_editor.is_grid_focused() {
-                    return Task::none();
-                }
-                let row_changed = self.memory_editor.move_cursor(row_delta, col_delta);
-                if row_changed {
-                    self.memory_editor.ensure_cursor_visible()
-                } else {
-                    Task::none()
-                }
-            }
-
-            Message::MemoryEditorSetCursor(row, col) => {
-                self.memory_editor.set_cursor(row, col);
-                Task::batch([self.memory_editor.ensure_cursor_visible(), self.memory_editor.focus_grid()])
-            }
-            Message::MemoryEditorBeginEdit => self.memory_editor.focus_grid(),
-            Message::MemoryEditorEndEdit => {
-                self.memory_editor.set_grid_focused(false);
-                Task::none()
-            }
-            Message::MemoryEditorKeyPressed(key, modifiers) => {
-                if modifiers.command()
-                    && let keyboard::Key::Character(c) = &key
-                    && matches!(c.as_str(), "z" | "Z")
-                {
-                    return if modifiers.shift() {
-                        Task::done(Message::MemoryEditorRedo)
-                    } else {
-                        Task::done(Message::MemoryEditorUndo)
-                    };
+                let search_running = self.state.searches.iter().any(|s| !matches!(s.searching, SearchMode::None));
+                if !search_running && self.state.is_process_running() {
+                    self.update_change_tracker();
                 }
 
-                match key {
-                    keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                        self.app_state = AppState::InProcess;
-                        self.memory_editor_result_index = None;
-                        self.memory_editor.reset_change_tracker();
-                        Task::none()
-                    }
-                    keyboard::Key::Named(keyboard::key::Named::Enter) => self.memory_editor.focus_grid(),
-                    keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-                        let row_changed = self.memory_editor.move_cursor(-1, 0);
-                        if row_changed {
-                            Task::batch([self.memory_editor.ensure_cursor_visible(), self.memory_editor.focus_grid()])
-                        } else {
-                            self.memory_editor.focus_grid()
-                        }
-                    }
-                    keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-                        let row_changed = self.memory_editor.move_cursor(1, 0);
-                        if row_changed {
-                            Task::batch([self.memory_editor.ensure_cursor_visible(), self.memory_editor.focus_grid()])
-                        } else {
-                            self.memory_editor.focus_grid()
-                        }
-                    }
-                    keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
-                        self.memory_editor.move_cursor(0, -1);
-                        self.memory_editor.focus_grid()
-                    }
-                    keyboard::Key::Named(keyboard::key::Named::ArrowRight) | keyboard::Key::Named(keyboard::key::Named::Tab) => {
-                        self.memory_editor.move_cursor(0, 1);
-                        self.memory_editor.focus_grid()
-                    }
-                    keyboard::Key::Named(keyboard::key::Named::PageUp) => {
-                        self.memory_editor.move_cursor(-(super::memory_editor::PAGE_ROWS as i32), 0);
-                        Task::batch([self.memory_editor.ensure_cursor_visible(), self.memory_editor.focus_grid()])
-                    }
-                    keyboard::Key::Named(keyboard::key::Named::PageDown) => {
-                        self.memory_editor.move_cursor(super::memory_editor::PAGE_ROWS as i32, 0);
-                        Task::batch([self.memory_editor.ensure_cursor_visible(), self.memory_editor.focus_grid()])
-                    }
-                    keyboard::Key::Character(c) => {
-                        let hex_digit = match c.as_str() {
-                            "0" => Some(0),
-                            "1" => Some(1),
-                            "2" => Some(2),
-                            "3" => Some(3),
-                            "4" => Some(4),
-                            "5" => Some(5),
-                            "6" => Some(6),
-                            "7" => Some(7),
-                            "8" => Some(8),
-                            "9" => Some(9),
-                            "a" | "A" => Some(10),
-                            "b" | "B" => Some(11),
-                            "c" | "C" => Some(12),
-                            "d" | "D" => Some(13),
-                            "e" | "E" => Some(14),
-                            "f" | "F" => Some(15),
-                            _ => None,
-                        };
-                        if let Some(hex_digit) = hex_digit {
-                            let cursor_row_before = self.memory_editor.cursor_row();
-                            if let Err(err) = self.memory_editor.edit_hex(self.state.pid, hex_digit) {
-                                self.state.push_error(AppError::memory_editor(err));
-                            }
-                            if self.memory_editor.cursor_row() != cursor_row_before {
-                                Task::batch([self.memory_editor.ensure_cursor_visible(), self.memory_editor.focus_grid()])
-                            } else {
-                                self.memory_editor.focus_grid()
-                            }
-                        } else {
-                            Task::none()
-                        }
-                    }
-                    _ => Task::none(),
-                }
+                // 30 Hz repaint for fluid live values.
+                ctx.request_repaint_after(Duration::from_millis(33));
             }
-            Message::MemoryEditorEditHex(hex_digit) => {
-                if !self.memory_editor.is_grid_focused() {
-                    return Task::none();
-                }
-                let cursor_row_before = self.memory_editor.cursor_row();
-                if let Err(err) = self.memory_editor.edit_hex(self.state.pid, hex_digit) {
-                    self.state.push_error(AppError::memory_editor(err));
-                }
-                if self.memory_editor.cursor_row() != cursor_row_before {
-                    self.memory_editor.ensure_cursor_visible()
-                } else {
-                    Task::none()
-                }
+            AppState::MemoryEditor => {
+                self.memory_editor.tick(self.state.pid as process_memory::Pid);
+                ctx.request_repaint_after(Duration::from_millis(33));
             }
-            Message::MemoryEditorInspectorValueChanged(kind, value) => {
-                self.memory_editor.set_inspector_value_text(kind, value);
-                self.memory_editor.set_grid_focused(false);
-                Task::none()
-            }
-            Message::MemoryEditorInspectorValueSubmit(kind) => {
-                match self.memory_editor.submit_inspector_value(self.state.pid, kind) {
-                    Ok(()) => {
-                        self.state.clear_errors();
-                        return self.memory_editor.focus_grid();
-                    }
-                    Err(err) => self.state.push_error(AppError::memory_editor(err)),
-                }
-                Task::none()
-            }
-            Message::MemoryEditorDataTypeChanged(search_type) => {
-                self.memory_editor.set_data_type(search_type);
+            _ => {}
+        }
 
-                if let Some(index) = self.memory_editor_result_index
-                    && let Some(current_search) = self.state.searches.get_mut(self.state.current_search)
-                {
-                    let results = current_search.collect_results();
-                    let mut updated_results = (*results).clone();
-                    if let Some(result) = updated_results.get_mut(index) {
-                        result.search_type = search_type;
-                        current_search.set_cached_results(updated_results);
-                        self.refresh_counter = self.refresh_counter.wrapping_add(1);
-                    }
-                }
-
-                self.memory_editor.focus_grid()
-            }
-            Message::MemoryEditorScrolled(viewport) => {
-                self.memory_editor.set_viewport_and_refresh(viewport, self.state.pid as process_memory::Pid);
-                self.memory_editor.focus_grid()
-            }
-            Message::MemoryEditorTick => {
-                if matches!(self.app_state, AppState::MemoryEditor) {
-                    self.memory_editor.tick(self.state.pid as process_memory::Pid);
-                    icy_ui::Task::perform(
-                        async {
-                            sleep(super::memory_editor::TICK_INTERVAL);
-                        },
-                        |_| Message::MemoryEditorTick,
-                    )
-                } else {
-                    Task::none()
-                }
-            }
-            Message::MemoryEditorFadeTick => {
-                if matches!(self.app_state, AppState::MemoryEditor) {
-                    self.memory_editor.tick_fade_animation();
-                }
-                Task::none()
-            }
-            Message::MemoryEditorUndo => {
-                if !self.memory_editor.is_grid_focused() {
-                    return Task::none();
-                }
-                match self.memory_editor.undo(self.state.pid) {
-                    Ok(Some(address)) => {
-                        self.state.clear_errors();
-                        if self.memory_editor.focus_on(address).is_ok() {
-                            return Task::batch([
-                                self.memory_editor.ensure_cursor_visible(),
-                                self.memory_editor.focus_grid(),
-                                Task::done(Message::MemoryEditorFadeTick),
-                            ]);
-                        }
-                        return Task::done(Message::MemoryEditorFadeTick);
-                    }
-                    Ok(None) => {}
-                    Err(err) => self.state.push_error(AppError::memory_editor(err)),
-                }
-                Task::none()
-            }
-            Message::MemoryEditorRedo => {
-                if !self.memory_editor.is_grid_focused() {
-                    return Task::none();
-                }
-                match self.memory_editor.redo(self.state.pid) {
-                    Ok(Some(address)) => {
-                        self.state.clear_errors();
-                        if self.memory_editor.focus_on(address).is_ok() {
-                            return Task::batch([
-                                self.memory_editor.ensure_cursor_visible(),
-                                self.memory_editor.focus_grid(),
-                                Task::done(Message::MemoryEditorFadeTick),
-                            ]);
-                        }
-                        return Task::done(Message::MemoryEditorFadeTick);
-                    }
-                    Ok(None) => {}
-                    Err(err) => self.state.push_error(AppError::memory_editor(err)),
-                }
-                Task::none()
-            }
-            Message::SortProcesses(column) => {
-                if self.process_sort_column == column {
-                    // Toggle direction if clicking same column
-                    self.process_sort_direction = match self.process_sort_direction {
-                        SortDirection::Ascending => SortDirection::Descending,
-                        SortDirection::Descending => SortDirection::Ascending,
-                    };
-                } else {
-                    // New column, default to ascending
-                    self.process_sort_column = column;
-                    self.process_sort_direction = SortDirection::Ascending;
-                }
-                icy_ui::Task::none()
-            }
-
-            Message::UnknownSearchDecrease => {
-                if let Some(ctx) = self.state.searches.get_mut(self.state.current_search) {
-                    ctx.unknown_comparison = Some(UnknownComparison::Decreased);
-                }
-                self.state.unknown_search_compare(self.state.current_search, UnknownComparison::Decreased);
-                Task::none()
-            }
-
-            Message::UnknownSearchIncrease => {
-                if let Some(ctx) = self.state.searches.get_mut(self.state.current_search) {
-                    ctx.unknown_comparison = Some(UnknownComparison::Increased);
-                }
-                self.state.unknown_search_compare(self.state.current_search, UnknownComparison::Increased);
-                Task::none()
-            }
-            Message::UnknownSearchChanged => {
-                if let Some(ctx) = self.state.searches.get_mut(self.state.current_search) {
-                    ctx.unknown_comparison = Some(UnknownComparison::Changed);
-                }
-                self.state.unknown_search_compare(self.state.current_search, UnknownComparison::Changed);
-                Task::none()
-            }
-            Message::UnknownSearchUnchanged => {
-                if let Some(ctx) = self.state.searches.get_mut(self.state.current_search) {
-                    ctx.unknown_comparison = Some(UnknownComparison::Unchanged);
-                }
-                self.state.unknown_search_compare(self.state.current_search, UnknownComparison::Unchanged);
-                Task::none()
-            }
-            Message::FocusNext => focus_next(),
-            Message::FocusPrevious => focus_previous(),
-
-            Message::SaveCheatTable => {
-                let path = crate::default_cheat_table_path(&self.state.process_name);
-                match crate::save_cheat_table(&self.state, &path) {
-                    Ok(()) => self.cheat_table_status = format!("Saved: {}", path.display()),
-                    Err(e) => self.cheat_table_status = format!("Save error: {e}"),
-                }
-                Task::none()
-            }
-
-            Message::LoadCheatTable => {
-                let path = crate::default_cheat_table_path(&self.state.process_name);
-                match crate::load_cheat_table(&path, &self.state.process_name) {
-                    Ok(searches) => {
-                        self.state.searches = searches;
-                        self.state.current_search = 0;
-                        self.editing_result = None;
-                        self.clear_change_tracker();
-                        self.cheat_table_status = format!("Loaded: {}", path.display());
-                    }
-                    Err(e) => self.cheat_table_status = format!("Load error: {e}"),
-                }
-                Task::none()
-            }
-            Message::ToggleHexDisplay => {
-                self.hex_display = !self.hex_display;
-                self.persist_settings();
-                Task::none()
-            }
-            Message::ToggleAutoReconnect => {
-                self.auto_reconnect = !self.auto_reconnect;
-                self.persist_settings();
-                Task::none()
-            }
-            Message::ToggleCheckForUpdates => {
-                self.check_for_updates = !self.check_for_updates;
-                self.persist_settings();
-                Task::none()
-            }
-            Message::UpdateCheckCompleted(latest) => {
-                if let Some(tag) = latest
-                    && crate::update_check::is_newer(&tag, crate::VERSION)
-                {
-                    self.latest_version = Some(tag);
-                }
-                Task::none()
-            }
-            Message::OpenLatestRelease => {
-                let _ = webbrowser::open("https://github.com/mkrueger/game_cheetah/releases/latest");
-                Task::none()
-            }
-            Message::OpenConfigDir => {
-                let path = crate::config_dir();
-                if let Err(e) = std::fs::create_dir_all(&path) {
-                    self.state.push_error(AppError::Generic {
-                        message: format!("Cannot create {}: {e}", path.display()),
-                    });
-                } else if let Err(e) = opener::open(&path) {
-                    self.state.push_error(AppError::Generic {
-                        message: format!("Cannot open {}: {e}", path.display()),
-                    });
-                }
-                Task::none()
-            }
-            Message::CopyConfigDir => icy_ui::clipboard::STANDARD.write_text(crate::config_dir().display().to_string()),
-            Message::DismissError => {
-                self.state.dismiss_error();
-                Task::none()
-            }
-        };
-        Task::batch([update_check_task, message_task])
-    }
-
-    fn clear_change_tracker(&mut self) {
-        self.value_change_tracker.clear();
-        self.changed_addresses.clear();
+        // Prune expired change highlights so rows return to their default
+        // appearance at the next frame (and the tracker doesn't grow
+        // unboundedly while scanning long sessions).
+        self.changed_addresses.retain(|_, t| t.elapsed() < CHANGE_HIGHLIGHT);
     }
 
     /// Read current values for all results in the active search and record
     /// which addresses changed since the last call.
-    ///
-    /// Skipped entirely if the result set exceeds `MAX_TRACKED_RESULTS` to keep
-    /// the UI responsive. Callers must also avoid invoking this while a search
-    /// is in progress (intermediate result sets can be enormous).
     fn update_change_tracker(&mut self) {
         /// Upper bound on the number of results we'll re-read per tick.
-        /// At ~1 syscall per address, going much beyond this stalls the UI thread.
+        /// At ~1 syscall per address, going much beyond this stalls the UI.
         const MAX_TRACKED_RESULTS: usize = 4096;
 
         let search_index = self.state.current_search;
         let results = self.state.searches[search_index].collect_results();
         if results.len() > MAX_TRACKED_RESULTS {
-            // Too many candidates to poll every tick — user needs to filter further.
-            self.clear_change_tracker();
+            self.value_change_tracker.clear();
+            self.changed_addresses.clear();
             return;
         }
         let pid = self.state.pid;
         let hex_display = self.hex_display;
-        let counter = self.refresh_counter;
+        let now = Instant::now();
 
-        // Snapshot the strings we need for string-typed result reads without
-        // keeping a borrow on `self.state` across the mutable
-        // `value_change_tracker` updates below.
         let search_value_text = self.state.searches[search_index].search_value_text.clone();
         let string_byte_len = search_value_text.len();
         let string_char_count = search_value_text.chars().count();
 
-        // Open the process handle once for the whole pass instead of per result.
         let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle() else {
             return;
         };
 
         for result in results.iter() {
-            // Read the value the same way the renderer would, so the cached
-            // string is exactly what the row displays. Numeric types use
-            // `copy_address` + `SearchValue`; string types go through the
-            // shared `read_string_from_process` helper so the cached text
-            // matches the row's NUL-terminated, length-bounded read.
             let value_str = if let Some(byte_len) = result.search_type.fixed_byte_length() {
                 let Ok(buf) = copy_address(result.addr, byte_len, &handle) else { continue };
                 let val = SearchValue(result.search_type, buf);
@@ -1095,7 +279,7 @@ impl App {
             } else if matches!(result.search_type, SearchType::String | SearchType::StringUtf16) {
                 let utf16 = result.search_type == SearchType::StringUtf16;
                 let max_bytes = if utf16 { string_char_count * 2 } else { string_byte_len };
-                let Some(s) = crate::ui::in_process_view::read_string_from_process(pid as process_memory::Pid, result.addr, utf16, max_bytes) else {
+                let Some(s) = in_process_view::read_string_from_process(pid as process_memory::Pid, result.addr, utf16, max_bytes) else {
                     continue;
                 };
                 s
@@ -1107,184 +291,358 @@ impl App {
             if let Some(prev_val) = prev
                 && prev_val != value_str
             {
-                self.changed_addresses.insert(result.addr, counter);
+                self.changed_addresses.insert(result.addr, now);
             }
         }
 
-        // Prune addresses no longer in the result set (O(n) via a single pass over results).
+        // Prune addresses no longer in the result set.
         let live: std::collections::HashSet<usize> = results.iter().map(|r| r.addr).collect();
         self.value_change_tracker.retain(|addr, _| live.contains(addr));
         self.changed_addresses.retain(|addr, _| live.contains(addr));
     }
 
-    /// While a row is being edited, refresh the buffered text from the live
-    /// memory value as long as the user hasn't typed since the last sync.
-    /// Without this the input keeps showing the value that was current when
-    /// editing began, even after the game has changed memory many times.
-    ///
-    /// Reads memory directly instead of going through `value_change_tracker`
-    /// so the editor stays current even when the tracker is skipped (large
-    /// result sets, in-flight searches, briefly stale `is_process_running`
-    /// throttle window).
-    fn sync_editing_buffer(&mut self) {
-        let Some((idx, buffer, snapshot)) = self.editing_result.as_mut() else {
+    pub fn clear_change_tracker(&mut self) {
+        self.value_change_tracker.clear();
+        self.changed_addresses.clear();
+    }
+
+    // ---- Actions invoked from the views --------------------------------
+
+    pub fn attach_action(&mut self) {
+        self.state.update_process_data();
+        self.app_state = AppState::ProcessSelection;
+    }
+
+    pub fn select_process(&mut self, process: &crate::ProcessInfo) {
+        self.state.select_process(process);
+        self.app_state = AppState::InProcess;
+        self.state.process_filter.clear();
+    }
+
+    pub fn back_to_main_menu(&mut self) {
+        self.app_state = AppState::MainWindow;
+        self.state = GameCheetahEngine::default();
+        self.clear_change_tracker();
+        self.editing_result = None;
+    }
+
+    pub fn new_search(&mut self) {
+        self.state.new_search();
+        self.clear_change_tracker();
+    }
+
+    pub fn close_search(&mut self, index: usize) {
+        if index >= self.state.searches.len() {
+            return;
+        }
+        self.state.remove_freezes(index);
+        self.state.searches.remove(index);
+        if self.state.searches.is_empty() {
+            self.state.current_search = 0;
+            self.state.new_search();
+        } else if self.state.current_search > index {
+            self.state.current_search -= 1;
+        } else if self.state.current_search >= self.state.searches.len() {
+            self.state.current_search = self.state.searches.len() - 1;
+        }
+        self.clear_change_tracker();
+    }
+
+    pub fn switch_search(&mut self, index: usize) {
+        if index < self.state.searches.len() {
+            self.state.current_search = index;
+            self.editing_result = None;
+            self.clear_change_tracker();
+        }
+    }
+
+    pub fn begin_rename_search(&mut self, index: usize) {
+        if let Some(search) = self.state.searches.get(index) {
+            self.rename_search_text = search.description.clone();
+            self.renaming_search_index = Some(index);
+        }
+    }
+
+    pub fn commit_rename_search(&mut self) {
+        if let Some(index) = self.renaming_search_index
+            && let Some(search) = self.state.searches.get_mut(index)
+        {
+            search.description = self.rename_search_text.clone();
+        }
+        self.renaming_search_index = None;
+        self.rename_search_text.clear();
+    }
+
+    pub fn cancel_rename_search(&mut self) {
+        self.renaming_search_index = None;
+        self.rename_search_text.clear();
+    }
+
+    pub fn start_search(&mut self) {
+        let search_index = self.state.current_search;
+        let Some(current_search) = self.state.searches.get_mut(search_index) else {
             return;
         };
+        let search_type = current_search.search_type;
+        if search_type == SearchType::Unknown {
+            self.state.take_memory_snapshot(search_index);
+            return;
+        }
+        if current_search.search_value_text.is_empty() {
+            return;
+        }
+        match search_type.from_string(&current_search.search_value_text) {
+            Ok(_) => {
+                let has_results = current_search.get_result_count() > 0;
+                if !has_results || search_type == SearchType::String {
+                    self.state.initial_search(search_index);
+                } else {
+                    self.state.filter_searches(search_index);
+                }
+            }
+            Err(err) => {
+                self.state.push_error(AppError::SearchValueParse { source: err });
+            }
+        }
+    }
+
+    pub fn unknown_search(&mut self, comparison: crate::UnknownComparison) {
+        if let Some(ctx) = self.state.searches.get_mut(self.state.current_search) {
+            ctx.unknown_comparison = Some(comparison);
+        }
+        self.state.unknown_search_compare(self.state.current_search, comparison);
+    }
+
+    pub fn undo_search(&mut self) {
+        if let Some(search_context) = self.state.searches.get_mut(self.state.current_search)
+            && let Some(old) = search_context.old_results.pop()
+        {
+            search_context.set_cached_results(old);
+        }
+        self.clear_change_tracker();
+    }
+
+    pub fn clear_results(&mut self) {
+        if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
+            search_context.clear_results(&self.state.freeze_sender);
+        }
+        self.editing_result = None;
+        self.clear_change_tracker();
+    }
+
+    pub fn toggle_freeze(&mut self, index: usize) {
+        let Some(search_context) = self.state.searches.get_mut(self.state.current_search) else {
+            return;
+        };
+        let results = search_context.collect_results();
+        let Some(result) = results.get(index).copied() else {
+            return;
+        };
+        let now_freeze = !search_context.freezed_addresses.contains(&result.addr);
+        if now_freeze {
+            search_context.freezed_addresses.insert(result.addr);
+            if let Some(byte_len) = result.search_type.fixed_byte_length()
+                && let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle()
+                && let Ok(buf) = copy_address(result.addr, byte_len, &handle)
+                && let Err(e) = self.state.freeze_sender.send(FreezeMessage {
+                    msg: MessageCommand::Freeze,
+                    addr: result.addr,
+                    value: SearchValue(result.search_type, buf),
+                })
+            {
+                self.state.push_error(AppError::FreezeChannelClosed { source: e.to_string() });
+            }
+        } else {
+            search_context.freezed_addresses.remove(&result.addr);
+            if let Err(e) = self.state.freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr)) {
+                self.state.push_error(AppError::FreezeChannelClosed { source: e.to_string() });
+            }
+        }
+    }
+
+    pub fn toggle_freeze_all(&mut self) {
+        let freeze_sender = self.state.freeze_sender.clone();
+        let pid = self.state.pid;
+        let mut send_error = None;
+        if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
+            let results = search_context.collect_results();
+            if results.is_empty() {
+                return;
+            }
+            let all_frozen = results.iter().all(|r| search_context.freezed_addresses.contains(&r.addr));
+            if all_frozen {
+                for result in results.iter() {
+                    if search_context.freezed_addresses.remove(&result.addr)
+                        && let Err(e) = freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
+                    {
+                        send_error.get_or_insert_with(|| AppError::FreezeChannelClosed { source: e.to_string() });
+                    }
+                }
+            } else if let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle() {
+                for result in results.iter() {
+                    if !search_context.freezed_addresses.contains(&result.addr) {
+                        search_context.freezed_addresses.insert(result.addr);
+                        let Some(byte_len) = result.search_type.fixed_byte_length() else {
+                            continue;
+                        };
+                        if let Ok(buf) = copy_address(result.addr, byte_len, &handle)
+                            && let Err(e) = freeze_sender.send(FreezeMessage {
+                                msg: MessageCommand::Freeze,
+                                addr: result.addr,
+                                value: SearchValue(result.search_type, buf),
+                            })
+                        {
+                            send_error.get_or_insert_with(|| AppError::FreezeChannelClosed { source: e.to_string() });
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(error) = send_error {
+            self.state.push_error(error);
+        }
+    }
+
+    pub fn remove_result(&mut self, index: usize) {
+        let freeze_sender = self.state.freeze_sender.clone();
+        let mut send_error = None;
+        if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
+            let results = search_context.collect_results();
+            if index < results.len() {
+                let result = results[index];
+                if search_context.freezed_addresses.remove(&result.addr)
+                    && let Err(e) = freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
+                {
+                    send_error = Some(AppError::FreezeChannelClosed { source: e.to_string() });
+                }
+                search_context.old_results.push((*results).clone());
+                let mut new_results = (*results).clone();
+                new_results.remove(index);
+                search_context.set_cached_results(new_results);
+            }
+        }
+        if let Some(error) = send_error {
+            self.state.push_error(error);
+        }
+        self.clear_change_tracker();
+    }
+
+    /// Write the typed value back to the target process. Returns whether the
+    /// write succeeded.
+    pub fn commit_result_value(&mut self, index: usize, value_text: &str) -> bool {
+        let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle() else {
+            return false;
+        };
+        let Some(current_search) = self.state.searches.get_mut(self.state.current_search) else {
+            return false;
+        };
+        let results = current_search.collect_results();
+        let Some(result) = results.get(index).copied() else {
+            return false;
+        };
+        match result.search_type.from_string(value_text) {
+            Ok(value) => {
+                if let Err(err) = handle.put_address(result.addr, &value.1) {
+                    self.state.push_error(AppError::MemoryWrite {
+                        addr: result.addr,
+                        source: err.to_string(),
+                    });
+                    return false;
+                }
+                if current_search.freezed_addresses.contains(&result.addr)
+                    && let Err(err) = self.state.freeze_sender.send(FreezeMessage {
+                        msg: MessageCommand::Freeze,
+                        addr: result.addr,
+                        value,
+                    })
+                {
+                    self.state.push_error(AppError::FreezeChannelClosed { source: err.to_string() });
+                }
+                true
+            }
+            Err(err) => {
+                self.state.push_error(AppError::InvalidValue {
+                    value: value_text.to_owned(),
+                    source: err,
+                });
+                false
+            }
+        }
+    }
+
+    pub fn open_memory_editor(&mut self, index: usize) {
         let Some(search_context) = self.state.searches.get(self.state.current_search) else {
             return;
         };
         let results = search_context.collect_results();
-        let Some(result) = results.get(*idx) else { return };
-        let Some(byte_len) = result.search_type.fixed_byte_length() else {
+        let Some(result) = results.get(index).copied() else {
             return;
         };
-        let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle() else {
-            return;
-        };
-        let Ok(buf) = copy_address(result.addr, byte_len, &handle) else {
-            return;
-        };
-        let val = SearchValue(result.search_type, buf);
-        let live = if self.hex_display { val.to_hex_string() } else { val.to_string() };
-
-        if buffer == snapshot {
-            // User has not typed since the last sync — adopt the new live
-            // value (even if equal to the snapshot, the assignment is a
-            // no-op so the early-out is just an optimization).
-            if *buffer != live {
-                *buffer = live.clone();
+        match self.memory_editor.initialize(self.state.pid, result.addr, result.search_type) {
+            Ok(()) => {
+                self.app_state = AppState::MemoryEditor;
+                self.memory_editor_result_index = Some(index);
             }
-            *snapshot = live;
-        } else {
-            // User typed; just keep the snapshot up to date so the next
-            // time the typed buffer happens to coincide with live again,
-            // sync resumes (e.g., after they erase their edit).
-            *snapshot = live;
+            Err(err) => self.state.push_error(AppError::memory_editor(err)),
         }
     }
 
-    pub fn theme(&self) -> Theme {
-        Theme::dark().clone()
+    pub fn close_memory_editor(&mut self) {
+        self.app_state = AppState::InProcess;
+        self.memory_editor_result_index = None;
+        self.memory_editor.reset_change_tracker();
     }
 
-    pub fn view(&self) -> Element<'_, Message> {
+    pub fn save_cheat_table(&mut self) {
+        let path = crate::default_cheat_table_path(&self.state.process_name);
+        match crate::save_cheat_table(&self.state, &path) {
+            Ok(()) => self.cheat_table_status = format!("Saved: {}", path.display()),
+            Err(e) => self.cheat_table_status = format!("Save error: {e}"),
+        }
+    }
+
+    pub fn load_cheat_table(&mut self) {
+        let path = crate::default_cheat_table_path(&self.state.process_name);
+        match crate::load_cheat_table(&path, &self.state.process_name) {
+            Ok(searches) => {
+                self.state.searches = searches;
+                self.state.current_search = 0;
+                self.editing_result = None;
+                self.clear_change_tracker();
+                self.cheat_table_status = format!("Loaded: {}", path.display());
+            }
+            Err(e) => self.cheat_table_status = format!("Load error: {e}"),
+        }
+    }
+}
+
+impl eframe::App for App {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.start_update_check_if_needed();
+        self.poll_update_check();
+        self.tick(ctx);
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Render based on current screen.
         match self.app_state {
-            AppState::MainWindow => crate::main_window::view_main_window(self),
-            AppState::Settings => crate::main_window::view_settings(self),
-            AppState::About => container(
-                column![
-                    container(text(fl!(crate::LANGUAGE_LOADER, "about-dialog-heading")).size(24))
-                        .width(Length::Fill)
-                        .align_x(alignment::Alignment::Center),
-                    text(fl!(crate::LANGUAGE_LOADER, "about-dialog-description")).size(16),
-                    container(
-                        button(text(fl!(crate::LANGUAGE_LOADER, "close-button")))
-                            .on_press(Message::MainMenu)
-                            .padding(10)
-                    )
-                    .width(Length::Fill)
-                    .align_x(alignment::Alignment::Center)
-                ]
-                .spacing(20)
-                .padding(crate::DIALOG_PADDING),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
-            AppState::ProcessSelection => crate::process_selection::view_process_selection(self),
-            AppState::InProcess => crate::in_process_view::show_search_in_process_view(self),
-            AppState::MemoryEditor => self.memory_editor.show_memory_editor(self),
+            AppState::MainWindow => main_window::view_main_window(self, ui),
+            AppState::Settings => main_window::view_settings(self, ui),
+            AppState::About => main_window::view_about(self, ui),
+            AppState::ProcessSelection => process_selection::view_process_selection(self, ui),
+            AppState::InProcess => in_process_view::view_in_process(self, ui),
+            AppState::MemoryEditor => crate::ui::memory_editor::view_memory_editor(self, ui),
         }
-    }
 
-    pub fn subscription(&self) -> icy_ui::Subscription<Message> {
-        // Periodic refresh while showing live result rows so the values
-        // re-read memory and update on screen. ~30 Hz keeps fast-changing
-        // game values (position, velocity, ammo) visually fluid without
-        // overwhelming the memory-read path.
-        let live_results_tick = if matches!(self.app_state, AppState::InProcess) {
-            icy_ui::time::every(Duration::from_millis(33)).map(|_| Message::Tick)
-        } else {
-            icy_ui::Subscription::none()
-        };
-
-        // Keep the process list fresh while the user is picking a process so
-        // newly launched games appear and exited ones disappear without a
-        // manual refresh. The actual scan is throttled inside `update()` to
-        // at most once every 500 ms.
-        let process_list_tick = if matches!(self.app_state, AppState::ProcessSelection) {
-            icy_ui::time::every(Duration::from_millis(1000)).map(|_| Message::TickProcess)
-        } else {
-            icy_ui::Subscription::none()
-        };
-
-        // Fade highlights are time-based (`Instant::now()` in the view), so
-        // they need redraws even when the memory bytes themselves are not
-        // changing. This drives only the animation; it does not re-read target
-        // process memory.
-        let memory_editor_fade_tick = if matches!(self.app_state, AppState::MemoryEditor) && self.memory_editor.has_active_fades() {
-            icy_ui::time::every(Duration::from_millis(16)).map(|_| Message::MemoryEditorFadeTick)
-        } else {
-            icy_ui::Subscription::none()
-        };
-
-        let keyboard_sub: icy_ui::Subscription<Message> = if matches!(self.app_state, AppState::MemoryEditor) {
-            icy_ui::Subscription::none()
-        } else if self.renaming_search_index.is_some() {
-            // Only subscribe to ESC when renaming
-            keyboard::listen().filter_map(|event| {
-                let keyboard::Event::KeyPressed { key, .. } = event else {
-                    return None;
-                };
-                match key {
-                    keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::CancelRenameSearch),
-                    _ => None,
+        // Global escape handling for dismissable dialogs.
+        if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+            match self.app_state {
+                AppState::ProcessSelection | AppState::About | AppState::Settings => {
+                    self.app_state = AppState::MainWindow;
                 }
-            })
-        } else {
-            // Tab/Shift+Tab for focus navigation in normal mode. Also map
-            // Escape to "back to main menu" while showing the secondary
-            // dialogs (process picker, About, Settings) so the user can
-            // dismiss them without reaching for the close button.
-            //
-            // The closure must be non-capturing per icy_ui's Subscription
-            // contract, so the current AppState is plumbed through with
-            // `Subscription::with` and matched inside the closure.
-            keyboard::listen().with(self.app_state).filter_map(|(state, event)| {
-                let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
-                    return None;
-                };
-                let dismissable = matches!(state, AppState::ProcessSelection | AppState::About | AppState::Settings);
-                match key {
-                    keyboard::Key::Named(keyboard::key::Named::Tab) => {
-                        if modifiers.shift() {
-                            Some(Message::FocusPrevious)
-                        } else {
-                            Some(Message::FocusNext)
-                        }
-                    }
-                    keyboard::Key::Named(keyboard::key::Named::Escape) if dismissable => Some(Message::MainMenu),
-                    _ => None,
-                }
-            })
-        };
-        // Escape on dismissable dialogs (process picker, About, Settings)
-        // needs to fire regardless of whether some focused widget already
-        // marked the event as captured, so use `event::listen_with` instead
-        // of `keyboard::listen()` (which only sees Status::Ignored events).
-        // The handler must be a non-capturing `fn`, so the AppState filter
-        // happens in `update` (`Message::DismissDialog`).
-        let dismiss_sub = if matches!(self.app_state, AppState::ProcessSelection | AppState::About | AppState::Settings) {
-            icy_ui::event::listen_with(|event, _status, _window| match event {
-                icy_ui::Event::Keyboard(keyboard::Event::KeyPressed {
-                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
-                    ..
-                }) => Some(Message::DismissDialog),
-                _ => None,
-            })
-        } else {
-            icy_ui::Subscription::none()
-        };
-        icy_ui::Subscription::batch([live_results_tick, process_list_tick, memory_editor_fade_tick, dismiss_sub, keyboard_sub])
+                AppState::MemoryEditor => self.close_memory_editor(),
+                _ => {}
+            }
+        }
     }
 }

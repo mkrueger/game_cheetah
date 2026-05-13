@@ -1,1668 +1,399 @@
-use std::cell::RefCell;
+//! Minimal hex/ASCII memory editor.
+//!
+//! The pre-port editor was ~1700 lines of retained-mode plumbing (custom
+//! focus state, virtualized scrolling, inspector, undo/redo, fade animations).
+//! This egui port keeps the essential viewer/editor behavior — load the region
+//! containing an address, show a hex grid with ASCII column, click-to-edit a
+//! byte, periodic refresh, and a jump-to-address bar. Inspector / undo can be
+//! re-added incrementally; the underlying [`crate::state`] code that does the
+//! actual memory reads/writes is unchanged.
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use i18n_embed_fl::fl;
-use icy_ui::{
-    Element, Length, Task, alignment,
-    border::Radius,
-    widget::{Id, operation, rule, scrollable::Viewport, text_input},
-};
 use proc_maps::get_process_maps;
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 
-use crate::{DIALOG_PADDING, SearchType, app::App, focusable_area::FocusableArea, message::Message};
+use crate::{SearchType, ui::app::App};
 
 pub const BYTES_PER_ROW: usize = 16;
 pub const ROW_HEIGHT: f32 = 22.0;
-pub const PAGE_ROWS: usize = 16;
-/// Cadence at which the editor re-reads visible bytes to drive change
-/// highlighting. Visible rows are read in contiguous region spans, so a
-/// typical viewport costs one `copy_address` per mapped region, not per row.
-pub const TICK_INTERVAL: Duration = Duration::from_millis(33);
-/// How long a byte change stays visibly tinted before fading back to the
-/// regular cell appearance.
+const VISIBLE_ROWS_DEFAULT: usize = 32;
 const CHANGE_FADE: Duration = Duration::from_millis(1500);
-/// Cap on the number of remembered byte observations. Bounded so a long
-/// session that scrolls through many regions can't grow unbounded.
-const CHANGE_TRACKER_CAP: usize = 16384;
-
-/// Map of every recently-observed address to the most recent byte value seen
-/// there and, when known, the timestamp of the last observed transition. The
-/// timestamp is `None` for cells we've only ever observed once — those have
-/// no observed change yet and therefore must not flash.
-type ChangeTracker = HashMap<usize, (u8, Option<Instant>)>;
-
-/// Cap on the number of remembered undo/redo entries. Each entry is at most
-/// 8 bytes of payload, so the bound is generous.
-const UNDO_STACK_CAP: usize = 1024;
-
-/// A single user-initiated write that can be undone or redone.
-#[derive(Debug, Clone)]
-struct UndoEntry {
-    address: usize,
-    /// Bytes that were at `address` *before* the write — replaying these
-    /// restores the previous state.
-    before: Vec<u8>,
-    /// Bytes that the user wrote — replaying these reapplies the change on
-    /// redo.
-    after: Vec<u8>,
-}
-
-const SCROLL_ID: &str = "memory-editor-scroll";
-const GRID_FOCUS_ID: &str = "memory-editor-grid-focus";
-
-fn scroll_id() -> Id {
-    Id::new(SCROLL_ID)
-}
-
-fn grid_focus_id() -> Id {
-    Id::new(GRID_FOCUS_ID)
-}
-
-fn format_relative_offset(origin: usize, address: usize) -> String {
-    let delta = address as i128 - origin as i128;
-    if delta < 0 { format!("-0x{:X}", -delta) } else { format!("+0x{delta:X}") }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InspectorValueKind {
-    U8,
-    I8,
-    U16,
-    I16,
-    U32,
-    I32,
-    U64,
-    I64,
-    F32,
-    F64,
-}
 
 #[derive(Debug, Clone)]
-struct MemoryRegion {
+struct Region {
     start: usize,
     size: usize,
-    row_start: usize,
-    row_count: usize,
     readable: bool,
     writable: bool,
-    executable: bool,
     name: String,
-}
-
-impl MemoryRegion {
-    fn end(&self) -> usize {
-        self.start.saturating_add(self.size)
-    }
-
-    fn contains_address(&self, address: usize) -> bool {
-        address >= self.start && address < self.end()
-    }
-
-    fn contains_row(&self, row: usize) -> bool {
-        row >= self.row_start && row < self.row_start + self.row_count
-    }
-
-    fn row_address(&self, row: usize) -> usize {
-        self.start.saturating_add((row - self.row_start) * BYTES_PER_ROW)
-    }
 }
 
 #[derive(Default)]
 pub struct MemoryEditor {
-    regions: Vec<MemoryRegion>,
-    cursor_row: usize,
-    cursor_col: usize,
-    cursor_nibble: usize, // 0 = high nibble, 1 = low nibble
+    regions: Vec<Region>,
+    /// Origin address the editor was opened at (highlighted in the grid).
+    origin_address: usize,
+    /// First byte address currently shown in the grid view.
+    view_address: usize,
+    /// Number of bytes to load per refresh.
+    view_bytes: usize,
+    /// Most recent snapshot of the visible bytes. `None` for bytes that
+    /// failed to read.
+    snapshot: Vec<Option<u8>>,
+    /// Last observed byte and timestamp of last change at each address.
+    /// Drives the brief "changed" highlight.
+    change_tracker: HashMap<usize, (u8, Instant)>,
 
-    editor_initial_address: usize,
-    editor_initial_size: usize,
-    editor_data_type: Option<SearchType>,
+    /// Text content of the "Go to address" input box.
+    address_input: String,
 
-    /// Latest viewport reported by the scroll area. Used to decide whether the
-    /// cursor row is on-screen and to compute the minimal scroll required to
-    /// keep it visible.
-    viewport: Option<Viewport>,
+    /// Last selected data type used by the inspector / SearchType label.
+    data_type: Option<SearchType>,
 
-    inspector_edit: Option<(InspectorValueKind, String)>,
-
-    /// Stack of recent writes for `Ctrl+Z`. Each entry remembers the bytes
-    /// that were *replaced* by a single user-initiated write so undoing can
-    /// put them back. Bounded to keep memory bounded across long sessions.
-    undo_stack: Vec<UndoEntry>,
-    /// Writes that were undone and can be replayed via `Shift+Ctrl+Z`.
-    /// Cleared whenever a fresh write happens.
-    redo_stack: Vec<UndoEntry>,
-
-    /// Last observed byte value and, when applicable, the moment it last
-    /// transitioned to that value. The view re-reads the visible rows and
-    /// updates this map so cells that just changed get a brief highlight
-    /// that fades out over [`CHANGE_FADE`]. The timestamp is `None` for
-    /// cells we've only ever observed once — those have no observed
-    /// transition and therefore must not flash.
-    change_tracker: Rc<RefCell<ChangeTracker>>,
-
-    /// Most recently read bytes for visible (and slightly over-scanned) rows,
-    /// keyed by absolute row index. Populated by [`MemoryEditor::tick`] so the
-    /// row renderer never has to issue a `copy_address` — it just looks up
-    /// bytes here. Doing the syscalls in the tick instead of per-redraw is
-    /// what stops the editor from blanking and feeling slow.
-    visible_bytes: HashMap<usize, ([u8; BYTES_PER_ROW], usize)>,
-
-    /// Incremented by animation ticks while a change highlight is fading.
-    /// The fade alpha itself is time-based, but mutating this field gives the
-    /// application state a cheap, explicit redraw driver that does not need to
-    /// re-read process memory.
-    fade_frame: u64,
-
-    /// Whether the hex grid currently "owns" keyboard focus. We track this
-    /// ourselves instead of relying on iced's focus operation because the
-    /// grid is composed of many non-focusable cells; there is no real
-    /// focusable target to point iced at. The flag is flipped by user
-    /// interactions: clicking inside the grid (or opening / jumping /
-    /// scrolling / committing an edit) sets it to `true`; typing into the
-    /// address bar or inspector sets it to `false`. Hex/cursor keystrokes
-    /// are only acted upon when this flag is `true`, and the grid draws an
-    /// accent border when focused so the user has a clear visual cue.
-    grid_focused: bool,
+    /// Pending edit: (offset within view, partial hex text, original byte).
+    editing: Option<(usize, String)>,
 }
 
 impl MemoryEditor {
-    pub fn cursor_row(&self) -> usize {
-        self.cursor_row
-    }
-
-    fn total_rows(&self) -> usize {
-        self.regions.last().map_or(1, |region| region.row_start + region.row_count).max(1)
-    }
-
-    fn region_for_row_in(regions: &[MemoryRegion], row: usize) -> Option<&MemoryRegion> {
-        regions.iter().find(|region| region.contains_row(row))
-    }
-
-    fn region_for_row(&self, row: usize) -> Option<&MemoryRegion> {
-        Self::region_for_row_in(&self.regions, row)
-    }
-
-    pub fn address_for_offset(&self, offset: usize) -> Option<usize> {
-        let row = offset / BYTES_PER_ROW;
-        let col = offset % BYTES_PER_ROW;
-        let region = self.region_for_row(row)?;
-        let address = region.row_address(row).saturating_add(col);
-        (address < region.end()).then_some(address)
-    }
-
-    pub fn set_viewport(&mut self, viewport: Viewport) {
-        self.viewport = Some(viewport);
-    }
-
-    pub fn set_viewport_and_refresh(&mut self, viewport: Viewport, pid: process_memory::Pid) {
-        self.viewport = Some(viewport);
-        self.refresh_visible(pid);
-    }
-
-    pub fn tick(&mut self, pid: process_memory::Pid) {
-        self.refresh_visible(pid);
-    }
-
-    pub fn has_active_fades(&self) -> bool {
-        let now = Instant::now();
-        self.change_tracker
-            .borrow()
-            .values()
-            .any(|(_, changed_at)| changed_at.is_some_and(|changed_at| now.saturating_duration_since(changed_at) < CHANGE_FADE))
-    }
-
-    pub fn tick_fade_animation(&mut self) {
-        self.fade_frame = self.fade_frame.wrapping_add(1);
-
-        let now = Instant::now();
-        for (_, changed_at) in self.change_tracker.borrow_mut().values_mut() {
-            if changed_at.is_some_and(|changed_at| now.saturating_duration_since(changed_at) >= CHANGE_FADE) {
-                *changed_at = None;
-            }
-        }
-    }
-
-    pub fn is_grid_focused(&self) -> bool {
-        self.grid_focused
-    }
-
-    pub fn set_grid_focused(&mut self, focused: bool) {
-        self.grid_focused = focused;
-    }
-
-    pub fn data_type(&self) -> Option<SearchType> {
-        self.editor_data_type
-    }
-
-    pub fn set_data_type(&mut self, search_type: SearchType) {
-        self.editor_data_type = Some(search_type);
-        self.editor_initial_size = search_type.fixed_byte_length().unwrap_or(1);
-    }
-
-    pub fn focus_grid<T>(&mut self) -> Task<T>
-    where
-        T: 'static,
-    {
-        self.grid_focused = true;
-        operation::focus(grid_focus_id())
-    }
-
-    /// Re-reads the bytes for the currently-visible rows (plus a small
-    /// overscan above and below) into [`Self::visible_bytes`], and updates
-    /// the change-fade tracker. The view callback never reads memory — it
-    /// only reads from the buffer this method maintains. Doing the syscalls
-    /// here (driven by the editor tick) instead of inside the virtualized
-    /// render closure keeps the render cheap and prevents the brief blanks
-    /// that happen when redraws race with per-row `copy_address` calls.
-    fn refresh_visible(&mut self, pid: process_memory::Pid) {
-        // Determine which rows are on screen. If the viewport hasn't been
-        // measured yet (initial frame after open/jump), fall back to a
-        // window centred on the cursor so the very first paint still has
-        // bytes available.
-        let (first_row, last_row) = if let Some(viewport) = self.viewport {
-            let top_y = viewport.absolute_offset().y;
-            let height = viewport.bounds().height.max(0.0);
-            let first = (top_y / ROW_HEIGHT).floor().max(0.0) as usize;
-            let last = ((top_y + height) / ROW_HEIGHT).ceil() as usize;
-            (first, last)
-        } else {
-            let first = self.cursor_row.saturating_sub(8);
-            (first, self.cursor_row + 24)
-        };
-
-        const OVERSCAN: usize = 4;
-        let total_rows = self.total_rows();
-        let first_row = first_row.saturating_sub(OVERSCAN);
-        let last_row = last_row.saturating_add(OVERSCAN).min(total_rows);
-        if first_row >= last_row {
-            self.visible_bytes.clear();
-            return;
-        }
-
-        let Ok(handle) = pid.try_into_process_handle() else {
-            return;
-        };
-
-        // Drop entries outside the new visible window so the buffer can't
-        // grow unbounded across long browsing sessions.
-        self.visible_bytes.retain(|&row, _| row >= first_row && row < last_row);
-
-        let now = Instant::now();
-        let mut tracker = self.change_tracker.borrow_mut();
-
-        // Read contiguous visible spans per memory region instead of one
-        // `copy_address` per row. A typical viewport is ~25 rows; batching
-        // turns that into 1 syscall for a contiguous heap/stack span, making
-        // live updates much more responsive.
-        for region in &self.regions {
-            let region_first_row = region.row_start;
-            let region_last_row = region.row_start.saturating_add(region.row_count);
-            let span_first_row = first_row.max(region_first_row);
-            let span_last_row = last_row.min(region_last_row);
-            if span_first_row >= span_last_row {
-                continue;
-            }
-
-            let read_start = region.row_address(span_first_row);
-            let max_len = (span_last_row - span_first_row).saturating_mul(BYTES_PER_ROW);
-            let read_len = region.end().saturating_sub(read_start).min(max_len);
-            if read_len == 0 {
-                continue;
-            }
-
-            let Ok(buf) = copy_address(read_start, read_len, &handle) else {
-                // Keep the last good bytes instead of replacing them with an
-                // empty row. Some pages can transiently fail while the target
-                // process mutates mappings; blanking on that is visually worse
-                // than showing the previous tick for one frame.
-                continue;
-            };
-
-            for absolute_row in span_first_row..span_last_row {
-                let row_addr = region.row_address(absolute_row);
-                let bytes_in_region = region.end().saturating_sub(row_addr).min(BYTES_PER_ROW);
-                let row_offset = (absolute_row - span_first_row).saturating_mul(BYTES_PER_ROW);
-                let available = buf.len().saturating_sub(row_offset).min(bytes_in_region);
-                if available == 0 {
-                    continue;
-                }
-
-                let mut row_bytes = [0u8; BYTES_PER_ROW];
-                row_bytes[..available].copy_from_slice(&buf[row_offset..row_offset + available]);
-
-                for (col_idx, &new_byte) in row_bytes.iter().enumerate().take(available) {
-                    let cell_addr = row_addr.saturating_add(col_idx);
-                    match tracker.get(&cell_addr).copied() {
-                        Some((prev_byte, _)) => {
-                            if prev_byte != new_byte {
-                                tracker.insert(cell_addr, (new_byte, Some(now)));
-                            }
-                        }
-                        None => {
-                            tracker.insert(cell_addr, (new_byte, None));
-                        }
-                    }
-                }
-
-                self.visible_bytes.insert(absolute_row, (row_bytes, available));
-            }
-        }
-        drop(tracker);
-
-        // Cap the change tracker so it never grows unbounded.
-        let mut tracker = self.change_tracker.borrow_mut();
-        if tracker.len() > CHANGE_TRACKER_CAP {
-            let target = CHANGE_TRACKER_CAP * 3 / 4;
-            let mut entries: Vec<(usize, Option<Instant>)> = tracker.iter().map(|(&addr, &(_, ts))| (addr, ts)).collect();
-            entries.sort_by_key(|(_, ts)| *ts);
-            let drop_count = tracker.len().saturating_sub(target);
-            for (addr, _) in entries.into_iter().take(drop_count) {
-                tracker.remove(&addr);
-            }
-        }
-    }
-
-    fn should_skip_region(map: &proc_maps::MapRange) -> bool {
-        if map.size() == 0 || !map.is_read() {
-            return true;
-        }
-
-        if map.start() == 0xffffffffff600000 || map.start() > 0x7fffffffffff {
-            return true;
-        }
-
-        if let Some(file_name) = map.filename() {
-            let file_str = file_name.to_string_lossy();
-            if file_str == "[vvar]" || file_str == "[vdso]" || file_str == "[vsyscall]" {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    pub fn refresh_regions(&mut self, pid: process_memory::Pid) -> Result<(), String> {
-        let mut maps = get_process_maps(pid).map_err(|err| {
+    pub fn initialize(
+        &mut self,
+        pid: process_memory::Pid,
+        address: usize,
+        search_type: SearchType,
+    ) -> Result<(), String> {
+        let maps = get_process_maps(pid).map_err(|e| {
             fl!(
                 crate::LANGUAGE_LOADER,
                 "memory-editor-error-read-map",
-                pid = pid.to_string(),
-                error = err.to_string()
+                pid = pid,
+                error = e.to_string()
             )
         })?;
-        maps.sort_by_key(proc_maps::MapRange::start);
-        let mut regions = Vec::new();
-        let mut row_start = 0usize;
-
-        for map in maps {
-            if Self::should_skip_region(&map) {
+        self.regions.clear();
+        for m in maps {
+            let start = m.start();
+            let size = m.size();
+            if size == 0 {
                 continue;
             }
-
-            let row_count = map.size().div_ceil(BYTES_PER_ROW).max(1);
-            let name = map
-                .filename()
-                .map(|path| path.to_string_lossy().into_owned())
-                .unwrap_or_else(|| fl!(crate::LANGUAGE_LOADER, "memory-editor-region-anonymous"));
-
-            regions.push(MemoryRegion {
-                start: map.start(),
-                size: map.size(),
-                row_start,
-                row_count,
-                readable: map.is_read(),
-                writable: map.is_write(),
-                executable: map.is_exec(),
-                name,
+            self.regions.push(Region {
+                start,
+                size,
+                readable: m.is_read(),
+                writable: m.is_write(),
+                name: m
+                    .filename()
+                    .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+                    .unwrap_or_else(|| fl!(crate::LANGUAGE_LOADER, "memory-editor-region-anonymous")),
             });
-            row_start = row_start.saturating_add(row_count);
+        }
+        self.regions.sort_by_key(|r| r.start);
+
+        if self.regions.is_empty() {
+            return Err(fl!(
+                crate::LANGUAGE_LOADER,
+                "memory-editor-error-no-regions",
+                pid = pid
+            ));
         }
 
-        if regions.is_empty() {
-            return Err(fl!(crate::LANGUAGE_LOADER, "memory-editor-error-no-regions", pid = pid.to_string()));
-        }
-
-        self.regions = regions;
+        self.origin_address = address;
+        // Center the address on the grid.
+        let bytes_visible = BYTES_PER_ROW * VISIBLE_ROWS_DEFAULT;
+        let half = bytes_visible / 2;
+        self.view_address = address.saturating_sub(half) / BYTES_PER_ROW * BYTES_PER_ROW;
+        self.view_bytes = bytes_visible;
+        self.address_input = format!("0x{:X}", address);
+        self.data_type = Some(search_type);
+        self.snapshot.clear();
+        self.change_tracker.clear();
+        self.editing = None;
         Ok(())
     }
 
-    /// Places the cursor on `focus_addr` inside the current region map. If the
-    /// exact address is not mapped, jumps to the nearest following region (or
-    /// the last available region when the address is past the map).
-    pub fn focus_on(&mut self, focus_addr: usize) -> Result<(), String> {
-        let Some((row, col)) = self.address_to_cursor(focus_addr) else {
-            return Err(format!("0x{focus_addr:X} is not in a readable memory region"));
-        };
-
-        self.cursor_row = row;
-        self.cursor_col = col;
-        self.cursor_nibble = 0;
-        self.viewport = None;
-        self.inspector_edit = None;
-        Ok(())
-    }
-
-    fn address_to_cursor(&self, address: usize) -> Option<(usize, usize)> {
-        if let Some(region) = self.regions.iter().find(|region| region.contains_address(address)) {
-            let offset = address - region.start;
-            return Some((region.row_start + offset / BYTES_PER_ROW, offset % BYTES_PER_ROW));
-        }
-
-        let nearest = self.regions.iter().find(|region| region.start > address).or_else(|| self.regions.last())?;
-        Some((nearest.row_start, 0))
-    }
-
-    /// Animated scroll task that places the cursor row a few lines below the
-    /// top of the viewport. Used right after a jump/open before any viewport
-    /// has been measured.
-    pub fn snap_to_cursor<T>(&self) -> Task<T>
-    where
-        T: 'static,
-    {
-        let target_y = ((self.cursor_row as f32 - 4.0) * ROW_HEIGHT).max(0.0);
-        operation::scroll_to(scroll_id(), operation::AbsoluteOffset { x: None, y: Some(target_y) })
-    }
-
-    fn cursor_address(&self) -> Option<usize> {
-        let region = self.region_for_row(self.cursor_row)?;
-        let address = region.row_address(self.cursor_row).saturating_add(self.cursor_col);
-        (address < region.end()).then_some(address)
-    }
-
-    pub fn set_inspector_value_text(&mut self, kind: InspectorValueKind, value: String) {
-        self.inspector_edit = Some((kind, value));
-    }
-
-    fn parse_unsigned(input: &str, max: u64, label: &str) -> Result<u64, String> {
-        let text = input.trim().replace('_', "");
-        let value = if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-            u64::from_str_radix(hex, 16)
-        } else {
-            text.parse::<u64>()
-        }
-        .map_err(|err| {
-            fl!(
-                crate::LANGUAGE_LOADER,
-                "memory-editor-error-invalid-value",
-                kind = label.to_string(),
-                input = input.to_string(),
-                error = err.to_string()
-            )
-        })?;
-
-        if value <= max {
-            Ok(value)
-        } else {
-            Err(fl!(
-                crate::LANGUAGE_LOADER,
-                "memory-editor-error-out-of-range-max",
-                kind = label.to_string(),
-                value = value.to_string(),
-                max = max.to_string()
-            ))
-        }
-    }
-
-    fn parse_signed(input: &str, min: i64, max: i64, label: &str) -> Result<i64, String> {
-        let text = input.trim().replace('_', "");
-        let invalid = |err: std::num::ParseIntError| {
-            fl!(
-                crate::LANGUAGE_LOADER,
-                "memory-editor-error-invalid-value",
-                kind = label.to_string(),
-                input = input.to_string(),
-                error = err.to_string()
-            )
-        };
-        let value = if let Some(hex) = text.strip_prefix("-0x").or_else(|| text.strip_prefix("-0X")) {
-            let magnitude = i64::from_str_radix(hex, 16).map_err(invalid)?;
-            -magnitude
-        } else if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-            i64::from_str_radix(hex, 16).map_err(invalid)?
-        } else {
-            text.parse::<i64>().map_err(invalid)?
-        };
-
-        if (min..=max).contains(&value) {
-            Ok(value)
-        } else {
-            Err(fl!(
-                crate::LANGUAGE_LOADER,
-                "memory-editor-error-out-of-range",
-                kind = label.to_string(),
-                value = value.to_string(),
-                min = min.to_string(),
-                max = max.to_string()
-            ))
-        }
-    }
-
-    fn inspector_bytes(kind: InspectorValueKind, input: &str) -> Result<Vec<u8>, String> {
-        match kind {
-            InspectorValueKind::U8 => Ok(vec![Self::parse_unsigned(input, u8::MAX as u64, "u8")? as u8]),
-            InspectorValueKind::I8 => Ok(vec![(Self::parse_signed(input, i8::MIN as i64, i8::MAX as i64, "i8")? as i8) as u8]),
-            InspectorValueKind::U16 => Ok((Self::parse_unsigned(input, u16::MAX as u64, "u16")? as u16).to_le_bytes().to_vec()),
-            InspectorValueKind::I16 => Ok((Self::parse_signed(input, i16::MIN as i64, i16::MAX as i64, "i16")? as i16)
-                .to_le_bytes()
-                .to_vec()),
-            InspectorValueKind::U32 => Ok((Self::parse_unsigned(input, u32::MAX as u64, "u32")? as u32).to_le_bytes().to_vec()),
-            InspectorValueKind::I32 => Ok((Self::parse_signed(input, i32::MIN as i64, i32::MAX as i64, "i32")? as i32)
-                .to_le_bytes()
-                .to_vec()),
-            InspectorValueKind::U64 => Ok(Self::parse_unsigned(input, u64::MAX, "u64")?.to_le_bytes().to_vec()),
-            InspectorValueKind::I64 => Ok(Self::parse_signed(input, i64::MIN, i64::MAX, "i64")?.to_le_bytes().to_vec()),
-            InspectorValueKind::F32 => Ok(input
-                .trim()
-                .parse::<f32>()
-                .map_err(|err| {
-                    fl!(
-                        crate::LANGUAGE_LOADER,
-                        "memory-editor-error-invalid-value",
-                        kind = "f32".to_string(),
-                        input = input.to_string(),
-                        error = err.to_string()
-                    )
-                })?
-                .to_le_bytes()
-                .to_vec()),
-            InspectorValueKind::F64 => Ok(input
-                .trim()
-                .parse::<f64>()
-                .map_err(|err| {
-                    fl!(
-                        crate::LANGUAGE_LOADER,
-                        "memory-editor-error-invalid-value",
-                        kind = "f64".to_string(),
-                        input = input.to_string(),
-                        error = err.to_string()
-                    )
-                })?
-                .to_le_bytes()
-                .to_vec()),
-        }
-    }
-
-    pub fn submit_inspector_value(&mut self, pid: process_memory::Pid, kind: InspectorValueKind) -> Result<(), String> {
-        let Some((edit_kind, input)) = self.inspector_edit.as_ref() else {
-            return Ok(());
-        };
-        if *edit_kind != kind {
-            return Ok(());
-        }
-
-        let Some(address) = self.cursor_address() else {
-            return Err("Cursor is not in a readable memory region".to_string());
-        };
-        let bytes = Self::inspector_bytes(kind, input)?;
-        self.write_with_undo(pid, address, &bytes)?;
-        self.inspector_edit = None;
-        Ok(())
-    }
-
-    /// Performs a write at `address` and records an entry on the undo stack.
-    /// Reads the existing bytes first so undo can restore them. The redo
-    /// stack is cleared because a fresh user write invalidates the redo
-    /// branch.
-    fn write_with_undo(&mut self, pid: process_memory::Pid, address: usize, after: &[u8]) -> Result<(), String> {
-        let handle = pid
-            .try_into_process_handle()
-            .map_err(|e| fl!(crate::LANGUAGE_LOADER, "memory-editor-error-attach", error = e.to_string()))?;
-        let before = copy_address(address, after.len(), &handle).map_err(|e| {
-            fl!(
-                crate::LANGUAGE_LOADER,
-                "memory-editor-error-read-address",
-                address = format!("{address:X}"),
-                error = e.to_string()
-            )
-        })?;
-        handle.put_address(address, after).map_err(|e| {
-            fl!(
-                crate::LANGUAGE_LOADER,
-                "memory-editor-error-write-address",
-                address = format!("{address:X}"),
-                error = e.to_string()
-            )
-        })?;
-        self.apply_written_bytes(address, after);
-
-        // Skip recording no-op writes so redundant submits don't pollute the
-        // history.
-        if before != after {
-            self.push_undo(UndoEntry {
-                address,
-                before,
-                after: after.to_vec(),
-            });
-            self.redo_stack.clear();
-        }
-        Ok(())
-    }
-
-    fn push_undo(&mut self, entry: UndoEntry) {
-        self.undo_stack.push(entry);
-        if self.undo_stack.len() > UNDO_STACK_CAP {
-            // Drop the oldest entries while keeping the newest ones.
-            let drop = self.undo_stack.len() - UNDO_STACK_CAP;
-            self.undo_stack.drain(..drop);
-        }
-    }
-
-    /// Applies bytes that were successfully written by this editor to the
-    /// visible-row cache immediately. Without this, the UI keeps showing the
-    /// previous `visible_bytes` snapshot until the next memory refresh tick,
-    /// which makes direct hex/inspector edits feel delayed.
-    fn apply_written_bytes(&mut self, address: usize, bytes: &[u8]) {
-        if bytes.is_empty() {
-            return;
-        }
-
-        let now = Instant::now();
-        let mut changed_cells = Vec::new();
-
-        for (offset, &new_byte) in bytes.iter().enumerate() {
-            let cell_addr = address.saturating_add(offset);
-            let Some(region) = self.regions.iter().find(|region| region.contains_address(cell_addr)) else {
-                continue;
-            };
-            let region_offset = cell_addr - region.start;
-            let row = region.row_start + region_offset / BYTES_PER_ROW;
-            let col = region_offset % BYTES_PER_ROW;
-
-            let Some((row_bytes, available)) = self.visible_bytes.get_mut(&row) else {
-                continue;
-            };
-            if col >= *available {
-                continue;
-            }
-
-            let old_byte = row_bytes[col];
-            row_bytes[col] = new_byte;
-            if old_byte != new_byte {
-                changed_cells.push((cell_addr, new_byte));
-            }
-        }
-
-        if changed_cells.is_empty() {
-            return;
-        }
-
-        let mut tracker = self.change_tracker.borrow_mut();
-        for (cell_addr, new_byte) in changed_cells {
-            tracker.insert(cell_addr, (new_byte, Some(now)));
-        }
-    }
-
-    /// Restores the bytes from the most recent undo entry. Returns the
-    /// address that was modified (so the caller can move the cursor / make
-    /// the change visible) or `None` if there's nothing to undo.
-    pub fn undo(&mut self, pid: process_memory::Pid) -> Result<Option<usize>, String> {
-        let Some(entry) = self.undo_stack.pop() else {
-            return Ok(None);
-        };
-        let handle = pid
-            .try_into_process_handle()
-            .map_err(|e| fl!(crate::LANGUAGE_LOADER, "memory-editor-error-attach", error = e.to_string()))?;
-        handle.put_address(entry.address, &entry.before).map_err(|e| {
-            fl!(
-                crate::LANGUAGE_LOADER,
-                "memory-editor-error-write-address",
-                address = format!("{:X}", entry.address),
-                error = e.to_string()
-            )
-        })?;
-        let address = entry.address;
-        let before = entry.before.clone();
-        self.apply_written_bytes(address, &before);
-        self.redo_stack.push(entry);
-        Ok(Some(address))
-    }
-
-    /// Re-applies the most recently undone write.
-    pub fn redo(&mut self, pid: process_memory::Pid) -> Result<Option<usize>, String> {
-        let Some(entry) = self.redo_stack.pop() else {
-            return Ok(None);
-        };
-        let handle = pid
-            .try_into_process_handle()
-            .map_err(|e| fl!(crate::LANGUAGE_LOADER, "memory-editor-error-attach", error = e.to_string()))?;
-        handle.put_address(entry.address, &entry.after).map_err(|e| {
-            fl!(
-                crate::LANGUAGE_LOADER,
-                "memory-editor-error-write-address",
-                address = format!("{:X}", entry.address),
-                error = e.to_string()
-            )
-        })?;
-        let address = entry.address;
-        let after = entry.after.clone();
-        self.apply_written_bytes(address, &after);
-        self.undo_stack.push(entry);
-        Ok(Some(address))
-    }
-
-    /// Returns an animated scroll task that brings the cursor row into view if
-    /// it is currently outside the tracked viewport. Returns `Task::none()`
-    /// when the cursor is already visible or the viewport hasn't been measured
-    /// yet.
-    pub fn ensure_cursor_visible<T>(&self) -> Task<T>
-    where
-        T: 'static,
-    {
-        let Some(viewport) = self.viewport else {
-            return Task::none();
-        };
-
-        let cursor_top = self.cursor_row as f32 * ROW_HEIGHT;
-        let cursor_bottom = cursor_top + ROW_HEIGHT;
-        let view_top = viewport.absolute_offset().y;
-        let view_height = viewport.bounds().height;
-        let view_bottom = view_top + view_height;
-
-        let target_y = if cursor_top < view_top {
-            cursor_top
-        } else if cursor_bottom > view_bottom {
-            (cursor_bottom - view_height).max(0.0)
-        } else {
-            return Task::none();
-        };
-
-        operation::scroll_to_animated(scroll_id(), operation::AbsoluteOffset { x: None, y: Some(target_y) })
-    }
-
-    pub fn show_memory_editor<'a>(&'a self, app: &'a App) -> Element<'a, Message> {
-        use icy_ui::widget::{button, column, container, mouse_area, pick_list, row, scrollable, text};
-
-        // ---- Layout constants -------------------------------------------------
-        // Address: 16 hex digits + one space worth of padding -> wide enough for
-        // 64-bit addresses without overflowing into the hex grid.
-        const ADDRESS_WIDTH: f32 = 150.0;
-        const HEX_CELL_WIDTH: f32 = 26.0;
-        const HEX_GROUP_GAP: f32 = 12.0;
-        const ASCII_CELL_WIDTH: f32 = 10.0;
-        const ASCII_GROUP_GAP: f32 = 6.0;
-        const GUTTER: f32 = 14.0;
-        const HEX_GROUP_WIDTH: f32 = HEX_CELL_WIDTH * 8.0;
-        const HEX_BLOCK_WIDTH: f32 = HEX_GROUP_WIDTH * 2.0 + HEX_GROUP_GAP;
-        const ASCII_GROUP_WIDTH: f32 = ASCII_CELL_WIDTH * 8.0;
-        const ASCII_BLOCK_WIDTH: f32 = ASCII_GROUP_WIDTH * 2.0 + ASCII_GROUP_GAP;
-
-        let pid = app.state.pid;
-        let highlight_start = self.editor_initial_address;
-        let highlight_end = highlight_start + self.editor_initial_size;
-        let cursor_row = self.cursor_row;
-        let cursor_col = self.cursor_col;
-        let cursor_nibble = self.cursor_nibble;
-        let regions = self.regions.clone();
-        let total_rows = self.total_rows();
-        let (visible_start, visible_end) = {
-            let (first_row, last_row) = if let Some(viewport) = self.viewport {
-                let top_y = viewport.absolute_offset().y;
-                let height = viewport.bounds().height.max(0.0);
-                let first = (top_y / ROW_HEIGHT).floor().max(0.0) as usize;
-                let last = ((top_y + height) / ROW_HEIGHT).ceil() as usize;
-                (first, last)
-            } else {
-                let first = cursor_row.saturating_sub(8);
-                (first, cursor_row + 24)
-            };
-            const OVERSCAN: usize = 4;
-            let start = first_row.saturating_sub(OVERSCAN);
-            let end = last_row.saturating_add(OVERSCAN).min(total_rows);
-            (start, end.max(start))
-        };
-        let top_spacer = visible_start as f32 * ROW_HEIGHT;
-        let bottom_spacer = total_rows.saturating_sub(visible_end) as f32 * ROW_HEIGHT;
-
-        // ---- Header -----------------------------------------------------------
-        // Theming model:
-        //   * The editor sits inside a `primary` panel; text on it uses
-        //     `theme.primary.on` and dimmed text uses `primary.on.scale_alpha(...)`.
-        //   * Highlights (cursor, selected byte, search hit) are *translucent*
-        //     overlays so text remains readable on top.
-        let dim = |theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-            color: Some(theme.primary.on.scale_alpha(0.55)),
-        };
-
-        let make_hex_header_group = |start: usize| {
-            let mut group = row![].spacing(0);
-            for i in start..start + 8 {
-                group = group.push(
-                    container(text(format!("{i:02X}")).size(13).font(icy_ui::Font::MONOSPACE).style(dim))
-                        .width(Length::Fixed(HEX_CELL_WIDTH))
-                        .align_x(alignment::Alignment::Center),
-                );
-            }
-            container(group).width(Length::Fixed(HEX_GROUP_WIDTH))
-        };
-
-        let header = container(
-            row![
-                container(
-                    text(fl!(crate::LANGUAGE_LOADER, "memory-editor-address-label"))
-                        .size(12)
-                        .font(icy_ui::Font::MONOSPACE)
-                        .style(dim)
-                )
-                .width(Length::Fixed(ADDRESS_WIDTH))
-                .padding([0, 8])
-                .align_x(alignment::Alignment::Start),
-                row![make_hex_header_group(0), make_hex_header_group(8),].spacing(HEX_GROUP_GAP),
-                container(
-                    text(fl!(crate::LANGUAGE_LOADER, "memory-editor-ascii-heading"))
-                        .size(12)
-                        .font(icy_ui::Font::MONOSPACE)
-                        .style(dim)
-                )
-                .width(Length::Fixed(ASCII_BLOCK_WIDTH))
-                .padding([0, 4])
-                .align_x(alignment::Alignment::Start),
-            ]
-            .spacing(GUTTER)
-            .align_y(alignment::Alignment::Center),
-        )
-        .padding([6, 8])
-        .style(|theme: &icy_ui::Theme| container::Style {
-            background: Some(theme.primary.on.scale_alpha(0.04).into()),
-            border: icy_ui::Border {
-                color: theme.primary.divider,
-                width: 0.0,
-                radius: Radius::new(0.0),
-            },
-            ..Default::default()
-        });
-
-        // ---- Windowed memory rows --------------------------------------------
-        // The bytes shown here are read in `MemoryEditor::tick`, NOT here.
-        // We deliberately avoid `show_rows` here. Its cache invalidation path
-        // flickers with this fast-updating hex grid. Instead we use a regular
-        // scrollable containing: top spacer + visible row window + bottom
-        // spacer. That preserves the huge logical scroll height but keeps the
-        // actual widget tree tiny and stable.
-        let tracker = self.change_tracker.clone();
-        let visible_bytes = self.visible_bytes.clone();
-        let range_start = visible_start;
-        let range_end = visible_end;
-
-        let make_hex_cell =
-            |absolute_row: usize, col_idx: usize, byte: u8, current_address: usize, is_valid: bool, change_alpha: f32| -> Element<'_, Message> {
-                if !is_valid {
-                    return container(text("  ").size(14).font(icy_ui::Font::MONOSPACE))
-                        .width(Length::Fixed(HEX_CELL_WIDTH))
-                        .into();
-                }
-
-                let is_selected_byte = cursor_row == absolute_row && cursor_col == col_idx;
-                let is_initial = current_address >= highlight_start && current_address < highlight_end;
-                let is_zero = byte == 0;
-
-                let high = (byte >> 4) & 0x0F;
-                let low = byte & 0x0F;
-                let nibble_color = move |theme: &icy_ui::Theme, is_active_nibble: bool| {
-                    if is_active_nibble {
-                        theme.accent.base
-                    } else if is_zero {
-                        theme.primary.on.scale_alpha(0.35)
-                    } else {
-                        theme.primary.on
-                    }
-                };
-                let hi_text = text(format!("{high:X}"))
-                    .size(14)
-                    .font(icy_ui::Font::MONOSPACE)
-                    .style(move |theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                        color: Some(nibble_color(theme, is_selected_byte && cursor_nibble == 0)),
-                    });
-                let lo_text = text(format!("{low:X}"))
-                    .size(14)
-                    .font(icy_ui::Font::MONOSPACE)
-                    .style(move |theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                        color: Some(nibble_color(theme, is_selected_byte && cursor_nibble == 1)),
-                    });
-
-                let hex_pair = row![hi_text, lo_text].spacing(0);
-
-                mouse_area(
-                    container(hex_pair)
-                        .width(Length::Fixed(HEX_CELL_WIDTH))
-                        .padding([1, 0])
-                        .align_x(alignment::Alignment::Center)
-                        .style(move |theme: &icy_ui::Theme| {
-                            if is_selected_byte {
-                                container::Style {
-                                    background: Some(theme.accent.base.scale_alpha(0.30).into()),
-                                    border: icy_ui::Border {
-                                        color: theme.accent.base,
-                                        width: 1.0,
-                                        radius: Radius::new(3.0),
-                                    },
-                                    ..Default::default()
-                                }
-                            } else if change_alpha > 0.0 {
-                                container::Style {
-                                    background: Some(theme.destructive.base.scale_alpha(change_alpha).into()),
-                                    ..Default::default()
-                                }
-                            } else if is_initial {
-                                container::Style {
-                                    background: Some(theme.success.base.scale_alpha(0.22).into()),
-                                    ..Default::default()
-                                }
-                            } else {
-                                container::Style::default()
-                            }
-                        }),
-                )
-                .on_press(Message::MemoryEditorSetCursor(absolute_row, col_idx))
-                .into()
-            };
-
-        let make_ascii_cell = |absolute_row: usize, i: usize, byte: u8, current_address: usize, is_valid: bool, change_alpha: f32| -> Element<'_, Message> {
-            if !is_valid {
-                return container(text(" ").size(14).font(icy_ui::Font::MONOSPACE))
-                    .width(Length::Fixed(ASCII_CELL_WIDTH))
-                    .into();
-            }
-
-            let c = byte as char;
-            let is_printable = c.is_ascii_graphic() || c == ' ';
-            let display_char = if is_printable { c.to_string() } else { "·".to_string() };
-            let is_selected = cursor_row == absolute_row && cursor_col == i;
-            let is_initial = current_address >= highlight_start && current_address < highlight_end;
-
-            container(
-                text(display_char)
-                    .size(14)
-                    .font(icy_ui::Font::MONOSPACE)
-                    .style(move |theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                        color: Some(if is_selected {
-                            theme.accent.base
-                        } else if is_printable {
-                            theme.primary.on
-                        } else {
-                            theme.primary.on.scale_alpha(0.35)
-                        }),
-                    }),
-            )
-            .width(Length::Fixed(ASCII_CELL_WIDTH))
-            .align_x(alignment::Alignment::Center)
-            .style(move |theme: &icy_ui::Theme| {
-                if is_selected {
-                    container::Style {
-                        background: Some(theme.accent.base.scale_alpha(0.30).into()),
-                        ..Default::default()
-                    }
-                } else if change_alpha > 0.0 {
-                    container::Style {
-                        background: Some(theme.destructive.base.scale_alpha(change_alpha).into()),
-                        ..Default::default()
-                    }
-                } else if is_initial {
-                    container::Style {
-                        background: Some(theme.success.base.scale_alpha(0.22).into()),
-                        ..Default::default()
-                    }
-                } else {
-                    container::Style::default()
-                }
-            })
-            .into()
-        };
-
-        let mut rendered_rows: Vec<Element<'_, Message>> = Vec::new();
-        if top_spacer > 0.0 {
-            rendered_rows.push(container(text("")).height(Length::Fixed(top_spacer)).into());
-        }
-
-        rendered_rows.extend(
-            (range_start..range_end)
-                .map(|absolute_row| {
-                    let Some(region) = Self::region_for_row_in(&regions, absolute_row) else {
-                        return container(text(fl!(crate::LANGUAGE_LOADER, "memory-editor-no-regions")).size(14))
-                            .height(Length::Fixed(ROW_HEIGHT))
-                            .padding([0, 16])
-                            .into();
-                    };
-
-                    let row_addr = region.row_address(absolute_row);
-                    // Pull bytes from the pre-read buffer. If the
-                    // tick hasn't populated this row yet (e.g. it
-                    // just scrolled into view), render zeros for
-                    // one frame; the next tick will fill it in.
-                    let (row_bytes, bytes_in_region) = visible_bytes.get(&absolute_row).copied().unwrap_or(([0u8; BYTES_PER_ROW], 0));
-                    let zebra = absolute_row % 2 == 1;
-                    let is_cursor_row = cursor_row == absolute_row;
-
-                    // Read-only fade computation against the
-                    // shared change tracker. The tracker itself
-                    // is updated by `refresh_visible` on tick.
-                    let mut change_alphas = [0.0f32; BYTES_PER_ROW];
-                    {
-                        let tracker_borrow = tracker.borrow();
-                        let now = Instant::now();
-                        for (col_idx, alpha) in change_alphas.iter_mut().enumerate().take(bytes_in_region) {
-                            let cell_addr = row_addr.saturating_add(col_idx);
-                            if let Some((_, Some(last_change))) = tracker_borrow.get(&cell_addr).copied() {
-                                let elapsed = now.saturating_duration_since(last_change);
-                                if elapsed < CHANGE_FADE {
-                                    let frac = elapsed.as_secs_f32() / CHANGE_FADE.as_secs_f32();
-                                    *alpha = 0.55 * (1.0 - frac);
-                                }
-                            }
-                        }
-                    }
-
-                    let mut hex_left = row![].spacing(0);
-                    let mut hex_right = row![].spacing(0);
-                    for (col_idx, byte) in row_bytes.iter().enumerate().take(8) {
-                        let cell_addr = row_addr.saturating_add(col_idx);
-                        hex_left = hex_left.push(make_hex_cell(
-                            absolute_row,
-                            col_idx,
-                            *byte,
-                            cell_addr,
-                            col_idx < bytes_in_region,
-                            change_alphas[col_idx],
-                        ));
-                    }
-                    for (col_idx, byte) in row_bytes.iter().enumerate().skip(8) {
-                        let cell_addr = row_addr.saturating_add(col_idx);
-                        hex_right = hex_right.push(make_hex_cell(
-                            absolute_row,
-                            col_idx,
-                            *byte,
-                            cell_addr,
-                            col_idx < bytes_in_region,
-                            change_alphas[col_idx],
-                        ));
-                    }
-                    let hex_block = row![
-                        container(hex_left).width(Length::Fixed(HEX_GROUP_WIDTH)),
-                        container(hex_right).width(Length::Fixed(HEX_GROUP_WIDTH)),
-                    ]
-                    .spacing(HEX_GROUP_GAP);
-
-                    let mut ascii_left = row![].spacing(0);
-                    let mut ascii_right = row![].spacing(0);
-                    for (i, byte) in row_bytes.iter().enumerate().take(8) {
-                        let cell_addr = row_addr.saturating_add(i);
-                        ascii_left = ascii_left.push(make_ascii_cell(absolute_row, i, *byte, cell_addr, i < bytes_in_region, change_alphas[i]));
-                    }
-                    for (i, byte) in row_bytes.iter().enumerate().skip(8) {
-                        let cell_addr = row_addr.saturating_add(i);
-                        ascii_right = ascii_right.push(make_ascii_cell(absolute_row, i, *byte, cell_addr, i < bytes_in_region, change_alphas[i]));
-                    }
-                    let ascii_block = row![
-                        container(ascii_left).width(Length::Fixed(ASCII_GROUP_WIDTH)),
-                        container(ascii_right).width(Length::Fixed(ASCII_GROUP_WIDTH)),
-                    ]
-                    .spacing(ASCII_GROUP_GAP);
-
-                    let address_label = text(format!("{row_addr:016X}"))
-                        .size(13)
-                        .font(icy_ui::Font::MONOSPACE)
-                        .style(move |theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                            color: Some(if is_cursor_row {
-                                theme.accent.base
-                            } else {
-                                theme.primary.on.scale_alpha(0.55)
-                            }),
-                        });
-
-                    container(
-                        row![
-                            container(address_label)
-                                .width(Length::Fixed(ADDRESS_WIDTH))
-                                .padding([0, 8])
-                                .align_x(alignment::Alignment::Start),
-                            container(hex_block).width(Length::Fixed(HEX_BLOCK_WIDTH)),
-                            container(ascii_block).width(Length::Fixed(ASCII_BLOCK_WIDTH)).padding([0, 4]),
-                        ]
-                        .spacing(GUTTER)
-                        .align_y(alignment::Alignment::Center),
-                    )
-                    .height(Length::Fixed(ROW_HEIGHT))
-                    .padding([0, 8])
-                    .style(move |theme: &icy_ui::Theme| {
-                        if is_cursor_row {
-                            container::Style {
-                                background: Some(theme.accent.base.scale_alpha(0.10).into()),
-                                ..Default::default()
-                            }
-                        } else if zebra {
-                            container::Style {
-                                background: Some(theme.primary.on.scale_alpha(0.04).into()),
-                                ..Default::default()
-                            }
-                        } else {
-                            container::Style::default()
-                        }
-                    })
-                    .into()
-                })
-                .collect::<Vec<Element<'_, Message>>>(),
-        );
-
-        if bottom_spacer > 0.0 {
-            rendered_rows.push(container(text("")).height(Length::Fixed(bottom_spacer)).into());
-        }
-
-        let memory_rows = column(rendered_rows).spacing(0);
-        let memory_scroll = scrollable(memory_rows)
-            .id(scroll_id())
-            .height(Length::Fill)
-            .width(Length::Fill)
-            .on_scroll(Message::MemoryEditorScrolled);
-        // FocusableArea follows icy_ui's custom-widget focus contract: it has
-        // its own Focusable state, participates in programmatic focus, updates
-        // focus on click/click-outside, captures keys only while focused, and
-        // draws the focus ring itself.
-        let memory_scroll_framed: Element<'_, Message> = container(
-            FocusableArea::new(container(memory_scroll).padding(6).width(Length::Fill).height(Length::Fill))
-                .id(grid_focus_id())
-                .on_focus(Message::MemoryEditorBeginEdit)
-                .on_blur(Message::MemoryEditorEndEdit)
-                .on_key(Message::MemoryEditorKeyPressed),
-        )
-        .height(Length::FillPortion(3))
-        .width(Length::Fill)
-        .into();
-        let memory_view = column![memory_scroll_framed].spacing(0);
-
-        // ---- Status strip -----------------------------------------------------
-        // One slim bar showing the things that change as the cursor moves:
-        //   - the absolute address under the cursor,
-        //   - the signed offset from the original search hit (only when the
-        //     editor was opened on a hit and the cursor has moved away),
-        //   - the enclosing region (name, range, access).
-        let cursor_address = self.cursor_address();
-        let cursor_region = self.region_for_row(cursor_row);
-        let cursor_address_text = cursor_address.map_or_else(|| "—".to_string(), |address| format!("0x{address:016X}"));
-        let access_text = cursor_region.map_or_else(
-            || fl!(crate::LANGUAGE_LOADER, "memory-editor-access-unmapped"),
-            |region| match (region.readable, region.writable, region.executable) {
-                (true, true, true) => fl!(crate::LANGUAGE_LOADER, "memory-editor-access-rwx"),
-                (true, true, false) => fl!(crate::LANGUAGE_LOADER, "memory-editor-access-rw"),
-                (true, false, true) => fl!(crate::LANGUAGE_LOADER, "memory-editor-access-rx"),
-                (true, false, false) => fl!(crate::LANGUAGE_LOADER, "memory-editor-access-r"),
-                (false, true, _) => fl!(crate::LANGUAGE_LOADER, "memory-editor-access-w"),
-                (false, false, true) => fl!(crate::LANGUAGE_LOADER, "memory-editor-access-x"),
-                (false, false, false) => fl!(crate::LANGUAGE_LOADER, "memory-editor-access-none"),
-            },
-        );
-        let region_summary_text = cursor_region.map_or_else(
-            || fl!(crate::LANGUAGE_LOADER, "memory-editor-region-unmapped"),
-            |region| {
-                let unnamed = fl!(crate::LANGUAGE_LOADER, "memory-editor-region-unnamed");
-                let name = if region.name.is_empty() { unnamed.as_str() } else { region.name.as_str() };
-                format!("{name}   0x{:X}–0x{:X}   ({})", region.start, region.end(), access_text)
-            },
-        );
-        let show_offset = cursor_address.is_some_and(|address| address != self.editor_initial_address) && self.editor_initial_address != 0;
-        let offset_text = if show_offset {
-            cursor_address.map(|address| format_relative_offset(self.editor_initial_address, address))
-        } else {
-            None
-        };
-
-        let status_label = |s: String| -> Element<'_, Message> {
-            text(s)
-                .size(11)
-                .font(icy_ui::Font::MONOSPACE)
-                .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                    color: Some(theme.secondary.on.scale_alpha(0.55)),
-                })
-                .into()
-        };
-        let status_value = |s: String| -> Element<'_, Message> {
-            text(s)
-                .size(12)
-                .font(icy_ui::Font::MONOSPACE)
-                .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                    color: Some(theme.secondary.on),
-                })
-                .into()
-        };
-
-        // Region band: sits between the toolbar and the hex grid header so the
-        // (potentially long) region description gets its own line and never
-        // pushes the address/offset off-screen.
-        let region_strip = container(
-            row![
-                status_label(fl!(crate::LANGUAGE_LOADER, "memory-editor-region-label")),
-                status_value(region_summary_text)
-            ]
-            .spacing(8)
-            .align_y(alignment::Alignment::Center),
-        )
-        .width(Length::Fill)
-        .padding([6, 12])
-        .style(|theme: &icy_ui::Theme| container::Style {
-            background: Some(theme.secondary.base.into()),
-            text_color: Some(theme.secondary.on),
-            ..Default::default()
-        });
-
-        // Status strip below the grid: just the things that change when the
-        // cursor moves byte-by-byte.
-        let mut status_items: Vec<Element<'_, Message>> = Vec::new();
-        status_items.push(
-            row![
-                status_label(fl!(crate::LANGUAGE_LOADER, "memory-editor-address-label")),
-                status_value(cursor_address_text)
-            ]
-            .spacing(6)
-            .align_y(alignment::Alignment::Center)
-            .into(),
-        );
-        if let Some(offset) = offset_text {
-            status_items.push(
-                row![status_label(fl!(crate::LANGUAGE_LOADER, "memory-editor-from-hit-label")), status_value(offset)]
-                    .spacing(6)
-                    .align_y(alignment::Alignment::Center)
-                    .into(),
-            );
-        }
-
-        let status_strip = container(row(status_items).spacing(24).align_y(alignment::Alignment::Center))
-            .width(Length::Fill)
-            .padding([6, 12])
-            .style(|theme: &icy_ui::Theme| container::Style {
-                background: Some(theme.secondary.base.into()),
-                text_color: Some(theme.secondary.on),
-                ..Default::default()
-            });
-
-        // ---- Info area --------------------------------------------------------
-        let info_area = {
-            let mut value_bytes = [0u8; 8];
-            let bytes_available = if let Some(cursor_address) = cursor_address
-                && let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle()
-                && let Ok(buf) = copy_address(cursor_address, 8, &handle)
-            {
-                let n = buf.len().min(8);
-                value_bytes[..n].copy_from_slice(&buf[..n]);
-                n
-            } else {
-                0
-            };
-
-            let na = || "—".to_string();
-
-            let byte_str = if bytes_available >= 1 { value_bytes[0].to_string() } else { na() };
-            let i8_str = if bytes_available >= 1 { format!("{}", value_bytes[0] as i8) } else { na() };
-            let u16_str = if bytes_available >= 2 {
-                u16::from_le_bytes([value_bytes[0], value_bytes[1]]).to_string()
-            } else {
-                na()
-            };
-            let i16_str = if bytes_available >= 2 {
-                format!("{}", i16::from_le_bytes([value_bytes[0], value_bytes[1]]))
-            } else {
-                na()
-            };
-            let u32_str = if bytes_available >= 4 {
-                u32::from_le_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]]).to_string()
-            } else {
-                na()
-            };
-            let i32_str = if bytes_available >= 4 {
-                format!("{}", i32::from_le_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]]))
-            } else {
-                na()
-            };
-            let u64_str = if bytes_available >= 8 {
-                u64::from_le_bytes(value_bytes).to_string()
-            } else {
-                na()
-            };
-            let i64_str = if bytes_available >= 8 {
-                format!("{}", i64::from_le_bytes(value_bytes))
-            } else {
-                na()
-            };
-
-            let format_float = |val: f32| -> String {
-                if !val.is_finite() {
-                    return format!("{val}");
-                }
-                let abs = val.abs();
-                if abs == 0.0 {
-                    "0.0".to_string()
-                } else if abs >= 1e6 || abs <= 1e-3 {
-                    format!("{val:.3e}")
-                } else {
-                    format!("{val:.4}")
-                }
-            };
-            let format_double = |val: f64| -> String {
-                if !val.is_finite() {
-                    return format!("{val}");
-                }
-                let abs = val.abs();
-                if abs == 0.0 {
-                    "0.0".to_string()
-                } else if abs >= 1e7 || abs <= 1e-4 {
-                    format!("{val:.4e}")
-                } else {
-                    format!("{val:.6}")
-                }
-            };
-            let f32_str = if bytes_available >= 4 {
-                format_float(f32::from_le_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]]))
-            } else {
-                na()
-            };
-            let f64_str = if bytes_available >= 8 {
-                format_double(f64::from_le_bytes(value_bytes))
-            } else {
-                na()
-            };
-
-            let label = |s: &'static str| -> Element<'_, Message> {
-                text(s)
-                    .size(13)
-                    .font(icy_ui::Font::MONOSPACE)
-                    .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                        color: Some(theme.secondary.on.scale_alpha(0.6)),
-                    })
-                    .into()
-            };
-            let selected_type = self.data_type();
-            let kind_search_type = |kind: InspectorValueKind| -> Option<SearchType> {
-                match kind {
-                    InspectorValueKind::U8 => Some(SearchType::Byte),
-                    InspectorValueKind::I16 => Some(SearchType::Short),
-                    InspectorValueKind::I32 => Some(SearchType::Int),
-                    InspectorValueKind::I64 => Some(SearchType::Int64),
-                    InspectorValueKind::F32 => Some(SearchType::Float),
-                    InspectorValueKind::F64 => Some(SearchType::Double),
-                    InspectorValueKind::I8 | InspectorValueKind::U16 | InspectorValueKind::U32 | InspectorValueKind::U64 => None,
-                }
-            };
-            let make_pair = |kind: InspectorValueKind, lbl: &'static str, val: String| -> Element<'_, Message> {
-                let edited = self.inspector_edit.as_ref().filter(|(edit_kind, _)| *edit_kind == kind);
-                let input_value = edited.map(|(_, t)| t.clone()).unwrap_or(val);
-                let parse_error = edited.is_some_and(|(_, t)| Self::inspector_bytes(kind, t).is_err());
-                let selected = kind_search_type(kind).is_some_and(|search_type| selected_type == Some(search_type));
-
-                let mut input = text_input("—", &input_value)
-                    .on_input(move |value| Message::MemoryEditorInspectorValueChanged(kind, value))
-                    .on_submit(Message::MemoryEditorInspectorValueSubmit(kind))
-                    .font(icy_ui::Font::MONOSPACE)
-                    .size(13)
-                    .padding([2, 6])
-                    .width(Length::Fixed(170.0));
-                if parse_error {
-                    input = input.style(|theme: &icy_ui::Theme, status| {
-                        let mut style = icy_ui::widget::text_input::default(theme, status);
-                        style.value = theme.destructive.base;
-                        style.border.color = theme.destructive.base;
-                        style
-                    });
-                }
-
-                container(
-                    row![container(label(lbl)).width(Length::Fixed(44.0)), input]
-                        .spacing(8)
-                        .align_y(alignment::Alignment::Center),
-                )
-                .padding([1, 4])
-                .style(move |theme: &icy_ui::Theme| {
-                    if selected {
-                        container::Style {
-                            background: Some(theme.accent.base.scale_alpha(0.12).into()),
-                            border: icy_ui::Border {
-                                color: theme.accent.base.scale_alpha(0.70),
-                                width: 1.0,
-                                radius: Radius::new(4.0),
-                            },
-                            ..Default::default()
-                        }
-                    } else {
-                        container::Style::default()
-                    }
-                })
-                .into()
-            };
-
-            let unsigned_col = column![
-                make_pair(InspectorValueKind::U8, "u8", byte_str),
-                make_pair(InspectorValueKind::U16, "u16", u16_str),
-                make_pair(InspectorValueKind::U32, "u32", u32_str),
-                make_pair(InspectorValueKind::U64, "u64", u64_str),
-            ]
-            .spacing(4);
-            let signed_col = column![
-                make_pair(InspectorValueKind::I8, "i8", i8_str),
-                make_pair(InspectorValueKind::I16, "i16", i16_str),
-                make_pair(InspectorValueKind::I32, "i32", i32_str),
-                make_pair(InspectorValueKind::I64, "i64", i64_str),
-            ]
-            .spacing(4);
-            let float_col = column![
-                make_pair(InspectorValueKind::F32, "f32", f32_str),
-                make_pair(InspectorValueKind::F64, "f64", f64_str),
-            ]
-            .spacing(4);
-
-            container(row![unsigned_col, signed_col, float_col,].spacing(24).padding(12))
-                .width(Length::Fill)
-                .style(|theme: &icy_ui::Theme| container::Style {
-                    background: Some(theme.secondary.base.into()),
-                    text_color: Some(theme.secondary.on),
-                    border: icy_ui::Border {
-                        color: theme.primary.divider,
-                        width: 1.0,
-                        radius: Radius::new(6.0),
-                    },
-                    ..Default::default()
-                })
-        };
-
-        // ---- Toolbar ----------------------------------------------------------
-        let type_options = vec![
-            SearchType::Byte,
-            SearchType::Short,
-            SearchType::Int,
-            SearchType::Int64,
-            SearchType::Float,
-            SearchType::Double,
-        ];
-        let type_picker = pick_list(type_options, self.data_type(), Message::MemoryEditorDataTypeChanged)
-            .placeholder(fl!(crate::LANGUAGE_LOADER, "datatype-heading"))
-            .width(Length::Fixed(160.0));
-
-        let toolbar = container(
-            row![
-                text(fl!(crate::LANGUAGE_LOADER, "memory-editor-title"))
-                    .size(18)
-                    .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style { color: Some(theme.primary.on) }),
-                text(fl!(crate::LANGUAGE_LOADER, "memory-editor-pid", pid = app.state.pid.to_string()))
-                    .size(13)
-                    .font(icy_ui::Font::MONOSPACE)
-                    .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                        color: Some(theme.primary.on.scale_alpha(0.55)),
-                    }),
-                container(
-                    row![
-                        text(fl!(crate::LANGUAGE_LOADER, "memory-editor-address-label"))
-                            .size(13)
-                            .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                                color: Some(theme.primary.on.scale_alpha(0.7)),
-                            }),
-                        text(format!("0x{:016X}", self.editor_initial_address))
-                            .font(icy_ui::Font::MONOSPACE)
-                            .size(13)
-                            .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style { color: Some(theme.primary.on) }),
-                        text(fl!(crate::LANGUAGE_LOADER, "memory-editor-from-hit-label"))
-                            .size(12)
-                            .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                                color: Some(theme.primary.on.scale_alpha(0.45)),
-                            }),
-                        text(fl!(crate::LANGUAGE_LOADER, "datatype-heading"))
-                            .size(13)
-                            .style(|theme: &icy_ui::Theme| icy_ui::widget::text::Style {
-                                color: Some(theme.primary.on.scale_alpha(0.7)),
-                            }),
-                        type_picker,
-                    ]
-                    .spacing(10)
-                    .align_y(alignment::Alignment::Center)
-                )
-                .width(Length::Fill)
-                .align_x(alignment::Alignment::End),
-                button(text(fl!(crate::LANGUAGE_LOADER, "close-button")))
-                    .on_press(Message::CloseMemoryEditor)
-                    .padding([4, 12]),
-            ]
-            .spacing(16)
-            .align_y(alignment::Alignment::Center),
-        )
-        .padding([10, 12]);
-
-        // ---- Body wrapper -----------------------------------------------------
-        // The whole editor is presented as a single primary panel so the
-        // toolbar, header, body and info area share one consistent surface.
-        container(
-            column![
-                toolbar,
-                rule::horizontal(1),
-                region_strip,
-                rule::horizontal(1),
-                header,
-                container(memory_view).style(|theme: &icy_ui::Theme| container::Style {
-                    text_color: Some(theme.primary.on),
-                    ..Default::default()
-                }),
-                rule::horizontal(1),
-                status_strip,
-                rule::horizontal(1),
-                container(info_area).padding([10, 12]),
-            ]
-            .spacing(0),
-        )
-        .padding(DIALOG_PADDING)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(|theme: &icy_ui::Theme| container::Style {
-            background: Some(theme.primary.base.into()),
-            text_color: Some(theme.primary.on),
-            ..Default::default()
-        })
-        .into()
-    }
-
-    pub fn initialize(&mut self, pid: process_memory::Pid, addr: usize, search_type: SearchType) -> Result<(), String> {
-        self.editor_initial_address = addr;
-        self.editor_initial_size = if search_type == SearchType::String || search_type == SearchType::StringUtf16 {
-            1
-        } else {
-            search_type.fixed_byte_length().unwrap_or(1)
-        };
-        self.editor_data_type = search_type.fixed_byte_length().map(|_| search_type);
-
-        self.reset_change_tracker();
-        self.visible_bytes.clear();
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-        self.refresh_regions(pid)?;
-        self.focus_on(addr)?;
-        // Prime the visible-rows buffer so the first paint has bytes.
-        self.refresh_visible(pid);
-        // The grid owns focus immediately on open so hex / arrow / page keys
-        // work without requiring an extra click.
-        self.grid_focused = true;
-        Ok(())
-    }
-
-    /// Clears the change tracker. Called when the editor is opened or closed
-    /// so a re-open does not flash bytes that happened to be different from
-    /// the values seen during the previous session.
     pub fn reset_change_tracker(&mut self) {
-        self.change_tracker.borrow_mut().clear();
+        self.change_tracker.clear();
     }
 
-    /// Moves the cursor within the virtualized window. Returns `true` when the
-    /// cursor row changed (so the caller can ensure it stays visible).
-    pub fn move_cursor(&mut self, row_delta: i32, col_delta: i32) -> bool {
-        if col_delta != 0 {
-            let total_nibbles = BYTES_PER_ROW * 2;
-            let current_nibble_pos = self.cursor_col * 2 + self.cursor_nibble;
-            let new_nibble_pos = (current_nibble_pos as i32 + col_delta).clamp(0, total_nibbles as i32 - 1) as usize;
-            let new_col = new_nibble_pos / 2;
-            let new_nibble = new_nibble_pos % 2;
-            if new_col != self.cursor_col || new_nibble != self.cursor_nibble {
-                self.inspector_edit = None;
-            }
-            self.cursor_col = new_col;
-            self.cursor_nibble = new_nibble;
-        }
-
-        if row_delta == 0 {
-            return false;
-        }
-
-        let new_row = (self.cursor_row as i32 + row_delta).clamp(0, self.total_rows() as i32 - 1) as usize;
-        let changed = new_row != self.cursor_row;
-        self.cursor_row = new_row;
-        if changed {
-            self.inspector_edit = None;
-        }
-        changed
+    pub fn data_type(&self) -> Option<SearchType> {
+        self.data_type
     }
 
-    pub fn set_cursor(&mut self, row: usize, col: usize) {
-        self.cursor_row = row.min(self.total_rows() - 1);
-        self.cursor_col = col.min(BYTES_PER_ROW - 1);
-        self.cursor_nibble = 0;
-        self.inspector_edit = None;
-    }
-
-    pub fn reset_cursor(&mut self) {
-        self.cursor_row = 0;
-        self.cursor_col = 0;
-        self.cursor_nibble = 0;
-        self.inspector_edit = None;
-    }
-
-    pub fn edit_hex(&mut self, pid: process_memory::Pid, hex_digit: u8) -> Result<(), String> {
-        let Some(address) = self.cursor_address() else {
-            return Err(fl!(crate::LANGUAGE_LOADER, "memory-editor-error-cursor-not-readable"));
+    /// Read the visible window and update [`snapshot`] + [`change_tracker`].
+    pub fn tick(&mut self, pid: process_memory::Pid) {
+        let Ok(handle) = pid.try_into_process_handle() else {
+            return;
         };
-        let handle = pid
-            .try_into_process_handle()
-            .map_err(|e| fl!(crate::LANGUAGE_LOADER, "memory-editor-error-attach", error = e.to_string()))?;
-        let buf = copy_address(address, 1, &handle).map_err(|e| {
+        let mut new_snapshot: Vec<Option<u8>> = Vec::with_capacity(self.view_bytes);
+        let now = Instant::now();
+        // Walk regions overlapping the view, reading contiguous segments.
+        let view_end = self.view_address.saturating_add(self.view_bytes);
+        let mut cursor = self.view_address;
+        while cursor < view_end {
+            // Find the region containing `cursor`, if any.
+            let region = self
+                .regions
+                .iter()
+                .find(|r| cursor >= r.start && cursor < r.start + r.size);
+            let next_region_start = self
+                .regions
+                .iter()
+                .filter(|r| r.start > cursor)
+                .map(|r| r.start)
+                .min()
+                .unwrap_or(view_end);
+            let segment_end = if let Some(r) = region {
+                view_end.min(r.start + r.size)
+            } else {
+                view_end.min(next_region_start)
+            };
+            let len = segment_end - cursor;
+            if let Some(r) = region
+                && r.readable
+            {
+                match copy_address(cursor, len, &handle) {
+                    Ok(buf) => {
+                        for (i, b) in buf.iter().enumerate() {
+                            let addr = cursor + i;
+                            let prev = self.change_tracker.get(&addr).map(|(b, _)| *b);
+                            if prev.is_some_and(|p| p != *b) {
+                                self.change_tracker.insert(addr, (*b, now));
+                            } else if prev.is_none() {
+                                self.change_tracker.insert(addr, (*b, now - CHANGE_FADE));
+                            } else {
+                                // unchanged
+                            }
+                            new_snapshot.push(Some(*b));
+                        }
+                    }
+                    Err(_) => {
+                        for _ in 0..len {
+                            new_snapshot.push(None);
+                        }
+                    }
+                }
+            } else {
+                for _ in 0..len {
+                    new_snapshot.push(None);
+                }
+            }
+            cursor = segment_end;
+        }
+        self.snapshot = new_snapshot;
+
+        // Drop expired highlight timestamps so the map doesn't grow forever.
+        self.change_tracker
+            .retain(|_, (_, t)| t.elapsed() < Duration::from_secs(60));
+    }
+
+    fn write_byte(&mut self, pid: process_memory::Pid, offset: usize, byte: u8) -> Result<(), String> {
+        let handle = pid.try_into_process_handle().map_err(|e| {
             fl!(
                 crate::LANGUAGE_LOADER,
-                "memory-editor-error-read-address",
-                address = format!("{address:X}"),
+                "memory-editor-error-attach",
                 error = e.to_string()
             )
         })?;
-        let current_byte = buf[0];
-        let new_byte = if self.cursor_nibble == 0 {
-            (hex_digit << 4) | (current_byte & 0x0F)
-        } else {
-            (current_byte & 0xF0) | hex_digit
-        };
-        self.write_with_undo(pid, address, &[new_byte])?;
-
-        if self.cursor_nibble == 0 {
-            self.cursor_nibble = 1;
-        } else {
-            self.cursor_nibble = 0;
-            self.cursor_col += 1;
-            if self.cursor_col >= BYTES_PER_ROW {
-                self.cursor_col = 0;
-                self.cursor_row = (self.cursor_row + 1).min(self.total_rows() - 1);
-            }
-        }
-        self.inspector_edit = None;
+        let addr = self.view_address + offset;
+        handle.put_address(addr, &[byte]).map_err(|e| {
+            fl!(
+                crate::LANGUAGE_LOADER,
+                "memory-editor-error-write-address",
+                address = format!("{addr:X}"),
+                error = e.to_string()
+            )
+        })?;
         Ok(())
     }
+
+    fn region_of(&self, address: usize) -> Option<&Region> {
+        self.regions
+            .iter()
+            .find(|r| address >= r.start && address < r.start + r.size)
+    }
+
+    fn jump_to_address(&mut self) {
+        let raw = self.address_input.trim();
+        let parsed = if let Some(rest) = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
+            usize::from_str_radix(rest, 16).ok()
+        } else if raw.chars().all(|c| c.is_ascii_hexdigit()) {
+            usize::from_str_radix(raw, 16).ok()
+        } else {
+            raw.parse::<usize>().ok()
+        };
+        if let Some(addr) = parsed {
+            self.origin_address = addr;
+            let half = self.view_bytes / 2;
+            self.view_address = addr.saturating_sub(half) / BYTES_PER_ROW * BYTES_PER_ROW;
+        }
+    }
+}
+
+pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
+    // Header
+    egui::Panel::top("memory_editor_top").show_inside(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.heading(fl!(crate::LANGUAGE_LOADER, "memory-editor-title"));
+            ui.label(
+                fl!(
+                    crate::LANGUAGE_LOADER,
+                    "memory-editor-pid",
+                    pid = app.state.pid
+                )
+                .chars()
+                .filter(|c| c.is_ascii())
+                .collect::<String>(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button(fl!(crate::LANGUAGE_LOADER, "close-button")).clicked() {
+                    app.close_memory_editor();
+                }
+            });
+        });
+        ui.horizontal(|ui| {
+            ui.label(fl!(crate::LANGUAGE_LOADER, "memory-editor-address-label"));
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut app.memory_editor.address_input)
+                    .hint_text(fl!(crate::LANGUAGE_LOADER, "memory-editor-address-hint"))
+                    .desired_width(200.0)
+                    .font(egui::TextStyle::Monospace),
+            );
+            if (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                || ui.button(fl!(crate::LANGUAGE_LOADER, "memory-editor-go-button")).clicked()
+            {
+                app.memory_editor.jump_to_address();
+            }
+
+            // Region info for the currently focused address.
+            let info = if let Some(r) = app.memory_editor.region_of(app.memory_editor.origin_address) {
+                let access = match (r.readable, r.writable) {
+                    (true, true) => "rw",
+                    (true, false) => "r",
+                    (false, true) => "w",
+                    (false, false) => "—",
+                };
+                format!("{}  [{}]", r.name, access)
+            } else {
+                fl!(crate::LANGUAGE_LOADER, "memory-editor-region-unmapped")
+            };
+            ui.label(egui::RichText::new(info).weak());
+        });
+    });
+
+    egui::CentralPanel::default().show_inside(ui, |ui| {
+        // Buttons to scroll a row / page.
+        ui.horizontal(|ui| {
+            if ui.button("▲ Row").clicked() {
+                app.memory_editor.view_address = app.memory_editor.view_address.saturating_sub(BYTES_PER_ROW);
+            }
+            if ui.button("▼ Row").clicked() {
+                app.memory_editor.view_address = app.memory_editor.view_address.saturating_add(BYTES_PER_ROW);
+            }
+            if ui.button("⇞ Page").clicked() {
+                app.memory_editor.view_address = app
+                    .memory_editor
+                    .view_address
+                    .saturating_sub(BYTES_PER_ROW * VISIBLE_ROWS_DEFAULT);
+            }
+            if ui.button("⇟ Page").clicked() {
+                app.memory_editor.view_address = app
+                    .memory_editor
+                    .view_address
+                    .saturating_add(BYTES_PER_ROW * VISIBLE_ROWS_DEFAULT);
+            }
+        });
+
+        // Snapshot view state for the grid rendering loop.
+        let view_address = app.memory_editor.view_address;
+        let origin = app.memory_editor.origin_address;
+        let rows = app.memory_editor.view_bytes / BYTES_PER_ROW;
+        let snapshot = app.memory_editor.snapshot.clone();
+
+        let mut write_byte: Option<(usize, u8)> = None;
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("memory_editor_grid")
+                    .num_columns(BYTES_PER_ROW + 2)
+                    .spacing(egui::vec2(4.0, 2.0))
+                    .show(ui, |ui| {
+                        for row in 0..rows {
+                            let row_addr = view_address + row * BYTES_PER_ROW;
+                            ui.monospace(format!("{:016X}", row_addr));
+
+                            for col in 0..BYTES_PER_ROW {
+                                let offset = row * BYTES_PER_ROW + col;
+                                let addr = row_addr + col;
+                                let byte = snapshot.get(offset).copied().unwrap_or(None);
+
+                                let editing = matches!(app.memory_editor.editing, Some((o, _)) if o == offset);
+                                if editing {
+                                    if let Some((_, buf)) = app.memory_editor.editing.as_mut() {
+                                        let response = ui.add(
+                                            egui::TextEdit::singleline(buf)
+                                                .desired_width(22.0)
+                                                .font(egui::TextStyle::Monospace)
+                                                .char_limit(2),
+                                        );
+                                        response.request_focus();
+                                        if response.lost_focus() {
+                                            if ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                                && let Ok(b) = u8::from_str_radix(buf, 16)
+                                            {
+                                                write_byte = Some((offset, b));
+                                            }
+                                            app.memory_editor.editing = None;
+                                        }
+                                    }
+                                } else {
+                                    let label = match byte {
+                                        Some(b) => format!("{b:02X}"),
+                                        None => "??".to_owned(),
+                                    };
+                                    let mut text = egui::RichText::new(label).monospace();
+                                    if addr == origin {
+                                        text = text.color(ui.visuals().selection.bg_fill).strong();
+                                    }
+                                    // Recent change → orange tint.
+                                    if let Some((_, when)) = app.memory_editor.change_tracker.get(&addr)
+                                        && when.elapsed() < CHANGE_FADE
+                                    {
+                                        text = text.color(egui::Color32::from_rgb(255, 180, 130));
+                                    }
+                                    let response = ui.add(
+                                        egui::Label::new(text)
+                                            .sense(egui::Sense::click()),
+                                    );
+                                    if response.clicked() && byte.is_some() {
+                                        let initial = byte.map(|b| format!("{b:02X}")).unwrap_or_default();
+                                        app.memory_editor.editing = Some((offset, initial));
+                                    }
+                                }
+                            }
+
+                            // ASCII column
+                            let mut ascii = String::with_capacity(BYTES_PER_ROW);
+                            for col in 0..BYTES_PER_ROW {
+                                let offset = row * BYTES_PER_ROW + col;
+                                match snapshot.get(offset).copied().unwrap_or(None) {
+                                    Some(b) if (0x20..0x7f).contains(&b) => ascii.push(b as char),
+                                    Some(_) => ascii.push('.'),
+                                    None => ascii.push(' '),
+                                }
+                            }
+                            ui.monospace(ascii);
+                            ui.end_row();
+                        }
+                    });
+            });
+
+        if let Some((offset, byte)) = write_byte
+            && let Err(err) = app.memory_editor.write_byte(app.state.pid as process_memory::Pid, offset, byte)
+        {
+            app.state.push_error(crate::AppError::memory_editor(err));
+        }
+    });
 }
