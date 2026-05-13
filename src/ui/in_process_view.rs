@@ -401,6 +401,19 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
     // unambiguously means "different result set". Without this, switching to
     // a newly-filled search with the same row count would keep showing the
     // previously cached value rows until a later refresh.
+    //
+    // The cache key is intentionally **content-based** rather than a plain
+    // tick counter: hashing `refresh_counter` at 30 Hz forced the
+    // virtualized scroll area to rebuild every visible row on every frame,
+    // which is exactly the flicker the memory editor explicitly avoids by
+    // not using `show_rows` at all. Here we hash the cached value strings
+    // (and the currently-highlighted set, so highlight expiry triggers a
+    // single rebuild) so the rows only re-create when their displayed
+    // content actually changed. When the value tracker is incomplete
+    // (large result sets above `MAX_TRACKED_RESULTS`, or just after a
+    // search finished and before the next tick has populated it) we fall
+    // back to the tick counter so the per-row read-on-render path still
+    // surfaces live values.
     let cache_key = {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -413,12 +426,48 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
             idx.hash(&mut hasher);
             buf.hash(&mut hasher);
         }
-        for addr in &current_search_context.freezed_addresses {
+        // Sort freeze addresses so HashSet iteration order doesn't churn
+        // the cache key and force spurious rebuilds when nothing changed.
+        let mut freeze_addrs: Vec<usize> = current_search_context.freezed_addresses.iter().copied().collect();
+        freeze_addrs.sort_unstable();
+        for addr in &freeze_addrs {
             addr.hash(&mut hasher);
         }
-        // Bump the cache so live memory re-reads actually surface in the UI.
-        app.refresh_counter.hash(&mut hasher);
         app.hex_display.hash(&mut hasher);
+
+        // Content-based portion: hash the live values shown for each row.
+        // Only do this when the tracker covers the full result set —
+        // otherwise we'd produce a stable key while the per-row fallback
+        // read keeps producing fresh values, freezing the display.
+        let tracker_covers_all = !results.is_empty() && app.value_change_tracker.len() >= total_results;
+        if tracker_covers_all {
+            // Iterate the result list (stable order) instead of the
+            // HashMap so the hash is deterministic.
+            for result in results.iter() {
+                if let Some(val) = app.value_change_tracker.get(&result.addr) {
+                    result.addr.hash(&mut hasher);
+                    val.hash(&mut hasher);
+                }
+            }
+            // Mix in the set of currently-highlighted addresses so the
+            // highlight visibly clears the moment its TTL expires.
+            let mut highlighted: Vec<usize> = app
+                .changed_addresses
+                .iter()
+                .filter(|(_, tick)| app.refresh_counter.saturating_sub(**tick) < CHANGE_HIGHLIGHT_TICKS)
+                .map(|(addr, _)| *addr)
+                .collect();
+            highlighted.sort_unstable();
+            for addr in &highlighted {
+                addr.hash(&mut hasher);
+            }
+        } else {
+            // No (complete) cached values — fall back to a coarse tick
+            // pulse so per-row reads still surface. Dividing the counter
+            // throttles the rebuild rate to ~10 Hz, which is enough to see
+            // updates while reducing widget churn.
+            (app.refresh_counter / 3).hash(&mut hasher);
+        }
         hasher.finish()
     };
 
@@ -431,7 +480,17 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                     visible_range
                         .map(|i| {
                             let result = &results[i];
-                            let value_text = if is_string {
+                            // Prefer the value already cached by
+                            // `update_change_tracker` so the row text is
+                            // stable across renders even when an
+                            // intermittent `copy_address` would otherwise
+                            // fail. Only fall back to a per-row read when
+                            // the tracker has no entry yet (e.g., result
+                            // sets above `MAX_TRACKED_RESULTS` skip the
+                            // tracker entirely).
+                            let value_text = if let Some(cached) = app.value_change_tracker.get(&result.addr) {
+                                cached.clone()
+                            } else if is_string {
                                 let utf16_hint = result.search_type == SearchType::StringUtf16;
                                 read_string_from_process(
                                     app.state.pid as process_memory::Pid,
@@ -440,10 +499,6 @@ fn render_result_table(app: &App) -> Element<'_, Message> {
                                     if utf16_hint { string_len_chars * 2 } else { string_len },
                                 )
                                 .unwrap_or_default()
-                            } else if let Some(cached) = app.value_change_tracker.get(&result.addr) {
-                                // Reuse the value the change tracker already read this tick to
-                                // avoid issuing a second copy_address syscall per visible row.
-                                cached.clone()
                             } else if let Some(byte_len) = result.search_type.fixed_byte_length()
                                 && let Ok(handle) = (app.state.pid as process_memory::Pid).try_into_process_handle()
                             {
@@ -805,7 +860,7 @@ pub fn show_search_in_process_view(app: &App) -> Element<'_, Message> {
     .into()
 }
 
-fn read_string_from_process(pid: process_memory::Pid, addr: usize, utf16le: bool, max_bytes: usize) -> Option<String> {
+pub(crate) fn read_string_from_process(pid: process_memory::Pid, addr: usize, utf16le: bool, max_bytes: usize) -> Option<String> {
     let handle = pid.try_into_process_handle().ok()?;
 
     if utf16le {

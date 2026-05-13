@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Result list values no longer flicker / briefly disappear during refresh.
+  The virtualized scroll area used to rebuild every visible row 30 times a
+  second because the cache key was tied to the refresh tick counter; it now
+  hashes the actual cached value strings, freeze set and highlight set so
+  rows only re-create when their displayed content really changed.
+- One-frame blank rows the instant a search finished are gone. The tick
+  handler now finalises in-flight searches *before* refreshing the live
+  value cache, and it no longer wipes the cache when a scan starts — the
+  previously read values persist across the scan so the first frame after
+  it ends already has cached strings for every surviving address.
+- String result rows now share the same live-value cache as numeric rows,
+  so they no longer briefly read blank when a memory read transiently
+  fails.
+
 ## [0.6.2] - 2026-05-09
 
 Patch release focused on memory editor responsiveness and per-result data type editing.

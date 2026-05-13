@@ -345,16 +345,55 @@ impl App {
             Message::Tick => {
                 if matches!(self.app_state, AppState::InProcess) {
                     self.refresh_counter = self.refresh_counter.wrapping_add(1);
-                    // Only track per-row value changes when no search is in progress.
-                    // During a scan, `collect_results()` can return millions of intermediate
-                    // hits and one `copy_address` syscall per result would freeze the UI.
+
+                    // Finalize any in-flight search BEFORE refreshing the
+                    // value tracker. Previously the order was reversed:
+                    // tracker was refreshed first while `searching` was
+                    // still flagged, then the search was marked complete
+                    // in the same tick, then the search-running branch had
+                    // cleared the tracker. The very next render frame then
+                    // saw `searching == None` but an empty tracker and
+                    // every visible row fell back to a per-row
+                    // `copy_address` — those transient failures produced
+                    // the brief blank cells the user perceived as flicker.
+                    {
+                        let current_search_context = &mut self.state.searches[self.state.current_search];
+                        if !matches!(current_search_context.searching, SearchMode::None) {
+                            current_search_context.collect_results();
+                        }
+                        if current_search_context.search_complete.load(Ordering::SeqCst) {
+                            // Drain the channel until it's empty so we don't keep
+                            // re-sorting the cache (and visibly shifting addresses)
+                            // for the next few ticks while the last few worker
+                            // batches trickle in. Workers may have queued up to
+                            // RESULTS_CHANNEL_CAPACITY batches that were not yet
+                            // consumed when `search_complete` flipped.
+                            loop {
+                                let before = current_search_context.get_result_count();
+                                let _ = current_search_context.collect_results();
+                                let after = current_search_context.get_result_count();
+                                if before == after {
+                                    break;
+                                }
+                            }
+
+                            current_search_context.searching = SearchMode::None;
+                        }
+                    }
+
+                    // Now refresh the live-value tracker with the finalized
+                    // result set. While a scan is actually running we
+                    // simply skip the refresh — `collect_results()` can
+                    // return millions of intermediate hits and one
+                    // `copy_address` syscall per result would freeze the
+                    // UI. We *do not* clear the tracker in that case: the
+                    // result table is hidden during a scan anyway, and
+                    // keeping the prior values means the first frame after
+                    // the search ends already has cached strings for every
+                    // surviving address (instead of a blank flash).
                     let search_running = self.state.searches.iter().any(|s| !matches!(s.searching, SearchMode::None));
                     if !search_running && self.state.is_process_running() {
                         self.update_change_tracker();
-                    } else if search_running {
-                        // Keep stale highlights from confusing the user once the search
-                        // finishes and the result set changes.
-                        self.clear_change_tracker();
                     }
                     // Pull live memory into the in-progress edit buffer
                     // independently of `update_change_tracker` — the tracker
@@ -364,32 +403,8 @@ impl App {
                         self.sync_editing_buffer();
                     }
                 }
-                // If searching, keep scheduling ticks
-                let current_search_context = &mut self.state.searches[self.state.current_search];
 
-                if !matches!(current_search_context.searching, SearchMode::None) {
-                    current_search_context.collect_results();
-                }
-
-                if current_search_context.search_complete.load(Ordering::SeqCst) {
-                    // Drain the channel until it's empty so we don't keep
-                    // re-sorting the cache (and visibly shifting addresses)
-                    // for the next few ticks while the last few worker
-                    // batches trickle in. Workers may have queued up to
-                    // RESULTS_CHANNEL_CAPACITY batches that were not yet
-                    // consumed when `search_complete` flipped.
-                    loop {
-                        let before = current_search_context.get_result_count();
-                        let _ = current_search_context.collect_results();
-                        let after = current_search_context.get_result_count();
-                        if before == after {
-                            break;
-                        }
-                    }
-
-                    current_search_context.searching = SearchMode::None;
-                }
-
+                let current_search_context = &self.state.searches[self.state.current_search];
                 if !matches!(current_search_context.searching, SearchMode::None) {
                     sleep(Duration::from_millis(100));
                     return Task::done(Message::Tick);
@@ -1044,7 +1059,8 @@ impl App {
         /// At ~1 syscall per address, going much beyond this stalls the UI thread.
         const MAX_TRACKED_RESULTS: usize = 4096;
 
-        let results = self.state.searches[self.state.current_search].collect_results();
+        let search_index = self.state.current_search;
+        let results = self.state.searches[search_index].collect_results();
         if results.len() > MAX_TRACKED_RESULTS {
             // Too many candidates to poll every tick — user needs to filter further.
             self.clear_change_tracker();
@@ -1054,16 +1070,38 @@ impl App {
         let hex_display = self.hex_display;
         let counter = self.refresh_counter;
 
+        // Snapshot the strings we need for string-typed result reads without
+        // keeping a borrow on `self.state` across the mutable
+        // `value_change_tracker` updates below.
+        let search_value_text = self.state.searches[search_index].search_value_text.clone();
+        let string_byte_len = search_value_text.len();
+        let string_char_count = search_value_text.chars().count();
+
         // Open the process handle once for the whole pass instead of per result.
         let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle() else {
             return;
         };
 
         for result in results.iter() {
-            let Some(byte_len) = result.search_type.fixed_byte_length() else { continue };
-            let Ok(buf) = copy_address(result.addr, byte_len, &handle) else { continue };
-            let val = SearchValue(result.search_type, buf);
-            let value_str = if hex_display { val.to_hex_string() } else { val.to_string() };
+            // Read the value the same way the renderer would, so the cached
+            // string is exactly what the row displays. Numeric types use
+            // `copy_address` + `SearchValue`; string types go through the
+            // shared `read_string_from_process` helper so the cached text
+            // matches the row's NUL-terminated, length-bounded read.
+            let value_str = if let Some(byte_len) = result.search_type.fixed_byte_length() {
+                let Ok(buf) = copy_address(result.addr, byte_len, &handle) else { continue };
+                let val = SearchValue(result.search_type, buf);
+                if hex_display { val.to_hex_string() } else { val.to_string() }
+            } else if matches!(result.search_type, SearchType::String | SearchType::StringUtf16) {
+                let utf16 = result.search_type == SearchType::StringUtf16;
+                let max_bytes = if utf16 { string_char_count * 2 } else { string_byte_len };
+                let Some(s) = crate::ui::in_process_view::read_string_from_process(pid as process_memory::Pid, result.addr, utf16, max_bytes) else {
+                    continue;
+                };
+                s
+            } else {
+                continue;
+            };
 
             let prev = self.value_change_tracker.insert(result.addr, value_str.clone());
             if let Some(prev_val) = prev
