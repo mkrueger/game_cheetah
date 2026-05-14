@@ -1,7 +1,9 @@
 use process_memory::{TryIntoProcessHandle, copy_address};
 
-/// Process memory reader using /proc/[pid]/mem for zero-copy reads on Linux.
-/// This is more efficient than process_vm_readv for multiple reads as we keep the file open.
+/// Process memory reader using `/proc/[pid]/mem` + `pread` on Linux.
+/// Profiling on the scan hot path showed the persistent fd + `pread` approach
+/// was faster after warm-up than repeated `process_vm_readv` calls for this
+/// workload, so initial searches keep one reader per Rayon worker.
 #[cfg(target_os = "linux")]
 pub struct ProcessMemReader {
     file: std::fs::File,
@@ -58,8 +60,9 @@ impl ProcessMemReader {
     }
 }
 
-/// Fast memory read using process_vm_readv on Linux (fastest method).
-/// Falls back to /proc/[pid]/mem + pread on error.
+/// Fallback memory read helper for ad-hoc reads outside the hot initial-scan
+/// path. The main scanner uses `ProcessMemReader` because measured throughput
+/// was better with a reused `/proc/[pid]/mem` fd + `pread`.
 #[cfg(target_os = "linux")]
 pub(super) fn fast_read_memory(pid: process_memory::Pid, address: usize, size: usize) -> Result<Vec<u8>, std::io::Error> {
     use std::fs::OpenOptions;

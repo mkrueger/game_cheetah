@@ -32,6 +32,68 @@ pub use unknown::compare_values;
 
 type UnknownPrevMap = HashMap<(usize, SearchType), [u8; 8]>;
 
+/// Initial-scan chunk size chosen from local profiling:
+/// - whole-region scheduling left large mappings as long-running Rayon tasks;
+///   chunking was consistently faster in flamegraph-driven measurements.
+/// - 16/32 MiB were the safest measured range; 32 MiB kept roughly the same
+///   wall time as 16 MiB while creating fewer Rayon jobs and allocations.
+/// - Chunks overlap by `needle_len - 1` bytes while reading so boundary
+///   matches are still found; duplicate hits are filtered by logical end.
+const SEARCH_REGION_CHUNK_SIZE: usize = 32 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy)]
+struct SearchChunk {
+    start: usize,
+    read_size: usize,
+    logical_size: usize,
+}
+
+fn split_search_regions(regions: &[(usize, usize)], chunk_size: usize, overlap: usize) -> Vec<SearchChunk> {
+    let mut chunks = Vec::new();
+    for &(region_start, region_size) in regions {
+        let region_end = region_start.saturating_add(region_size);
+        let mut chunk_start = region_start;
+        while chunk_start < region_end {
+            let logical_end = chunk_start.saturating_add(chunk_size).min(region_end);
+            let read_end = logical_end.saturating_add(overlap).min(region_end);
+            chunks.push(SearchChunk {
+                start: chunk_start,
+                read_size: read_end.saturating_sub(chunk_start),
+                logical_size: logical_end.saturating_sub(chunk_start),
+            });
+            chunk_start = logical_end;
+        }
+    }
+    chunks
+}
+
+fn search_loaded_memory(
+    memory: &[u8],
+    base_address: usize,
+    logical_end: usize,
+    search_data: &SearchValue,
+    guess_needles: Option<&[(SearchType, Vec<u8>)]>,
+) -> Vec<SearchResult> {
+    let mut results = if let Some(needles) = guess_needles {
+        // Guess mode: scan the buffer for each precomputed typed needle
+        // (Int / Float / Double).
+        let mut all_results = Vec::new();
+        for (search_type, bytes) in needles {
+            let typed_results: Vec<SearchResult> = search_memory(memory, bytes, *search_type, base_address);
+            all_results.extend(typed_results);
+        }
+        all_results
+    } else {
+        search_memory(memory, &search_data.1, search_data.0, base_address)
+    };
+
+    // Chunked reads include a small overlap after the logical chunk end so
+    // boundary-crossing matches are found. Only the chunk that owns the start
+    // address should emit the hit; otherwise duplicates appear.
+    results.retain(|result| result.addr < logical_end);
+    results
+}
+
 fn collect_next_previous_values(next_prev: Arc<Mutex<UnknownPrevMap>>) -> UnknownPrevMap {
     match Arc::try_unwrap(next_prev) {
         Ok(mutex) => match mutex.into_inner() {
@@ -642,6 +704,14 @@ impl GameCheetahEngine {
             None
         };
 
+        let max_needle_len = if let Some(needles) = guess_needles.as_ref() {
+            needles.iter().map(|(_, bytes)| bytes.len()).max().unwrap_or(1)
+        } else {
+            search_data.1.len().max(1)
+        };
+        let chunk_overlap = max_needle_len.saturating_sub(1);
+        let chunks = split_search_regions(&regions, SEARCH_REGION_CHUNK_SIZE, chunk_overlap);
+
         search_complete.store(false, Ordering::SeqCst);
 
         std::thread::spawn(move || {
@@ -651,8 +721,8 @@ impl GameCheetahEngine {
                 static MEM_READER: std::cell::RefCell<Option<(process_memory::Pid, ProcessMemReader)>> = const { std::cell::RefCell::new(None) };
             }
 
-            regions.par_iter().for_each(|(start, size)| {
-                // Try to read memory using the most efficient method available
+            chunks.par_iter().for_each(|chunk| {
+                // Try to read memory using the most efficient method available.
                 #[cfg(target_os = "linux")]
                 let memory_result = MEM_READER.with(|reader_cell| {
                     let mut reader_opt = reader_cell.borrow_mut();
@@ -668,30 +738,19 @@ impl GameCheetahEngine {
                     }
 
                     if let Some((_, reader)) = &*reader_opt {
-                        reader.read_at(*start, *size)
+                        reader.read_at(chunk.start, chunk.read_size)
                     } else {
-                        fast_read_memory(pid, *start, *size)
+                        fast_read_memory(pid, chunk.start, chunk.read_size)
                     }
                 });
 
                 #[cfg(not(target_os = "linux"))]
-                let memory_result = fast_read_memory(pid, *start, *size);
+                let memory_result = fast_read_memory(pid, chunk.start, chunk.read_size);
 
                 match memory_result {
                     Ok(memory) => {
-                        let results = if let Some(needles) = guess_needles.as_ref() {
-                            // Guess mode: scan the region for each precomputed
-                            // typed needle (Int / Float / Double).
-                            let mut all_results = Vec::new();
-                            for (search_type, bytes) in needles.iter() {
-                                let typed_results: Vec<SearchResult> = search_memory(&memory, bytes, *search_type, *start);
-                                all_results.extend(typed_results);
-                            }
-                            all_results
-                        } else {
-                            search_memory(&memory, &search_data.1, search_data.0, *start)
-                        };
-
+                        let logical_end = chunk.start.saturating_add(chunk.logical_size);
+                        let results = search_loaded_memory(&memory, chunk.start, logical_end, &search_data, guess_needles.as_ref().map(|needles| needles.as_slice()));
                         if !results.is_empty() {
                             let _ = results_sender.send(results);
                         }
@@ -703,7 +762,7 @@ impl GameCheetahEngine {
                     }
                 }
 
-                current_bytes.fetch_add(*size, Ordering::SeqCst);
+                current_bytes.fetch_add(chunk.logical_size, Ordering::SeqCst);
             });
 
             cache_valid.store(false, Ordering::Release);
