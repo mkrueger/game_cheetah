@@ -715,50 +715,85 @@ impl GameCheetahEngine {
         search_complete.store(false, Ordering::SeqCst);
 
         std::thread::spawn(move || {
-            // Use thread-local ProcessMemReader for efficient repeated reads
+            // Use one persistent /proc/[pid]/mem fd and read buffer per Rayon
+            // worker. Local profiling showed `read_into` buffer reuse was
+            // consistently faster than allocating a fresh Vec for every chunk.
             #[cfg(target_os = "linux")]
             thread_local! {
-                static MEM_READER: std::cell::RefCell<Option<(process_memory::Pid, ProcessMemReader)>> = const { std::cell::RefCell::new(None) };
+                static MEM_READER: std::cell::RefCell<Option<(process_memory::Pid, ProcessMemReader, Vec<u8>)>> = const { std::cell::RefCell::new(None) };
             }
 
             chunks.par_iter().for_each(|chunk| {
-                // Try to read memory using the most efficient method available.
                 #[cfg(target_os = "linux")]
-                let memory_result = MEM_READER.with(|reader_cell| {
-                    let mut reader_opt = reader_cell.borrow_mut();
+                {
+                    MEM_READER.with(|reader_cell| {
+                        let mut reader_opt = reader_cell.borrow_mut();
 
-                    // Check if we have a valid reader for this pid
-                    let needs_new_reader = match &*reader_opt {
-                        Some((cached_pid, _)) => *cached_pid != pid,
-                        None => true,
-                    };
+                        // Check if we have a valid reader for this pid.
+                        let needs_new_reader = match &*reader_opt {
+                            Some((cached_pid, _, _)) => *cached_pid != pid,
+                            None => true,
+                        };
 
-                    if needs_new_reader {
-                        *reader_opt = ProcessMemReader::new(pid).ok().map(|r| (pid, r));
-                    }
+                        if needs_new_reader {
+                            *reader_opt = ProcessMemReader::new(pid).ok().map(|reader| (pid, reader, Vec::new()));
+                        }
 
-                    if let Some((_, reader)) = &*reader_opt {
-                        reader.read_at(chunk.start, chunk.read_size)
-                    } else {
-                        fast_read_memory(pid, chunk.start, chunk.read_size)
-                    }
-                });
-
-                #[cfg(not(target_os = "linux"))]
-                let memory_result = fast_read_memory(pid, chunk.start, chunk.read_size);
-
-                match memory_result {
-                    Ok(memory) => {
                         let logical_end = chunk.start.saturating_add(chunk.logical_size);
-                        let results = search_loaded_memory(&memory, chunk.start, logical_end, &search_data, guess_needles.as_ref().map(|needles| needles.as_slice()));
+                        let results = if let Some((_, reader, buffer)) = reader_opt.as_mut() {
+                            buffer.resize(chunk.read_size, 0);
+                            match reader.read_into(chunk.start, &mut buffer[..chunk.read_size]) {
+                                Ok(read_size) => search_loaded_memory(
+                                    &buffer[..read_size],
+                                    chunk.start,
+                                    logical_end,
+                                    &search_data,
+                                    guess_needles.as_ref().map(|needles| needles.as_slice()),
+                                ),
+                                Err(_) => Vec::new(),
+                            }
+                        } else {
+                            match fast_read_memory(pid, chunk.start, chunk.read_size) {
+                                Ok(memory) => search_loaded_memory(
+                                    &memory,
+                                    chunk.start,
+                                    logical_end,
+                                    &search_data,
+                                    guess_needles.as_ref().map(|needles| needles.as_slice()),
+                                ),
+                                Err(_) => Vec::new(),
+                            }
+                        };
+
                         if !results.is_empty() {
                             let _ = results_sender.send(results);
                         }
-                    }
-                    Err(_) => {
-                        // Silently skip this region - it's no longer accessible
-                        // This is normal for dynamic memory regions
-                        // Don't log every failure as it would spam the console
+                    });
+                }
+
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let memory_result = fast_read_memory(pid, chunk.start, chunk.read_size);
+
+                    match memory_result {
+                        Ok(memory) => {
+                            let logical_end = chunk.start.saturating_add(chunk.logical_size);
+                            let results = search_loaded_memory(
+                                &memory,
+                                chunk.start,
+                                logical_end,
+                                &search_data,
+                                guess_needles.as_ref().map(|needles| needles.as_slice()),
+                            );
+                            if !results.is_empty() {
+                                let _ = results_sender.send(results);
+                            }
+                        }
+                        Err(_) => {
+                            // Silently skip this region - it's no longer accessible
+                            // This is normal for dynamic memory regions
+                            // Don't log every failure as it would spam the console
+                        }
                     }
                 }
 
