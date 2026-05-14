@@ -31,16 +31,8 @@ jobs:
           components: rustfmt, clippy
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
-      - name: Repair Rust toolchain shims
-        if: runner.os != 'Windows'
-        run: |
-          CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
-          for proxy in cargo cargo-clippy cargo-fmt rustc rustdoc rustfmt clippy-driver; do
-            rm -f "$CARGO_HOME/bin/$proxy"
-            ln -s rustup "$CARGO_HOME/bin/$proxy"
-          done
-          cargo --version
-          rustc --version
+        with:
+          cache-bin: false
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Check clippy
@@ -57,16 +49,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
-      - name: Repair Rust toolchain shims
-        if: runner.os != 'Windows'
-        run: |
-          CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
-          for proxy in cargo cargo-clippy cargo-fmt rustc rustdoc rustfmt clippy-driver; do
-            rm -f "$CARGO_HOME/bin/$proxy"
-            ln -s rustup "$CARGO_HOME/bin/$proxy"
-          done
-          cargo --version
-          rustc --version
+        with:
+          cache-bin: false
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Run cargo audit
@@ -83,16 +67,8 @@ jobs:
           python-version: "3.x"
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
-      - name: Repair Rust toolchain shims
-        if: runner.os != 'Windows'
-        run: |
-          CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
-          for proxy in cargo cargo-clippy cargo-fmt rustc rustdoc rustfmt clippy-driver; do
-            rm -f "$CARGO_HOME/bin/$proxy"
-            ln -s rustup "$CARGO_HOME/bin/$proxy"
-          done
-          cargo --version
-          rustc --version
+        with:
+          cache-bin: false
       - name: Install gtk
         run: |
           sudo apt-get update
@@ -155,16 +131,8 @@ jobs:
           python-version: "3.x"
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
-      - name: Repair Rust toolchain shims
-        if: runner.os != 'Windows'
-        run: |
-          CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
-          for proxy in cargo cargo-clippy cargo-fmt rustc rustdoc rustfmt clippy-driver; do
-            rm -f "$CARGO_HOME/bin/$proxy"
-            ln -s rustup "$CARGO_HOME/bin/$proxy"
-          done
-          cargo --version
-          rustc --version
+        with:
+          cache-bin: false
       - name: Build exe
         run: |
           cargo build --release
@@ -199,16 +167,8 @@ jobs:
           python-version: "3.x"
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
-      - name: Repair Rust toolchain shims
-        if: runner.os != 'Windows'
-        run: |
-          CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
-          for proxy in cargo cargo-clippy cargo-fmt rustc rustdoc rustfmt clippy-driver; do
-            rm -f "$CARGO_HOME/bin/$proxy"
-            ln -s rustup "$CARGO_HOME/bin/$proxy"
-          done
-          cargo --version
-          rustc --version
+        with:
+          cache-bin: false
       - name: Install cargo bundle & get
         run: |
           rustup target add aarch64-apple-darwin
