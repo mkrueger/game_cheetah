@@ -700,11 +700,12 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
                         ];
                         let selectable = NUMERIC_TYPES.contains(&current_type);
                         let selected_text = current_type.get_short_description_text();
-                        // Width is large enough to render "int64" / "double"
-                        // without elision in the closed-combo state.
+                        // Wide enough for the longest English label
+                        // ("Double") plus a little slack for translations,
+                        // without taking up half the toolbar.
                         let combo = egui::ComboBox::from_id_salt("memory_editor_result_type")
                             .selected_text(selected_text)
-                            .width(160.0);
+                            .width(100.0);
                         if selectable {
                             let response = combo.show_ui(ui, |ui| {
                                 for &ty in NUMERIC_TYPES {
@@ -798,7 +799,7 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
             data.caret_snapshot = raw.caret();
             let undo_len_before = data.undo_stack.len();
 
-            raw.draw_editor_contents(
+            raw.draw_editor_contents_with_highlight(
                 ui,
                 data,
                 |d, addr| match d.cache.get(&addr).copied() {
@@ -826,6 +827,7 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
                     let caret = d.caret_snapshot;
                     apply_write(d, addr, &[byte], caret);
                 },
+                |d, addr| change_intensity(d, addr),
             );
 
             // The hex grid advances the caret one nibble after a write;
@@ -834,6 +836,18 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
             let caret_after = raw.caret();
             for record in &mut data.undo_stack[undo_len_before..] {
                 record.caret_after = caret_after;
+            }
+
+            // Animate the change-flash overlay smoothly even when there's
+            // no user input. Only request a repaint while at least one
+            // tracked byte is still inside the fade window.
+            let now = Instant::now();
+            let needs_repaint = data
+                .change_tracker
+                .values()
+                .any(|(_, ts)| now.duration_since(*ts) < CHANGE_FADE);
+            if needs_repaint {
+                ui.ctx().request_repaint();
             }
         });
 }
@@ -1068,4 +1082,19 @@ fn cap_stack(stack: &mut Vec<WriteRecord>) {
         let overflow = stack.len() - UNDO_STACK_LIMIT;
         stack.drain(0..overflow);
     }
+}
+
+/// Fade intensity in `0.0..=1.0` for the byte at `addr`. Returns `0.0`
+/// for bytes that haven't changed recently or aren't tracked yet. Drives
+/// the orange overlay drawn by the hex grid and the ASCII sidebar.
+fn change_intensity(data: &EditorData, addr: Address) -> f32 {
+    let (_, ts) = match data.change_tracker.get(&addr) {
+        Some(entry) => entry,
+        None => return 0.0,
+    };
+    let elapsed = ts.elapsed();
+    if elapsed >= CHANGE_FADE {
+        return 0.0;
+    }
+    1.0 - (elapsed.as_secs_f32() / CHANGE_FADE.as_secs_f32())
 }

@@ -139,13 +139,15 @@ impl MemoryEditor {
             .resizable(true)
             .show(ctx, |ui| {
                 self.shrink_window_ui(ui);
-                self.draw_editor_contents_impl(ui, mem, read_fn, write_fn);
+                type DummyHighlightFunction<T> = fn(&mut T, Address) -> f32;
+                self.draw_editor_contents_impl(ui, mem, read_fn, write_fn, None::<DummyHighlightFunction<T>>);
             });
     }
 
     pub fn draw_editor_contents_read_only<T: ?Sized>(&mut self, ui: &mut Ui, mem: &mut T, read_fn: impl FnMut(&mut T, Address) -> Option<u8>) {
         type DummyWriteFunction<T> = fn(&mut T, Address, u8);
-        self.draw_editor_contents_impl(ui, mem, read_fn, None::<DummyWriteFunction<T>>);
+        type DummyHighlightFunction<T> = fn(&mut T, Address) -> f32;
+        self.draw_editor_contents_impl(ui, mem, read_fn, None::<DummyWriteFunction<T>>, None::<DummyHighlightFunction<T>>);
     }
 
     pub fn draw_editor_contents<T: ?Sized>(
@@ -155,7 +157,23 @@ impl MemoryEditor {
         read_fn: impl FnMut(&mut T, Address) -> Option<u8>,
         write_fn: impl FnMut(&mut T, Address, u8),
     ) {
-        self.draw_editor_contents_impl(ui, mem, read_fn, Some(write_fn));
+        type DummyHighlightFunction<T> = fn(&mut T, Address) -> f32;
+        self.draw_editor_contents_impl(ui, mem, read_fn, Some(write_fn), None::<DummyHighlightFunction<T>>);
+    }
+
+    /// Same as [`Self::draw_editor_contents`] but also takes a closure
+    /// that returns a per-byte fade intensity in `0.0..=1.0`. Bytes with
+    /// a non-zero intensity get a translucent orange overlay so the user
+    /// notices them blinking when the target process modifies them.
+    pub fn draw_editor_contents_with_highlight<T: ?Sized>(
+        &mut self,
+        ui: &mut Ui,
+        mem: &mut T,
+        read_fn: impl FnMut(&mut T, Address) -> Option<u8>,
+        write_fn: impl FnMut(&mut T, Address, u8),
+        highlight_fn: impl FnMut(&mut T, Address) -> f32,
+    ) {
+        self.draw_editor_contents_impl(ui, mem, read_fn, Some(write_fn), Some(highlight_fn));
     }
 
     fn draw_editor_contents_impl<T: ?Sized>(
@@ -164,6 +182,7 @@ impl MemoryEditor {
         mem: &mut T,
         mut read_fn: impl FnMut(&mut T, Address) -> Option<u8>,
         mut write_fn: Option<impl FnMut(&mut T, Address, u8)>,
+        mut highlight_fn: Option<impl FnMut(&mut T, Address) -> f32>,
     ) {
         assert!(
             !self.address_ranges.is_empty(),
@@ -233,10 +252,10 @@ impl MemoryEditor {
 
                         ui.label(start_text);
 
-                        self.draw_memory_values(ui, mem, &mut read_fn, &mut write_fn, start_address, &address_space);
+                        self.draw_memory_values(ui, mem, &mut read_fn, &mut write_fn, &mut highlight_fn, start_address, &address_space);
 
                         if show_ascii {
-                            self.draw_ascii_sidebar(ui, mem, &mut read_fn, start_address, &address_space);
+                            self.draw_ascii_sidebar(ui, mem, &mut read_fn, &mut highlight_fn, start_address, &address_space);
                         }
 
                         ui.end_row();
@@ -252,6 +271,7 @@ impl MemoryEditor {
         mem: &mut T,
         read_fn: &mut impl FnMut(&mut T, Address) -> Option<u8>,
         write_fn: &mut Option<impl FnMut(&mut T, Address, u8)>,
+        highlight_fn: &mut Option<impl FnMut(&mut T, Address) -> f32>,
         start_address: Address,
         address_space: &Range<Address>,
     ) {
@@ -318,6 +338,19 @@ impl MemoryEditor {
                     if frame_data.is_in_result_range(memory_address) {
                         let bg = egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 96);
                         ui.painter().rect_filled(rect, 0.0, bg);
+                    }
+
+                    // Live-change flash: paint a translucent orange tint
+                    // that fades out, sourced from the integration's
+                    // change tracker via `highlight_fn`. This is the
+                    // signal that the target process modified this byte.
+                    if let Some(hf) = highlight_fn.as_mut() {
+                        let intensity = hf(mem, memory_address).clamp(0.0, 1.0);
+                        if intensity > 0.0 {
+                            let alpha = (intensity * 180.0) as u8;
+                            ui.painter()
+                                .rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 150, 60, alpha));
+                        }
                     }
 
                     // Paint the two hex digits centered in the cell. We split
@@ -507,6 +540,7 @@ impl MemoryEditor {
         ui: &mut Ui,
         mem: &mut T,
         read_fn: &mut impl FnMut(&mut T, Address) -> Option<u8>,
+        highlight_fn: &mut Option<impl FnMut(&mut T, Address) -> f32>,
         start_address: Address,
         address_space: &Range<Address>,
     ) {
@@ -538,6 +572,17 @@ impl MemoryEditor {
                         let accent = ui.visuals().selection.bg_fill;
                         let bg = egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 96);
                         text = text.background_color(bg);
+                    }
+
+                    // Same change-flash overlay as the hex grid, applied
+                    // as a background tint on the ASCII glyph so the user
+                    // sees the change in either column.
+                    if let Some(hf) = highlight_fn.as_mut() {
+                        let intensity = hf(mem, memory_address).clamp(0.0, 1.0);
+                        if intensity > 0.0 {
+                            let alpha = (intensity * 180.0) as u8;
+                            text = text.background_color(egui::Color32::from_rgba_unmultiplied(255, 150, 60, alpha));
+                        }
                     }
 
                     ui.label(text);
