@@ -213,15 +213,31 @@ impl App {
 
     /// Periodic per-frame housekeeping run before the view code.
     fn tick(&mut self, ctx: &egui::Context) {
-        // Defensive: make sure none of egui's debug paint overlays
-        // (red/blue widget outlines from `style.debug.show_interactive_widgets`
-        // or `show_widget_hits` etc.) sneak back on between frames — they
-        // can persist via egui's built-in style editor and become visible
-        // mid-session, e.g. as red rectangles appearing during scrolling.
-        // The `debug` field on `Style` is only present in debug builds.
+        // Suppress egui's built-in debug paint overlays. Two of them are
+        // enabled by default in debug builds and produce noisy red strokes
+        // and orange "Unaligned" markers all over the result table during
+        // scrolling:
+        //
+        // * `warn_if_rect_changes_id` — paints a 2 px **red** rect-stroke
+        //   when the same screen rect appears with a different widget id
+        //   between passes. `egui_extras::TableBuilder` recycles row ids
+        //   as rows scroll in/out of view, which trips this constantly.
+        //
+        // * `show_unaligned` — paints orange "Unaligned" tick marks on
+        //   widgets whose rect isn't pixel-aligned to the GUI rounding
+        //   grid. Equally noisy during fractional scroll offsets.
+        //
+        // The `debug` field on `Style` is only present in debug builds,
+        // so this whole block is cfg-gated.
         #[cfg(debug_assertions)]
-        if ctx.global_style().debug != egui::style::DebugOptions::default() {
-            ctx.global_style_mut(|style| style.debug = egui::style::DebugOptions::default());
+        {
+            let debug = ctx.global_style().debug;
+            if debug.warn_if_rect_changes_id || debug.show_unaligned {
+                ctx.global_style_mut(|style| {
+                    style.debug.warn_if_rect_changes_id = false;
+                    style.debug.show_unaligned = false;
+                });
+            }
         }
 
         // Search context state machine: cycle each context's search-mode
