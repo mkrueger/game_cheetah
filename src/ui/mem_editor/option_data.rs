@@ -66,7 +66,6 @@ pub struct MemoryEditorOptions {
     pub show_ascii: bool,
     pub show_zero_colour: bool,
     pub none_display_value: String,
-    pub is_options_collapsed: bool,
     pub data_preview: DataPreviewOptions,
     pub column_count: usize,
     pub is_resizable_column: bool,
@@ -86,7 +85,6 @@ impl Default for MemoryEditorOptions {
             show_ascii: true,
             show_zero_colour: true,
             none_display_value: "--".to_string(),
-            is_options_collapsed: false,
             zero_colour: Color32::from_gray(80),
             is_resizable_column: true,
             column_count: 16,
@@ -105,12 +103,9 @@ pub(crate) struct BetweenFrameData {
     pub previous_frame_editor_width: f32,
     pub selected_edit_address: Option<Address>,
 
-    pub memory_range_combo_box_enabled: bool,
-
     pub selected_highlight_address: Option<Address>,
     pub show_additional_highlights: bool,
 
-    pub goto_address_string: String,
     pub goto_address_line: Option<usize>,
 
     /// Address range that corresponds to the cheat / search result currently being edited.
@@ -128,10 +123,8 @@ pub(crate) struct BetweenFrameData {
 impl BetweenFrameData {
     pub fn set_highlight_address(&mut self, new_address: Address) {
         self.selected_highlight_address = if matches!(self.selected_highlight_address, Some(current) if current == new_address) {
-            self.goto_address_string.clear();
             None
         } else {
-            self.goto_address_string = format!("{:X}", new_address);
             Some(new_address)
         };
     }

@@ -44,6 +44,29 @@ const CACHE_PREFETCH: usize = 256;
 /// degenerate.
 const MAX_CACHE_READ: usize = 64 * 1024;
 
+/// Maximum number of write operations remembered for undo/redo. Older
+/// entries are dropped from the bottom of the stack once the cap is hit.
+const UNDO_STACK_LIMIT: usize = 256;
+
+/// One reversible write: the bytes that lived at `addr` before the write
+/// and the bytes the user (or undo/redo) replaced them with. Multi-byte
+/// writes (inspector edits) are stored as a single record so undo
+/// restores the entire value atomically. The caret state at the moment
+/// the write happened is also captured so undo/redo restores the user's
+/// editing context, not just the bytes.
+#[derive(Debug, Clone)]
+struct WriteRecord {
+    addr: Address,
+    before: Vec<u8>,
+    after: Vec<u8>,
+    /// Caret position before the write (so undo can put the cursor back
+    /// where the user was when they made the change).
+    caret_before: Option<(Address, bool)>,
+    /// Caret position right after the write (so redo restores the
+    /// post-write cursor — typically one nibble past `addr`).
+    caret_after: Option<(Address, bool)>,
+}
+
 #[derive(Debug, Clone)]
 struct RegionInfo {
     range: Range<Address>,
@@ -86,6 +109,16 @@ struct EditorData {
     /// with `origin_address` this gives the address range painted with
     /// the result-highlight accent.
     current_result_byte_length: usize,
+    /// Reversible writes performed since the editor was opened.
+    /// Pushed by [`apply_write`]; popped by `Ctrl+Z`.
+    undo_stack: Vec<WriteRecord>,
+    /// Writes that were just undone and can be re-applied with `Ctrl+Y`.
+    /// Cleared as soon as the user makes a fresh write.
+    redo_stack: Vec<WriteRecord>,
+    /// Caret position captured at the start of the current frame so the
+    /// hex-grid write closure (which only sees `EditorData`, not the raw
+    /// editor) can stamp it onto new undo records.
+    caret_snapshot: Option<(Address, bool)>,
 }
 
 /// The numeric interpretations exposed by the bottom data-inspector
@@ -151,6 +184,9 @@ impl Default for MemoryEditor {
                 inspector_edit: None,
                 current_result_type: None,
                 current_result_byte_length: 1,
+                undo_stack: Vec::new(),
+                redo_stack: Vec::new(),
+                caret_snapshot: None,
             },
         }
     }
@@ -163,7 +199,6 @@ fn default_options() -> MemoryEditorOptions {
     opts.address_text_colour = egui::Color32::from_rgb(150, 160, 200);
     opts.highlight_text_colour = egui::Color32::from_rgb(255, 180, 130);
     opts.zero_colour = egui::Color32::from_gray(90);
-    opts.is_options_collapsed = false;
     opts
 }
 
@@ -213,6 +248,8 @@ impl MemoryEditor {
         self.data.origin_address = address;
         self.data.cache.clear();
         self.data.change_tracker.clear();
+        self.data.undo_stack.clear();
+        self.data.redo_stack.clear();
         self.data.current_result_type = Some(search_type);
         self.data.current_result_byte_length = byte_length.max(1);
         self.raw.goto_address(address);
@@ -358,6 +395,53 @@ impl MemoryEditor {
 
     pub fn origin_address(&self) -> Address {
         self.data.origin_address
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.data.undo_stack.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.data.redo_stack.is_empty()
+    }
+
+    /// Revert the most recent write. The byte(s) are written back to the
+    /// target with their pre-write value and the record is moved onto
+    /// the redo stack. No-op if [`Self::can_undo`] is `false` or the
+    /// process handle is missing.
+    pub fn undo(&mut self) -> bool {
+        let Some(record) = self.data.undo_stack.pop() else {
+            return false;
+        };
+        if write_raw(&self.data, record.addr, &record.before) {
+            apply_to_cache(&mut self.data, record.addr, &record.before);
+            self.raw.set_caret(record.caret_before);
+            self.data.redo_stack.push(record);
+            cap_stack(&mut self.data.redo_stack);
+            true
+        } else {
+            // Push the record back so the user can retry once the write
+            // failure is resolved (e.g. region became writable again).
+            self.data.undo_stack.push(record);
+            false
+        }
+    }
+
+    /// Re-apply the most recently undone write.
+    pub fn redo(&mut self) -> bool {
+        let Some(record) = self.data.redo_stack.pop() else {
+            return false;
+        };
+        if write_raw(&self.data, record.addr, &record.after) {
+            apply_to_cache(&mut self.data, record.addr, &record.after);
+            self.raw.set_caret(record.caret_after);
+            self.data.undo_stack.push(record);
+            cap_stack(&mut self.data.undo_stack);
+            true
+        } else {
+            self.data.redo_stack.push(record);
+            false
+        }
     }
 }
 
@@ -579,6 +663,27 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
                         app.memory_editor.goto_origin();
                     }
 
+                    // Undo / Redo buttons. Disabled when there's nothing
+                    // on the respective stack so the user gets immediate
+                    // visual feedback that a shortcut would be a no-op.
+                    let can_redo = app.memory_editor.can_redo();
+                    let can_undo = app.memory_editor.can_undo();
+                    ui.add_space(6.0);
+                    if ui
+                        .add_enabled(can_redo, btn("\u{21BB}".to_string()))
+                        .on_hover_text(fl!(crate::LANGUAGE_LOADER, "memory-editor-redo-tooltip"))
+                        .clicked()
+                    {
+                        app.memory_editor.redo();
+                    }
+                    if ui
+                        .add_enabled(can_undo, btn("\u{21BA}".to_string()))
+                        .on_hover_text(fl!(crate::LANGUAGE_LOADER, "memory-editor-undo-tooltip"))
+                        .clicked()
+                    {
+                        app.memory_editor.undo();
+                    }
+
                     // Result-type picker — lets the user reinterpret the
                     // current cheat result as a different fixed-width
                     // numeric type (e.g. promote an int8 hit to int32).
@@ -633,6 +738,25 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
     app.memory_editor.data.handle = pid_t.try_into_process_handle().ok();
     let handle_attached = app.memory_editor.data.handle.is_some();
 
+    // Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z — undo & redo for memory writes.
+    // Suppressed while a text field has focus so the shortcut still
+    // performs in-field undo on Goto / Inspector edits.
+    if handle_attached && !ui.ctx().text_edit_focused() {
+        let (undo, redo) = ui.ctx().input(|i| {
+            let ctrl = i.modifiers.command;
+            let shift = i.modifiers.shift;
+            let undo = ctrl && !shift && i.key_pressed(egui::Key::Z);
+            let redo = ctrl && (i.key_pressed(egui::Key::Y) || (shift && i.key_pressed(egui::Key::Z)));
+            (undo, redo)
+        });
+        if undo {
+            app.memory_editor.undo();
+        }
+        if redo {
+            app.memory_editor.redo();
+        }
+    }
+
     // Inspector lives in its own bottom panel so the hex grid scroll
     // area knows its exact height and `visible_range` matches what the
     // user actually sees. Without this, the scroll area inside the
@@ -668,6 +792,12 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
             // to be our `EditorData` so the closures can mutate the cache.
             let MemoryEditor { raw, data } = &mut app.memory_editor;
 
+            // Capture caret state so the per-byte write closure (which
+            // only sees `EditorData`) can stamp it onto new undo
+            // records as `caret_before`.
+            data.caret_snapshot = raw.caret();
+            let undo_len_before = data.undo_stack.len();
+
             raw.draw_editor_contents(
                 ui,
                 data,
@@ -693,14 +823,18 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
                     }
                 },
                 |d, addr, byte| {
-                    if let Some(handle) = d.handle.as_ref()
-                        && handle.put_address(addr, &[byte]).is_ok()
-                    {
-                        d.cache.insert(addr, Some(byte));
-                        d.change_tracker.insert(addr, (byte, Instant::now()));
-                    }
+                    let caret = d.caret_snapshot;
+                    apply_write(d, addr, &[byte], caret);
                 },
             );
+
+            // The hex grid advances the caret one nibble after a write;
+            // patch the post-write caret onto every undo record added
+            // this frame so redo restores the user's editing context.
+            let caret_after = raw.caret();
+            for record in &mut data.undo_stack[undo_len_before..] {
+                record.caret_after = caret_after;
+            }
         });
 }
 
@@ -836,7 +970,11 @@ fn inspector_column(ui: &mut egui::Ui, data: &mut EditorData, addr: Address, byt
             // values in the target process.
             if enter_pressed {
                 if let Ok(write_bytes) = parse_kind(kind, &buf, endian) {
-                    write_inspector_bytes(data, addr, &write_bytes);
+                    // Inspector writes don't move the hex-grid caret;
+                    // record the inspector's address as both the before
+                    // and after caret so undo/redo restore the user's
+                    // focus point.
+                    apply_write(data, addr, &write_bytes, Some((addr, false)));
                     data.inspector_edit = None;
                     response.surrender_focus();
                 }
@@ -847,18 +985,87 @@ fn inspector_column(ui: &mut egui::Ui, data: &mut EditorData, addr: Address, byt
     }
 }
 
-/// Write a sequence of bytes starting at `addr` and update the cache /
-/// change tracker so the hex grid and inspector re-render immediately.
-fn write_inspector_bytes(data: &mut EditorData, addr: Address, bytes: &[u8]) {
-    let Some(handle) = data.handle.as_ref() else {
-        return;
-    };
-    if handle.put_address(addr, bytes).is_ok() {
-        let now = Instant::now();
-        for (i, b) in bytes.iter().enumerate() {
+/// Write `bytes` starting at `addr` to the target process and update the
+/// cache/change-tracker so the UI reflects the write immediately. Also
+/// captures the previous bytes from the cache, pushes an undo entry,
+/// and clears the redo stack. Returns whether the write succeeded.
+///
+/// `caret_before` is the caret position at the moment the user
+/// initiated the write — used by undo to restore the editing context.
+/// The corresponding `caret_after` is filled in by the surrounding
+/// frame logic once the post-write caret is known.
+fn apply_write(data: &mut EditorData, addr: Address, bytes: &[u8], caret_before: Option<(Address, bool)>) -> bool {
+    if bytes.is_empty() || data.handle.is_none() {
+        return false;
+    }
+
+    // Snapshot what's currently at `addr..addr+bytes.len()` so the write
+    // is reversible. Bytes that aren't cached fall back to a fresh read
+    // from the target — this is the only path that needs the original
+    // value, so we accept the extra syscall here.
+    let before = read_current(data, addr, bytes.len());
+
+    if !write_raw(data, addr, bytes) {
+        return false;
+    }
+    apply_to_cache(data, addr, bytes);
+
+    if before.as_slice() != bytes {
+        data.redo_stack.clear();
+        data.undo_stack.push(WriteRecord {
+            addr,
+            before,
+            after: bytes.to_vec(),
+            caret_before,
+            // Filled in after the panel finishes drawing this frame, so
+            // the post-write caret reflects any movement (e.g. nibble
+            // advance) the editor performed in response to this write.
+            caret_after: caret_before,
+        });
+        cap_stack(&mut data.undo_stack);
+    }
+
+    true
+}
+
+/// Read `len` bytes starting at `addr`, preferring cached values and
+/// falling back to a one-shot `copy_address` for any byte not in cache.
+/// Missing bytes are reported as `0`.
+fn read_current(data: &EditorData, addr: Address, len: usize) -> Vec<u8> {
+    let handle = data.handle.as_ref();
+    (0..len)
+        .map(|i| {
             let a = addr + i;
-            data.cache.insert(a, Some(*b));
-            data.change_tracker.insert(a, (*b, now));
-        }
+            match data.cache.get(&a).copied() {
+                Some(Some(b)) => b,
+                _ => handle.and_then(|h| copy_address(a, 1, h).ok()).and_then(|v| v.first().copied()).unwrap_or(0),
+            }
+        })
+        .collect()
+}
+
+/// Best-effort raw write to the target. Does not touch undo/redo state.
+fn write_raw(data: &EditorData, addr: Address, bytes: &[u8]) -> bool {
+    match data.handle.as_ref() {
+        Some(handle) => handle.put_address(addr, bytes).is_ok(),
+        None => false,
+    }
+}
+
+/// Mark `addr..addr+bytes.len()` as written in the cache and the
+/// change-tracker so the highlight fade kicks in.
+fn apply_to_cache(data: &mut EditorData, addr: Address, bytes: &[u8]) {
+    let now = Instant::now();
+    for (i, b) in bytes.iter().enumerate() {
+        let a = addr + i;
+        data.cache.insert(a, Some(*b));
+        data.change_tracker.insert(a, (*b, now));
+    }
+}
+
+fn cap_stack(stack: &mut Vec<WriteRecord>) {
+    if stack.len() > UNDO_STACK_LIMIT {
+        let overflow = stack.len() - UNDO_STACK_LIMIT;
+        stack.drain(0..overflow);
     }
 }

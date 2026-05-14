@@ -567,6 +567,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     let mut remove_result: Option<usize> = None;
     let mut open_editor: Option<usize> = None;
     let mut begin_edit: Option<(usize, String)> = None;
+    let mut live_write: Option<(usize, String)> = None;
     let mut commit_edit: Option<(usize, String)> = None;
     let mut cancel_edit = false;
 
@@ -671,6 +672,13 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                         // buffer so keystrokes mutate it in place.
                         let buf = &mut app.editing_result.as_mut().unwrap().1;
                         let r = ui.add(egui::TextEdit::singleline(buf).desired_width(cell_width).text_color_opt(text_color));
+                        if r.changed() {
+                            // Live write: try to push every keystroke into
+                            // the target process. Invalid intermediate input
+                            // is silently ignored so half-typed numbers
+                            // don't spam errors.
+                            live_write = Some((i, buf.clone()));
+                        }
                         if r.lost_focus() {
                             if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                                 commit_edit = Some((i, buf.clone()));
@@ -742,6 +750,9 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     }
     if let Some((i, text)) = begin_edit {
         app.editing_result = Some((i, text));
+    }
+    if let Some((i, text)) = live_write {
+        app.try_write_result_value(i, &text);
     }
     if let Some((i, text)) = commit_edit {
         let ok = app.commit_result_value(i, &text);

@@ -17,7 +17,6 @@ use egui::{Align2, Context, RichText, ScrollArea, Sense, TextWrapMode, Ui, Vec2,
 use self::option_data::{BetweenFrameData, MemoryEditorOptions};
 
 pub mod option_data;
-mod option_ui;
 
 /// A memory address that should be read from/written to.
 pub type Address = usize;
@@ -57,7 +56,6 @@ impl MemoryEditor {
     /// Remove every previously-registered address range.
     pub fn clear_address_ranges(&mut self) {
         self.address_ranges.clear();
-        self.frame_data.memory_range_combo_box_enabled = false;
         self.options.selected_address_range.clear();
     }
 
@@ -86,6 +84,28 @@ impl MemoryEditor {
     /// choice.
     pub fn endianness(&self) -> option_data::Endianness {
         self.options.data_preview.selected_endianness
+    }
+
+    /// Caret position in the hex grid, if any: `(address, on_low_nibble)`.
+    pub fn caret(&self) -> Option<(Address, bool)> {
+        self.frame_data.selected_edit_address.map(|a| (a, self.frame_data.selected_low_nibble))
+    }
+
+    /// Restore a previously captured caret position. The address is
+    /// validated against the currently-selected range; an out-of-range
+    /// address simply clears the selection.
+    pub fn set_caret(&mut self, caret: Option<(Address, bool)>) {
+        if let Some(range) = self.address_ranges.get(&self.options.selected_address_range).cloned() {
+            match caret {
+                Some((addr, on_low)) => {
+                    self.frame_data.set_selected_edit_address(Some(addr), &range);
+                    self.frame_data.selected_low_nibble = on_low;
+                }
+                None => {
+                    self.frame_data.set_selected_edit_address(None, &range);
+                }
+            }
+        }
     }
 
     pub fn window_ui_read_only<T: ?Sized>(&mut self, ctx: &Context, is_open: &mut bool, mem: &mut T, read_fn: impl FnMut(&mut T, Address) -> Option<u8>) {
@@ -149,10 +169,6 @@ impl MemoryEditor {
             !self.address_ranges.is_empty(),
             "At least one address range needs to be added to render the contents!"
         );
-
-        self.draw_options_area(ui, mem, &mut read_fn);
-
-        ui.separator();
 
         let MemoryEditorOptions {
             show_ascii,
@@ -607,7 +623,6 @@ impl MemoryEditor {
 
     pub fn set_address_range(&mut self, range_name: impl Into<String>, address_range: Range<Address>) {
         self.address_ranges.insert(range_name.into(), address_range);
-        self.frame_data.memory_range_combo_box_enabled = self.address_ranges.len() > 1;
 
         if self.options.selected_address_range.is_empty()
             && let Some((name, _)) = self.address_ranges.iter().next()
@@ -640,7 +655,6 @@ impl MemoryEditor {
             self.options.selected_address_range = name;
             self.frame_data.goto_address_line = address.checked_sub(range.start).map(|o| o / self.options.column_count);
             self.frame_data.selected_highlight_address = Some(address);
-            self.frame_data.goto_address_string = format!("{address:X}");
         }
     }
 

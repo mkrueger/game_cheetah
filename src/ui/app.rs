@@ -559,6 +559,17 @@ impl App {
     /// Write the typed value back to the target process. Returns whether the
     /// write succeeded.
     pub fn commit_result_value(&mut self, index: usize, value_text: &str) -> bool {
+        self.write_result_value(index, value_text, true)
+    }
+
+    /// Same as [`Self::commit_result_value`] but suppresses the "invalid
+    /// value" toast when parsing fails. Used for live, per-keystroke writes
+    /// so transient half-typed numbers don't spam the error queue.
+    pub fn try_write_result_value(&mut self, index: usize, value_text: &str) -> bool {
+        self.write_result_value(index, value_text, false)
+    }
+
+    fn write_result_value(&mut self, index: usize, value_text: &str, report_parse_errors: bool) -> bool {
         let Ok(handle) = (self.state.pid as process_memory::Pid).try_into_process_handle() else {
             return false;
         };
@@ -590,10 +601,12 @@ impl App {
                 true
             }
             Err(err) => {
-                self.state.push_error(AppError::InvalidValue {
-                    value: value_text.to_owned(),
-                    source: err,
-                });
+                if report_parse_errors {
+                    self.state.push_error(AppError::InvalidValue {
+                        value: value_text.to_owned(),
+                        source: err,
+                    });
+                }
                 false
             }
         }
