@@ -1,67 +1,121 @@
 # ![Logo](/build/linux/128x128.png) Game Cheetah
 
-**Game Cheetah** is a high-performance memory scanner and game trainer for Linux, Windows, and macOS. It allows users to search, modify, and freeze values in running processes, particularly games, to create cheats, trainers, or analyze program behavior.
+**Game Cheetah** is a fast, cross-platform memory scanner and game trainer for Linux, Windows, and macOS.
 
-Make yourself more memory, better stats or more lives. Single player games store the game state in memory where multiplayer games don't. So, this utility is not useful for multiplayer games.
+Use it to search values in a running process, narrow down result sets, edit memory, freeze values, and keep useful addresses in cheat tables. It is intended for single-player/offline games, debugging, reverse engineering, game modding, and educational use.
 
-## Key Features
+> Modifying another process can crash the target application or behave unpredictably. Use at your own risk. Game Cheetah is not intended for cheating in online or multiplayer games.
 
-- **Multi-Platform Support**: Works on Linux, Windows, and macOS with platform-specific optimizations
-- **Advanced Memory Search**: 
-  - Multiple data types (integers, floats, doubles, strings, arrays)
-  - SIMD-optimized search algorithms for blazing-fast performance
-  - Parallel search using all CPU cores
-  - Smart memory region filtering to skip system libraries
-- **Real-time Value Manipulation**:
-  - Modify values directly in memory
-  - Freeze values to prevent games from changing them
-  - Multiple search tabs for different values
-  - Undo/redo functionality
-- **Intuitive GUI**: Built with Iced framework for a responsive, modern interface
-- **Memory Editor**: Hex editor view for direct memory inspection and editing
-- **Internationalization**: Multi-language support via Fluent localization
+## Features
 
-## Technical Highlights
+- **Cross-platform desktop app**
+  - Linux, Windows, and macOS support
+  - Native GUI built with Rust, `egui`, and `eframe`
+  - English and German localization
+- **Fast memory scanning**
+  - Search integers, floats, doubles, strings, UTF-16 strings, byte arrays, and unknown values
+  - Narrow results with exact, changed, unchanged, increased, decreased, and guessed-value workflows
+  - Parallel search and SIMD-aware code paths where they help
+  - Memory-region filtering to skip irrelevant or unsafe regions
+- **Live process editing**
+  - Edit search results directly in the result table
+  - Freeze individual values or all visible results
+  - Changed-value highlighting for live rows
+  - Multiple search tabs for independent searches
+- **Memory editor**
+  - Hex and ASCII memory view
+  - Direct byte inspection and editing
+  - Undo/redo support
+  - Highlighting for the selected result range
+- **Cheat tables and workflow helpers**
+  - Save and load cheat-table entries
+  - Rename, close, and manage searches
+  - Auto-reconnect to a process with the same name after restart
+  - Optional update checks against GitHub releases
 
-- Written in Rust for memory safety and performance
-- Lock-free data structures for efficient multi-threaded operations
-- SIMD instructions (SSE2/AVX2) for accelerated searches
-- Zero-copy memory access where possible
-- Optimized for both speed and low memory usage
-
-## Use Cases
-
-- Creating game trainers and cheats
-- Debugging and reverse engineering
-- Educational purposes to understand memory management
-- Game modding and analysis
-- Performance analysis of applications
-
-**Similar to**: Cheat Engine, ArtMoney, or GameGuardian, but with a focus on performance, safety, and cross-platform compatibility.
-
-Keep in mind that altering a game memory contents may lead to game and/or computer crashes. Use at your own risk.
-
-# Game Cheetah in action
+## Game Cheetah in action
 
 [![Watch the video](https://img.youtube.com/vi/ng_1LBaUS48/maxresdefault.jpg)](https://youtu.be/ng_1LBaUS48)
 
-# Installing
+## Installation
 
-Grab a prebuilt binary from the releases page (recommended):
+### Prebuilt binaries
+
+The recommended installation method is to download a prebuilt package from the latest GitHub release:
+
 https://github.com/mkrueger/game_cheetah/releases/latest
 
-> **Note:** Game Cheetah is **no longer published to crates.io** starting with 0.6.0.
-> The UI now depends on [`icy_ui`](https://github.com/mkrueger/icy_ui), which is not on crates.io,
-> and `cargo publish` requires every dependency to have a crates.io version. Until `icy_ui` is
-> published, install from a release binary or build from source (see below). `cargo install game-cheetah`
-> will continue to work for older 0.5.x versions but will not receive new releases.
+Release artifacts usually include:
 
-# Build from source
+- Linux AppImage
+- Linux `.deb` package
+- Windows executable
+- macOS universal `.dmg`
 
-Install Rust (https://www.rust-lang.org/tools/install) and run:
+### Install with Cargo
 
+Game Cheetah is also published on crates.io:
+
+```bash
+cargo install game-cheetah
 ```
+
+This requires a recent Rust toolchain. The current minimum supported Rust version is listed in `Cargo.toml`.
+
+## Linux permissions
+
+On Linux, reading or writing another process is controlled by the operating system. Game Cheetah can usually inspect processes owned by the same user, but some distributions restrict this through Yama `ptrace_scope`.
+
+If Game Cheetah cannot open or read a process, check:
+
+```bash
+cat /proc/sys/kernel/yama/ptrace_scope
+```
+
+For local development or personal single-user systems, you can temporarily relax this setting with:
+
+```bash
+echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
+```
+
+Changing this setting affects system security. Prefer the least-permissive setup that works for your use case.
+
+## Build from source
+
+Install Rust from https://www.rust-lang.org/tools/install, then run:
+
+```bash
 cargo build --release
 ```
 
-The executable will be in `target/release/game-cheetah`.
+The executable will be created at:
+
+```bash
+target/release/game-cheetah
+```
+
+On Linux, you may need development packages for native GUI, audio, and windowing dependencies. On Debian/Ubuntu-like systems, the CI build uses:
+
+```bash
+sudo apt install libgtk-3-dev libasound2-dev libxcb-shape0-dev libxcb-xfixes0-dev
+```
+
+## Development
+
+Common checks:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets
+```
+
+The GitHub Actions workflow runs formatting, linting, tests, dependency audit, and multi-platform release builds.
+
+## Similar tools
+
+Game Cheetah is similar in spirit to Cheat Engine, ArtMoney, and GameGuardian, with a focus on Rust, performance, safety, and cross-platform desktop support.
+
+## License
+
+Game Cheetah is licensed under the Apache License 2.0.
