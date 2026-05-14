@@ -128,6 +128,12 @@ pub struct GameCheetahEngine {
     pub last_process_update: SystemTime,
     pub processes: Vec<ProcessInfo>,
 
+    /// Persistent sysinfo `System` reused across `update_process_data`
+    /// calls. Building a fresh `System` on every refresh is expensive
+    /// (full /proc walk + allocation) — we keep one around and
+    /// refresh it incrementally with a minimal `ProcessRefreshKind`.
+    process_system: System,
+
     pub current_search: usize,
     pub searches: Vec<Box<SearchContext>>,
     // Removed: pub search_threads: ThreadPool,
@@ -229,6 +235,7 @@ impl Default for GameCheetahEngine {
             process_filter: "".to_owned(),
             processes: Vec::new(),
             last_process_update: SystemTime::now(),
+            process_system: System::new(),
             current_search: 0,
             searches: vec![Box::new(SearchContext::new(fl!(crate::LANGUAGE_LOADER, "first-search-label")))],
             // Removed: search_threads: ThreadPool::new(16),
@@ -444,7 +451,20 @@ impl GameCheetahEngine {
     }
 
     pub fn update_process_data(&mut self) {
-        let sys = System::new_all();
+        // Refresh the persistent `System` with the minimal set of
+        // information we actually display: memory + (one-shot) cmd,
+        // exe, user. Crucially we exclude tasks (huge speed-up on
+        // Linux — the docs explicitly warn that
+        // `ProcessRefreshKind::everything()` walks every task in
+        // `/proc/<pid>/task/<tid>/`) and CPU/disk usage.
+        let refresh_kind = ProcessRefreshKind::nothing()
+            .with_memory()
+            .with_cmd(UpdateKind::OnlyIfNotSet)
+            .with_exe(UpdateKind::OnlyIfNotSet)
+            .with_user(UpdateKind::OnlyIfNotSet)
+            .without_tasks();
+        self.process_system.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh_kind);
+        let sys = &self.process_system;
         self.last_process_update = SystemTime::now();
         self.processes.clear();
 

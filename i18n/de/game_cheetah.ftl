@@ -9,11 +9,18 @@ main-menu-subtitle = Speicherscanner und Game Trainer
 process-label = Prozess:
 filter-processes-hint = Prozesse filtern
 no-processes-loading = Prozesse werden geladen…
+no-processes-loading-hint = Die Prozessliste wird gelesen — das kann einen Moment dauern.
 no-processes-match = Keine Prozesse passen zum aktuellen Filter.
+no-processes-match-hint = Probiere einen anderen Filter oder leere ihn, um alle Prozesse zu sehen.
+reset-filter-button = Filter zurücksetzen
 process-count-total = { $total } Prozesse
 process-count-filtered = { $shown } von { $total } Prozessen
 first-search-label = Erste Suche 
 searches-heading = Laufende Suchen
+rename-search-hint = F2 oder Rechtsklick zum Umbenennen
+rename-search-menu = Umbenennen
+close-search-menu = Schließen
+close-other-searches-menu = Andere schließen
 
 search-label = Suche { $search }
 name-label = Name:
@@ -72,7 +79,6 @@ address-heading = Addresse
 value-heading = Wert
 freezed-heading = Eingefroren
 datatype-heading = Datentyp
-hex-toggle-label = Hex
 
 pid-heading = PID
 name-heading = Name

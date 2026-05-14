@@ -9,132 +9,296 @@ use crate::{
 };
 
 /// Uniform row height used by the virtualized result table.
-const RESULT_ROW_HEIGHT: f32 = 26.0;
+const RESULT_ROW_HEIGHT: f32 = 32.0;
 
 pub fn view_in_process(app: &mut App, ui: &mut egui::Ui) {
     top_bar(app, ui);
     error_bar(app, ui);
-    side_tabs(app, ui);
-    egui::CentralPanel::default().show_inside(ui, |ui| {
-        search_area(app, ui);
-    });
+    tab_bar(app, ui);
+    egui::CentralPanel::default()
+        .frame(egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::symmetric(20, 16)))
+        .show_inside(ui, |ui| {
+            search_area(app, ui);
+        });
 }
 
 fn top_bar(app: &mut App, ui: &mut egui::Ui) {
-    egui::Panel::top("in_process_top").show_inside(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(fl!(crate::LANGUAGE_LOADER, "process-label"));
-            ui.colored_label(
-                ui.visuals().hyperlink_color,
-                format!("{} ({})", app.state.process_name, app.state.pid),
-            );
+    egui::Panel::top("in_process_top")
+        .frame(
+            egui::Frame::new()
+                .fill(egui::Color32::from_rgb(22, 25, 29))
+                .inner_margin(egui::Margin::symmetric(20, 10))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 50, 60))),
+        )
+        .show_inside(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "process-label")).size(14.0).weak());
+                ui.add_space(2.0);
+                let accent = ui.visuals().selection.bg_fill;
+                ui.label(egui::RichText::new(&app.state.process_name).size(15.0).strong().color(accent));
+                ui.label(egui::RichText::new(format!("PID {}", app.state.pid)).size(13.0).weak().monospace());
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(fl!(crate::LANGUAGE_LOADER, "close-button")).clicked() {
-                    app.back_to_main_menu();
-                }
-                if ui.button(fl!(crate::LANGUAGE_LOADER, "load-cheat-table-button")).clicked() {
-                    app.load_cheat_table();
-                }
-                if ui.button(fl!(crate::LANGUAGE_LOADER, "save-cheat-table-button")).clicked() {
-                    app.save_cheat_table();
-                }
-                if !app.cheat_table_status.is_empty() {
-                    ui.label(egui::RichText::new(&app.cheat_table_status).size(11.0).weak());
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let btn = |label: String| egui::Button::new(egui::RichText::new(label).size(14.0)).min_size(egui::vec2(0.0, 28.0));
+                    if ui.add(btn(fl!(crate::LANGUAGE_LOADER, "close-button"))).clicked() {
+                        app.back_to_main_menu();
+                    }
+                    if ui.add(btn(fl!(crate::LANGUAGE_LOADER, "load-cheat-table-button"))).clicked() {
+                        app.load_cheat_table();
+                    }
+                    if ui.add(btn(fl!(crate::LANGUAGE_LOADER, "save-cheat-table-button"))).clicked() {
+                        app.save_cheat_table();
+                    }
+                    if !app.cheat_table_status.is_empty() {
+                        ui.add_space(6.0);
+                        ui.label(egui::RichText::new(&app.cheat_table_status).size(13.0).weak());
+                    }
+                });
             });
         });
-    });
 }
 
 fn error_bar(app: &mut App, ui: &mut egui::Ui) {
     if let Some(error) = app.state.current_error() {
         let text = error.to_string();
         let mut dismiss = false;
-        egui::Panel::top("in_process_error").show_inside(ui, |ui| {
-            egui::Frame::group(ui.style())
-                .fill(egui::Color32::from_rgba_unmultiplied(160, 50, 50, 30))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.colored_label(egui::Color32::from_rgb(220, 120, 120), "\u{26A0}");
-                        ui.colored_label(egui::Color32::from_rgb(220, 120, 120), text);
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("\u{00D7}").clicked() {
-                                dismiss = true;
-                            }
+        egui::Panel::top("in_process_error")
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(20, 6)))
+            .show_inside(ui, |ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgba_unmultiplied(160, 50, 50, 30))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(160, 70, 70)))
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .inner_margin(egui::Margin::symmetric(12, 8))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.colored_label(egui::Color32::from_rgb(220, 120, 120), "\u{26A0}");
+                            ui.colored_label(egui::Color32::from_rgb(232, 180, 180), text);
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.small_button("\u{00D7}").clicked() {
+                                    dismiss = true;
+                                }
+                            });
                         });
                     });
-                });
-        });
+            });
         if dismiss {
             app.state.dismiss_error();
         }
     }
 }
 
-fn side_tabs(app: &mut App, ui: &mut egui::Ui) {
-    egui::Panel::left("search_tabs")
-        .resizable(false)
-        .default_size(160.0)
+/// Browser-style horizontal tab bar listing all active searches.
+///
+/// Layout:
+/// * One row of tabs with rounded top corners.
+/// * Active tab is filled with the accent colour; inactive tabs are muted.
+/// * A small `×` close button is shown on hover (and persistently on the
+///   active tab) when there is more than one search.
+/// * Trailing `+` action creates a new search.
+/// * The bar is horizontally scrollable so a large number of searches still
+///   stays usable.
+fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
+    egui::Panel::top("search_tab_bar")
+        .frame(
+            egui::Frame::new()
+                .fill(egui::Color32::from_rgb(20, 23, 27))
+                .inner_margin(egui::Margin {
+                    left: 12,
+                    right: 12,
+                    top: 6,
+                    bottom: 0,
+                })
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 50, 60))),
+        )
         .show_inside(ui, |ui| {
-            ui.add_space(6.0);
-            ui.label(
-                egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "searches-heading"))
-                    .strong(),
-            );
-            ui.separator();
-
-            // Take a snapshot so we can mutate while iterating.
+            let accent = ui.visuals().selection.bg_fill;
             let count = app.state.searches.len();
             let mut switch_to: Option<usize> = None;
             let mut close: Option<usize> = None;
+            let mut close_others: Option<usize> = None;
             let mut rename: Option<usize> = None;
-            for i in 0..count {
-                let is_active = i == app.state.current_search;
-                let name = app.state.searches[i].description.clone();
+            let mut new_search = false;
 
-                ui.horizontal(|ui| {
-                    // If this tab is being renamed, show a TextEdit instead.
-                    if app.renaming_search_index == Some(i) {
-                        let response = ui.add(
-                            egui::TextEdit::singleline(&mut app.rename_search_text)
-                                .desired_width(ui.available_width() - 24.0),
-                        );
-                        response.request_focus();
-                        if response.lost_focus() {
-                            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                app.cancel_rename_search();
-                            } else {
-                                app.commit_rename_search();
+            // F2 starts renaming the active tab when nothing else has
+            // focus (so the user can't trigger it while typing in the
+            // value-input or any other text field).
+            if app.renaming_search_index.is_none() && !ui.memory(|m| m.focused().is_some()) && ui.input(|i| i.key_pressed(egui::Key::F2)) {
+                rename = Some(app.state.current_search);
+            }
+
+            egui::ScrollArea::horizontal()
+                .id_salt("tab_bar_scroll")
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        const TAB_HEIGHT: f32 = 32.0;
+                        const TAB_RADIUS: u8 = 8;
+
+                        for i in 0..count {
+                            let is_active = i == app.state.current_search;
+                            let name = app.state.searches[i].description.clone();
+
+                            // Inline rename: a TextEdit replaces the tab so the
+                            // bar height stays stable.
+                            if app.renaming_search_index == Some(i) {
+                                let response = ui.add(
+                                    egui::TextEdit::singleline(&mut app.rename_search_text)
+                                        .id(egui::Id::new(("rename_search", i)))
+                                        .desired_width(140.0)
+                                        .margin(egui::Margin::symmetric(8, 6)),
+                                );
+                                if app.rename_request_focus {
+                                    response.request_focus();
+                                    app.rename_request_focus = false;
+                                }
+                                let escape_pressed = ui.input(|input| input.key_pressed(egui::Key::Escape));
+                                if escape_pressed {
+                                    app.cancel_rename_search();
+                                } else if response.lost_focus() {
+                                    app.commit_rename_search();
+                                }
+                                continue;
                             }
-                        }
-                    } else {
-                        let mut btn = egui::Button::new(egui::RichText::new(&name))
-                            .min_size(egui::vec2(ui.available_width() - 24.0, 22.0));
-                        if is_active {
-                            btn = btn.fill(ui.visuals().selection.bg_fill);
-                        }
-                        let response = ui.add(btn);
-                        if response.clicked() {
-                            switch_to = Some(i);
-                        }
-                        if response.double_clicked() {
-                            rename = Some(i);
-                        }
-                    }
-                    if count > 1 && ui.small_button("×").clicked() {
-                        close = Some(i);
-                    }
-                });
-            }
 
-            ui.add_space(6.0);
-            if ui
-                .button(fl!(crate::LANGUAGE_LOADER, "add-search-button"))
-                .clicked()
-            {
-                app.new_search();
-            }
+                            // Measure the label to compute the tab width.
+                            let font = egui::FontId::proportional(14.0);
+                            let galley = ui.painter().layout_no_wrap(name.clone(), font.clone(), egui::Color32::WHITE);
+                            let label_w = galley.size().x.ceil();
+                            let show_close = count > 1;
+                            let close_w = if show_close { 18.0 } else { 0.0 };
+                            let tab_w = label_w + 24.0 + close_w + if show_close { 4.0 } else { 0.0 };
+
+                            let (full_rect, _) = ui.allocate_exact_size(egui::vec2(tab_w, TAB_HEIGHT), egui::Sense::hover());
+
+                            // Reserve the close button area; the rest is the
+                            // clickable tab body.
+                            let close_rect = if show_close {
+                                Some(egui::Rect::from_center_size(
+                                    egui::pos2(full_rect.right() - 11.0, full_rect.center().y),
+                                    egui::vec2(16.0, 16.0),
+                                ))
+                            } else {
+                                None
+                            };
+                            let body_max_x = close_rect.map(|r| r.left() - 2.0).unwrap_or(full_rect.max.x);
+                            let body_rect = egui::Rect::from_min_max(full_rect.min, egui::pos2(body_max_x, full_rect.max.y));
+                            // `click_and_drag()` covers primary, secondary
+                            // (for the context menu) and double click.
+                            let body_response = ui.interact(body_rect, egui::Id::new(("tab_body", i)), egui::Sense::click_and_drag());
+
+                            let corners = egui::CornerRadius {
+                                nw: TAB_RADIUS,
+                                ne: TAB_RADIUS,
+                                sw: 0,
+                                se: 0,
+                            };
+                            let (bg, text_color) = if is_active {
+                                (accent, egui::Color32::WHITE)
+                            } else if body_response.hovered() {
+                                (egui::Color32::from_rgb(36, 40, 46), egui::Color32::from_rgb(225, 228, 232))
+                            } else {
+                                (egui::Color32::from_rgb(28, 31, 36), egui::Color32::from_rgb(180, 184, 190))
+                            };
+                            ui.painter().rect_filled(full_rect, corners, bg);
+
+                            let label_pos = egui::pos2(full_rect.left() + 12.0, full_rect.center().y);
+                            let label_font = if is_active {
+                                egui::FontId::new(14.0, egui::FontFamily::Proportional)
+                            } else {
+                                font.clone()
+                            };
+                            ui.painter().text(label_pos, egui::Align2::LEFT_CENTER, &name, label_font, text_color);
+
+                            if let Some(rect) = close_rect {
+                                let close_response = ui.interact(rect, egui::Id::new(("close_tab", i)), egui::Sense::click());
+                                let hovered = close_response.hovered();
+                                let close_bg = if hovered {
+                                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, 40)
+                                } else {
+                                    egui::Color32::TRANSPARENT
+                                };
+                                ui.painter().rect_filled(rect, egui::CornerRadius::same(3), close_bg);
+                                let glyph_color = if hovered { egui::Color32::WHITE } else { text_color };
+                                ui.painter().text(
+                                    rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    "\u{00D7}",
+                                    egui::FontId::proportional(14.0),
+                                    glyph_color,
+                                );
+                                if close_response.clicked() {
+                                    close = Some(i);
+                                }
+                            }
+
+                            if body_response.clicked() {
+                                switch_to = Some(i);
+                            }
+                            // Double-click only renames when the tab is
+                            // already active — otherwise it would be too
+                            // easy to start a rename during a quick
+                            // tab switch.
+                            if is_active && body_response.double_clicked() {
+                                rename = Some(i);
+                            }
+                            body_response.clone().on_hover_text(fl!(crate::LANGUAGE_LOADER, "rename-search-hint"));
+
+                            // Right-click context menu: Rename / Close /
+                            // Close others. "Close" and "Close others"
+                            // are only enabled when more than one search
+                            // exists.
+                            body_response.context_menu(|ui| {
+                                if ui.button(fl!(crate::LANGUAGE_LOADER, "rename-search-menu")).clicked() {
+                                    rename = Some(i);
+                                    ui.close();
+                                }
+                                ui.separator();
+                                let many = count > 1;
+                                if ui
+                                    .add_enabled(many, egui::Button::new(fl!(crate::LANGUAGE_LOADER, "close-search-menu")))
+                                    .clicked()
+                                {
+                                    close = Some(i);
+                                    ui.close();
+                                }
+                                if ui
+                                    .add_enabled(many, egui::Button::new(fl!(crate::LANGUAGE_LOADER, "close-other-searches-menu")))
+                                    .clicked()
+                                {
+                                    close_others = Some(i);
+                                    ui.close();
+                                }
+                            });
+                        }
+
+                        ui.add_space(6.0);
+
+                        // Trailing "+" action — looks like a quiet ghost button,
+                        // not a tab.
+                        let plus_size = egui::vec2(28.0, 28.0);
+                        let (plus_rect, _) = ui.allocate_exact_size(plus_size, egui::Sense::hover());
+                        let plus_response = ui.interact(plus_rect, egui::Id::new("new_search_tab"), egui::Sense::click());
+                        let plus_bg = if plus_response.hovered() {
+                            egui::Color32::from_rgb(36, 40, 46)
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        ui.painter().rect_filled(plus_rect, egui::CornerRadius::same(6), plus_bg);
+                        ui.painter().text(
+                            plus_rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "+",
+                            egui::FontId::proportional(18.0),
+                            egui::Color32::from_rgb(200, 205, 212),
+                        );
+                        if plus_response.clicked() {
+                            new_search = true;
+                        }
+                        plus_response.on_hover_text(fl!(crate::LANGUAGE_LOADER, "add-search-button"));
+                    });
+                });
 
             if let Some(i) = switch_to {
                 app.switch_search(i);
@@ -145,6 +309,12 @@ fn side_tabs(app: &mut App, ui: &mut egui::Ui) {
             if let Some(i) = close {
                 app.close_search(i);
             }
+            if let Some(i) = close_others {
+                app.close_other_searches(i);
+            }
+            if new_search {
+                app.new_search();
+            }
         });
 }
 
@@ -153,7 +323,6 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
     let Some(search_context) = app.state.searches.get(search_index) else {
         return;
     };
-    let description = search_context.description.clone();
     let selected_type = search_context.search_type;
     let value_text = search_context.search_value_text.clone();
     let search_results = search_context.get_result_count();
@@ -170,188 +339,174 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
     };
     let show_type_picker = matches!(searching, SearchMode::None) && search_results == 0;
 
-    // Header
-    ui.add_space(4.0);
-    ui.heading(
-        egui::RichText::new(description)
-            .color(ui.visuals().selection.bg_fill)
-            .size(20.0),
-    );
-    ui.separator();
+    let accent = ui.visuals().selection.bg_fill;
+    let surface = egui::Color32::from_rgb(22, 25, 30);
+    let card_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(55, 62, 72));
 
-    // Value input + type picker (unless searching Unknown, no input needed)
-    if selected_type == SearchType::Unknown {
-        ui.horizontal(|ui| {
-            ui.label(fl!(crate::LANGUAGE_LOADER, "search-type-label"));
-            type_picker(app, ui, show_type_picker, selected_type);
-            ui.label(
-                egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "unknown-search-description"))
-                    .weak(),
-            );
-        });
-    } else {
-        ui.horizontal(|ui| {
-            ui.label(fl!(crate::LANGUAGE_LOADER, "value-label"));
-            let mut buf = value_text.clone();
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut buf)
-                    .hint_text(fl!(
-                        crate::LANGUAGE_LOADER,
-                        "search-value-label",
-                        valuetype = selected_type.get_description_text()
-                    ))
-                    .desired_width(ui.available_width() - 200.0)
-                    .text_color_opt(if parse_error.is_some() {
-                        Some(egui::Color32::from_rgb(220, 120, 120))
-                    } else {
-                        None
-                    }),
-            );
-            if response.changed()
-                && let Some(ctx) = app.state.searches.get_mut(search_index)
-            {
-                ctx.search_value_text = buf;
-            }
-            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                app.start_search();
-            }
-            type_picker(app, ui, show_type_picker, selected_type);
-        });
-        if let Some(err) = &parse_error {
-            ui.horizontal(|ui| {
-                ui.add_space(60.0);
-                ui.colored_label(egui::Color32::from_rgb(220, 120, 120), format!("⚠ {err}"));
-            });
-        }
-    }
+    // The active tab already shows the current search's name, so no
+    // additional heading is required here.
 
-    ui.add_space(8.0);
-
-    // Action row: depends on whether we're searching, have results, etc.
-    if !matches!(searching, SearchMode::None) {
-        ui.horizontal(|ui| {
-            let progress = if total_bytes == 0 {
-                0.0
+    // === Input card =====================================================
+    egui::Frame::new()
+        .fill(surface)
+        .stroke(card_stroke)
+        .corner_radius(egui::CornerRadius::same(10))
+        .inner_margin(egui::Margin::symmetric(16, 14))
+        .show(ui, |ui| {
+            if selected_type == SearchType::Unknown {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "search-type-label")).size(14.0));
+                    type_picker(app, ui, show_type_picker, selected_type);
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "unknown-search-description")).size(13.0).weak());
+                });
             } else {
-                current_bytes as f32 / total_bytes as f32
-            };
-            ui.add(egui::ProgressBar::new(progress).desired_width(ui.available_width() - 200.0));
-            ui.label(
-                if searching == SearchMode::Percent {
-                    fl!(
-                        crate::LANGUAGE_LOADER,
-                        "update-numbers-progress",
-                        current = current_bytes,
-                        total = total_bytes
-                    )
-                } else {
-                    let bb = gabi::BytesConfig::default();
-                    fl!(
-                        crate::LANGUAGE_LOADER,
-                        "search-memory-progress",
-                        current = bb.bytes(current_bytes as u64).to_string(),
-                        total = bb.bytes(total_bytes as u64).to_string()
-                    )
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "value-label")).size(14.0));
+                    let mut buf = value_text.clone();
+                    let response = ui.add(
+                        egui::TextEdit::singleline(&mut buf)
+                            .hint_text(fl!(
+                                crate::LANGUAGE_LOADER,
+                                "search-value-label",
+                                valuetype = selected_type.get_description_text()
+                            ))
+                            .desired_width(ui.available_width() - 220.0)
+                            .margin(egui::Margin::symmetric(10, 8))
+                            .text_color_opt(if parse_error.is_some() {
+                                Some(egui::Color32::from_rgb(220, 120, 120))
+                            } else {
+                                None
+                            }),
+                    );
+                    if response.changed()
+                        && let Some(ctx) = app.state.searches.get_mut(search_index)
+                    {
+                        ctx.search_value_text = buf;
+                    }
+                    if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        app.start_search();
+                    }
+                    type_picker(app, ui, show_type_picker, selected_type);
+                });
+                if let Some(err) = &parse_error {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(60.0);
+                        ui.colored_label(egui::Color32::from_rgb(220, 120, 120), format!("\u{26A0}  {err}"));
+                    });
                 }
-                .chars()
-                .filter(|c| c.is_ascii())
-                .collect::<String>(),
-            );
+            }
+        });
+
+    ui.add_space(12.0);
+
+    // === Action row =====================================================
+    let primary_btn = |label: String| {
+        egui::Button::new(egui::RichText::new(label).size(14.0).strong().color(egui::Color32::WHITE))
+            .fill(accent)
+            .stroke(egui::Stroke::new(1.0, accent))
+            .min_size(egui::vec2(160.0, 32.0))
+    };
+    let secondary_btn = |label: String| egui::Button::new(egui::RichText::new(label).size(14.0)).min_size(egui::vec2(0.0, 32.0));
+    let results_label = |ui: &mut egui::Ui, count: usize| {
+        ui.label(
+            egui::RichText::new(
+                fl!(crate::LANGUAGE_LOADER, "found-results-label", results = count)
+                    .chars()
+                    .filter(|c| c.is_ascii())
+                    .collect::<String>(),
+            )
+            .size(13.0)
+            .weak(),
+        );
+    };
+
+    if !matches!(searching, SearchMode::None) {
+        // Searching in progress
+        let progress = if total_bytes == 0 { 0.0 } else { current_bytes as f32 / total_bytes as f32 };
+        let label = if searching == SearchMode::Percent {
+            fl!(crate::LANGUAGE_LOADER, "update-numbers-progress", current = current_bytes, total = total_bytes)
+        } else {
+            let bb = gabi::BytesConfig::default();
+            fl!(
+                crate::LANGUAGE_LOADER,
+                "search-memory-progress",
+                current = bb.bytes(current_bytes as u64).to_string(),
+                total = bb.bytes(total_bytes as u64).to_string()
+            )
+        }
+        .chars()
+        .filter(|c| c.is_ascii())
+        .collect::<String>();
+        ui.horizontal(|ui| {
+            ui.add(egui::ProgressBar::new(progress).desired_width(ui.available_width() - 240.0).show_percentage());
+            ui.label(egui::RichText::new(label).size(13.0).weak());
         });
     } else if !is_search_complete {
+        // No search has been started yet
         ui.horizontal(|ui| {
             let enabled = parse_error.is_none() || selected_type == SearchType::Unknown;
             if ui
-                .add_enabled(
-                    enabled,
-                    egui::Button::new(fl!(crate::LANGUAGE_LOADER, "initial-search-button")),
-                )
+                .add_enabled(enabled, primary_btn(fl!(crate::LANGUAGE_LOADER, "initial-search-button")))
                 .clicked()
             {
                 app.start_search();
             }
         });
     } else if selected_type == SearchType::Unknown {
+        // Unknown-search with results, show comparison buttons
         ui.horizontal_wrapped(|ui| {
-            if ui
-                .button(fl!(crate::LANGUAGE_LOADER, "decreased-button"))
-                .clicked()
-            {
+            if ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "decreased-button"))).clicked() {
                 app.unknown_search(UnknownComparison::Decreased);
             }
-            if ui
-                .button(fl!(crate::LANGUAGE_LOADER, "increased-button"))
-                .clicked()
-            {
+            if ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "increased-button"))).clicked() {
                 app.unknown_search(UnknownComparison::Increased);
             }
-            if ui
-                .button(fl!(crate::LANGUAGE_LOADER, "changed-button"))
-                .clicked()
-            {
+            if ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "changed-button"))).clicked() {
                 app.unknown_search(UnknownComparison::Changed);
             }
             let unchanged_enabled = search_results > 0 || can_undo;
             if ui
-                .add_enabled(
-                    unchanged_enabled,
-                    egui::Button::new(fl!(crate::LANGUAGE_LOADER, "unchanged-button")),
-                )
+                .add_enabled(unchanged_enabled, secondary_btn(fl!(crate::LANGUAGE_LOADER, "unchanged-button")))
                 .clicked()
             {
                 app.unknown_search(UnknownComparison::Unchanged);
             }
+            ui.add_space(8.0);
             ui.separator();
-            if ui.button(fl!(crate::LANGUAGE_LOADER, "clear-button")).clicked() {
+            ui.add_space(8.0);
+            if ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "clear-button"))).clicked() {
                 app.clear_results();
             }
-            if ui
-                .add_enabled(can_undo, egui::Button::new(fl!(crate::LANGUAGE_LOADER, "undo-button")))
-                .clicked()
-            {
+            if ui.add_enabled(can_undo, secondary_btn(fl!(crate::LANGUAGE_LOADER, "undo-button"))).clicked() {
                 app.undo_search();
             }
-            ui.label(
-                fl!(crate::LANGUAGE_LOADER, "found-results-label", results = search_results)
-                    .chars()
-                    .filter(|c| c.is_ascii())
-                    .collect::<String>(),
-            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                results_label(ui, search_results);
+            });
         });
     } else {
+        // Regular search with results
         ui.horizontal_wrapped(|ui| {
             let enabled = parse_error.is_none();
-            if ui
-                .add_enabled(
-                    enabled,
-                    egui::Button::new(fl!(crate::LANGUAGE_LOADER, "update-button")),
-                )
-                .clicked()
-            {
+            if ui.add_enabled(enabled, primary_btn(fl!(crate::LANGUAGE_LOADER, "update-button"))).clicked() {
                 app.start_search();
             }
-            if ui.button(fl!(crate::LANGUAGE_LOADER, "clear-button")).clicked() {
+            if ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "clear-button"))).clicked() {
                 app.clear_results();
             }
-            if ui
-                .add_enabled(can_undo, egui::Button::new(fl!(crate::LANGUAGE_LOADER, "undo-button")))
-                .clicked()
-            {
+            if ui.add_enabled(can_undo, secondary_btn(fl!(crate::LANGUAGE_LOADER, "undo-button"))).clicked() {
                 app.undo_search();
             }
-            ui.label(
-                fl!(crate::LANGUAGE_LOADER, "found-results-label", results = search_results)
-                    .chars()
-                    .filter(|c| c.is_ascii())
-                    .collect::<String>(),
-            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                results_label(ui, search_results);
+            });
         });
     }
 
-    ui.add_space(8.0);
-    ui.separator();
-
     if matches!(searching, SearchMode::None) && search_results > 0 {
+        ui.add_space(14.0);
         result_table(app, ui);
     }
 }
@@ -392,23 +547,15 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     };
     let results = search_context.collect_results();
     let total_results = results.len();
-    let is_string = matches!(
-        search_context.search_type,
-        SearchType::String | SearchType::StringUtf16
-    );
-    let show_search_types = matches!(
-        search_context.search_type,
-        SearchType::Guess | SearchType::Unknown
-    );
+    let is_string = matches!(search_context.search_type, SearchType::String | SearchType::StringUtf16);
+    let show_search_types = matches!(search_context.search_type, SearchType::Guess | SearchType::Unknown);
     let string_byte_len = search_context.search_value_text.len();
     let string_char_count = search_context.search_value_text.chars().count();
     let pid = app.state.pid as process_memory::Pid;
-    let hex_display = app.hex_display;
 
     // Build the freezed set + an "all frozen" check once for the whole frame.
     let freezed: std::collections::HashSet<usize> = search_context.freezed_addresses.iter().copied().collect();
-    let all_frozen = !results.is_empty()
-        && results.iter().all(|r| freezed.contains(&r.addr));
+    let all_frozen = !results.is_empty() && results.iter().all(|r| freezed.contains(&r.addr));
     let frozen_count = results.iter().filter(|r| freezed.contains(&r.addr)).count();
 
     // Capture lookups we'll need inside the row closure. Borrow checker:
@@ -417,7 +564,6 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     // collected here.
     let mut toggle_freeze: Option<usize> = None;
     let mut toggle_freeze_all = false;
-    let mut toggle_hex = false;
     let mut remove_result: Option<usize> = None;
     let mut open_editor: Option<usize> = None;
     let mut begin_edit: Option<(usize, String)> = None;
@@ -442,7 +588,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     builder = builder.column(Column::remainder().at_least(160.0));
 
     builder
-        .header(24.0, |mut header| {
+        .header(32.0, |mut header| {
             header.col(|ui| {
                 ui.strong(fl!(crate::LANGUAGE_LOADER, "address-heading"));
             });
@@ -470,12 +616,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
             }
-            header.col(|ui| {
-                let mut h = hex_display;
-                if ui.checkbox(&mut h, fl!(crate::LANGUAGE_LOADER, "hex-toggle-label")).clicked() {
-                    toggle_hex = true;
-                }
-            });
+            header.col(|_ui| {});
         })
         .body(|body| {
             body.rows(RESULT_ROW_HEIGHT, total_results, |mut row| {
@@ -484,11 +625,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     return;
                 };
                 let is_frozen = freezed.contains(&result.addr);
-                let recently_changed = app
-                    .changed_addresses
-                    .get(&result.addr)
-                    .map(|t| t.elapsed() < CHANGE_HIGHLIGHT)
-                    .unwrap_or(false);
+                let recently_changed = app.changed_addresses.get(&result.addr).map(|t| t.elapsed() < CHANGE_HIGHLIGHT).unwrap_or(false);
 
                 // Read or look up the row's current value text.
                 let value_text = if let Some(cached) = app.value_change_tracker.get(&result.addr) {
@@ -496,18 +633,12 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                 } else if let Some(byte_len) = result.search_type.fixed_byte_length() {
                     match pid.try_into_process_handle() {
                         Ok(handle) => match copy_address(result.addr, byte_len, &handle) {
-                            Ok(buf) => {
-                                let v = SearchValue(result.search_type, buf);
-                                if hex_display { v.to_hex_string() } else { v.to_string() }
-                            }
+                            Ok(buf) => SearchValue(result.search_type, buf).to_string(),
                             Err(_) => String::new(),
                         },
                         Err(_) => String::new(),
                     }
-                } else if matches!(
-                    result.search_type,
-                    SearchType::String | SearchType::StringUtf16
-                ) {
+                } else if matches!(result.search_type, SearchType::String | SearchType::StringUtf16) {
                     let utf16 = result.search_type == SearchType::StringUtf16;
                     let max_bytes = if utf16 { string_char_count * 2 } else { string_byte_len };
                     read_string_from_process(pid, result.addr, utf16, max_bytes).unwrap_or_default()
@@ -520,48 +651,52 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     ui.monospace(format!("0x{:X}", result.addr));
                 });
 
-                // Value column
+                // Value column - always rendered as an editable text box.
+                // When the user focuses or types into the cell we capture
+                // the row into `app.editing_result`; otherwise the box
+                // displays the live value freshly read this frame.
                 row.col(|ui| {
                     let editing = matches!(app.editing_result, Some((idx, _)) if idx == i);
-                    if editing {
-                        if let Some((_, buf)) = app.editing_result.as_mut() {
-                            let response = ui.add(
-                                egui::TextEdit::singleline(buf)
-                                    .desired_width(ui.available_width().min(140.0)),
-                            );
-                            response.request_focus();
-                            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    let text_color = if recently_changed {
+                        Some(egui::Color32::from_rgb(255, 180, 130))
+                    } else if is_frozen {
+                        Some(ui.visuals().selection.bg_fill)
+                    } else {
+                        None
+                    };
+                    let cell_width = ui.available_width().min(160.0);
+
+                    let response = if editing {
+                        // Bind the TextEdit straight to the live editing
+                        // buffer so keystrokes mutate it in place.
+                        let buf = &mut app.editing_result.as_mut().unwrap().1;
+                        let r = ui.add(egui::TextEdit::singleline(buf).desired_width(cell_width).text_color_opt(text_color));
+                        if r.lost_focus() {
+                            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                                 commit_edit = Some((i, buf.clone()));
-                            } else if response.lost_focus()
-                                || ui.input(|i| i.key_pressed(egui::Key::Escape))
-                            {
+                            } else {
                                 cancel_edit = true;
                             }
+                        } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            cancel_edit = true;
                         }
+                        r
                     } else {
-                        let mut text = egui::RichText::new(&value_text);
-                        if is_frozen {
-                            text = text.color(ui.visuals().selection.bg_fill);
+                        // Display-mode TextEdit. We re-render the live
+                        // value every frame; the user transitions to
+                        // edit mode the moment they focus or type.
+                        let mut buf = value_text.clone();
+                        let r = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(cell_width).text_color_opt(text_color));
+                        if r.gained_focus() || r.changed() {
+                            begin_edit = Some((i, buf));
                         }
-                        if recently_changed {
-                            text = text.color(egui::Color32::from_rgb(255, 180, 130));
-                        }
-                        let response = ui.add(
-                            egui::Label::new(text)
-                                .sense(egui::Sense::click())
-                                .truncate(),
-                        );
-                        if response.clicked() && !is_string {
-                            begin_edit = Some((i, value_text.clone()));
-                        }
-                        if recently_changed {
-                            // Subtle backdrop for changed cells
-                            ui.painter().rect_filled(
-                                response.rect.expand(2.0),
-                                2.0,
-                                egui::Color32::from_rgba_unmultiplied(255, 180, 130, 24),
-                            );
-                        }
+                        r
+                    };
+
+                    if recently_changed {
+                        // Subtle backdrop for changed cells
+                        ui.painter()
+                            .rect_filled(response.rect.expand(2.0), 2.0, egui::Color32::from_rgba_unmultiplied(255, 180, 130, 24));
                     }
                 });
 
@@ -595,10 +730,6 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
 
     if toggle_freeze_all {
         app.toggle_freeze_all();
-    }
-    if toggle_hex {
-        app.hex_display = !app.hex_display;
-        app.persist_settings();
     }
     if let Some(i) = toggle_freeze {
         app.toggle_freeze(i);

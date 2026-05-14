@@ -18,7 +18,6 @@ const SETTINGS_FILE: &str = "settings.toml";
 #[serde(default)]
 pub struct UserSettings {
     pub auto_reconnect: bool,
-    pub hex_display: bool,
     pub check_for_updates: bool,
 }
 
@@ -26,7 +25,6 @@ impl Default for UserSettings {
     fn default() -> Self {
         Self {
             auto_reconnect: false,
-            hex_display: false,
             check_for_updates: true,
         }
     }
@@ -66,13 +64,11 @@ mod tests {
     fn roundtrip_preserves_fields() {
         let original = UserSettings {
             auto_reconnect: true,
-            hex_display: true,
             check_for_updates: false,
         };
         let text = toml::to_string_pretty(&original).unwrap();
         let parsed: UserSettings = toml::from_str(&text).unwrap();
         assert!(parsed.auto_reconnect);
-        assert!(parsed.hex_display);
         assert!(!parsed.check_for_updates);
     }
 
@@ -80,7 +76,6 @@ mod tests {
     fn unknown_fields_and_missing_fields_use_defaults() {
         let parsed: UserSettings = toml::from_str("auto_reconnect = true\nfuture_field = 42\n").unwrap();
         assert!(parsed.auto_reconnect);
-        assert!(!parsed.hex_display);
         assert!(parsed.check_for_updates);
     }
 }

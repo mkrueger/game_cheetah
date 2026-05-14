@@ -2,8 +2,10 @@ pub mod app;
 
 pub mod in_process_view;
 pub mod main_window;
+pub mod mem_editor;
 pub mod memory_editor;
 pub mod process_selection;
+pub mod theme;
 
 pub const APP_NAME: &str = "Game Cheetah";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

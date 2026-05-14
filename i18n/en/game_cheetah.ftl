@@ -9,11 +9,18 @@ main-menu-subtitle = Memory scanner and game trainer
 process-label = Process:
 filter-processes-hint = Filter processes
 no-processes-loading = Loading processes…
+no-processes-loading-hint = Reading the process list — this may take a moment.
 no-processes-match = No processes match the current filter.
+no-processes-match-hint = Try a different filter, or clear it to see every process.
+reset-filter-button = Clear filter
 process-count-total = { $total } processes
 process-count-filtered = { $shown } of { $total } processes
 first-search-label = First search
 searches-heading = Searches
+rename-search-hint = F2 or right-click to rename
+rename-search-menu = Rename
+close-search-menu = Close
+close-other-searches-menu = Close others
 
 search-label = Search { $search }
 name-label = Name:
@@ -72,7 +79,6 @@ address-heading = Address
 value-heading = Value
 freezed-heading = Frozen
 datatype-heading = Data type
-hex-toggle-label = Hex
 
 pid-heading = PID
 name-heading = Name

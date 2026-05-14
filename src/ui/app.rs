@@ -7,7 +7,7 @@ use std::{
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 
 use crate::{
-    AppError, FreezeMessage, GameCheetahEngine, MessageCommand, SearchMode, SearchType, SearchValue,
+    AppError, FreezeMessage, GameCheetahEngine, MessageCommand, SearchContext, SearchMode, SearchResult, SearchType, SearchValue,
     ui::{
         in_process_view, main_window,
         memory_editor::MemoryEditor,
@@ -39,6 +39,9 @@ pub struct App {
 
     pub renaming_search_index: Option<usize>,
     pub rename_search_text: String,
+    /// One-shot flag: when `true`, the rename text field should grab
+    /// keyboard focus on the next frame and then clear the flag.
+    pub rename_request_focus: bool,
 
     /// `(row_index, typed_buffer)` while a result row's value is being
     /// edited. We don't read the live value into this buffer per frame —
@@ -51,9 +54,6 @@ pub struct App {
 
     /// Brief status next to the Save/Load buttons.
     pub cheat_table_status: String,
-
-    /// When true, result values are displayed in hexadecimal.
-    pub hex_display: bool,
 
     /// Reattach to a process with the same name after the attached one exits.
     pub auto_reconnect: bool,
@@ -98,11 +98,11 @@ impl Default for App {
             state: GameCheetahEngine::default(),
             renaming_search_index: None,
             rename_search_text: String::new(),
+            rename_request_focus: false,
             editing_result: None,
             process_sort_column: ProcessSortColumn::default(),
             process_sort_direction: SortDirection::default(),
             cheat_table_status: String::new(),
-            hex_display: false,
             auto_reconnect: false,
             check_for_updates: false,
             update_check_rx: None,
@@ -122,7 +122,6 @@ impl App {
     pub fn new() -> Self {
         let settings = crate::UserSettings::load();
         Self {
-            hex_display: settings.hex_display,
             auto_reconnect: settings.auto_reconnect,
             check_for_updates: settings.check_for_updates,
             ..Self::default()
@@ -138,7 +137,6 @@ impl App {
     pub(crate) fn persist_settings(&mut self) {
         let settings = crate::UserSettings {
             auto_reconnect: self.auto_reconnect,
-            hex_display: self.hex_display,
             check_for_updates: self.check_for_updates,
         };
         if let Err(e) = settings.save() {
@@ -174,6 +172,15 @@ impl App {
 
     /// Periodic per-frame housekeeping run before the view code.
     fn tick(&mut self, ctx: &egui::Context) {
+        // Defensive: make sure none of egui's debug paint overlays
+        // (red/blue widget outlines from `style.debug.show_interactive_widgets`
+        // or `show_widget_hits` etc.) sneak back on between frames — they
+        // can persist via egui's built-in style editor and become visible
+        // mid-session, e.g. as red rectangles appearing during scrolling.
+        if ctx.global_style().debug != egui::style::DebugOptions::default() {
+            ctx.global_style_mut(|style| style.debug = egui::style::DebugOptions::default());
+        }
+
         // Search context state machine: cycle each context's search-mode
         // flag back to `None` once `search_complete` flips.
         for search_context in &mut self.state.searches {
@@ -186,7 +193,10 @@ impl App {
                     self.state.update_process_data();
                     self.last_process_refresh = Instant::now();
                 }
-                ctx.request_repaint_after(Duration::from_millis(500));
+                // Schedule the next repaint to coincide with the next
+                // cache refresh. The list is cached, so painting more
+                // often just wastes CPU.
+                ctx.request_repaint_after(Duration::from_millis(1000));
             }
             AppState::InProcess => {
                 self.state.detach_if_gone();
@@ -260,7 +270,6 @@ impl App {
             return;
         }
         let pid = self.state.pid;
-        let hex_display = self.hex_display;
         let now = Instant::now();
 
         let search_value_text = self.state.searches[search_index].search_value_text.clone();
@@ -274,8 +283,7 @@ impl App {
         for result in results.iter() {
             let value_str = if let Some(byte_len) = result.search_type.fixed_byte_length() {
                 let Ok(buf) = copy_address(result.addr, byte_len, &handle) else { continue };
-                let val = SearchValue(result.search_type, buf);
-                if hex_display { val.to_hex_string() } else { val.to_string() }
+                SearchValue(result.search_type, buf).to_string()
             } else if matches!(result.search_type, SearchType::String | SearchType::StringUtf16) {
                 let utf16 = result.search_type == SearchType::StringUtf16;
                 let max_bytes = if utf16 { string_char_count * 2 } else { string_byte_len };
@@ -348,6 +356,24 @@ impl App {
         self.clear_change_tracker();
     }
 
+    /// Close every search except `keep_index`. The kept search becomes the
+    /// active one.
+    pub fn close_other_searches(&mut self, keep_index: usize) {
+        if keep_index >= self.state.searches.len() {
+            return;
+        }
+        // Walk from the end so indices stay valid as we remove.
+        for i in (0..self.state.searches.len()).rev() {
+            if i != keep_index {
+                self.state.remove_freezes(i);
+                self.state.searches.remove(i);
+            }
+        }
+        self.state.current_search = 0;
+        self.editing_result = None;
+        self.clear_change_tracker();
+    }
+
     pub fn switch_search(&mut self, index: usize) {
         if index < self.state.searches.len() {
             self.state.current_search = index;
@@ -360,6 +386,7 @@ impl App {
         if let Some(search) = self.state.searches.get(index) {
             self.rename_search_text = search.description.clone();
             self.renaming_search_index = Some(index);
+            self.rename_request_focus = true;
         }
     }
 
@@ -371,11 +398,13 @@ impl App {
         }
         self.renaming_search_index = None;
         self.rename_search_text.clear();
+        self.rename_request_focus = false;
     }
 
     pub fn cancel_rename_search(&mut self) {
         self.renaming_search_index = None;
         self.rename_search_text.clear();
+        self.rename_request_focus = false;
     }
 
     pub fn start_search(&mut self) {
@@ -578,7 +607,8 @@ impl App {
         let Some(result) = results.get(index).copied() else {
             return;
         };
-        match self.memory_editor.initialize(self.state.pid, result.addr, result.search_type) {
+        let byte_length = result_byte_length(&result, search_context);
+        match self.memory_editor.initialize(self.state.pid, result.addr, result.search_type, byte_length) {
             Ok(()) => {
                 self.app_state = AppState::MemoryEditor;
                 self.memory_editor_result_index = Some(index);
@@ -591,6 +621,42 @@ impl App {
         self.app_state = AppState::InProcess;
         self.memory_editor_result_index = None;
         self.memory_editor.reset_change_tracker();
+    }
+
+    /// Reinterpret the currently-edited cheat result as a different
+    /// numeric `SearchType`. Updates the cached result vector in place,
+    /// re-resolves the row index (since `set_cached_results` re-sorts
+    /// by `(addr, search_type)`), and refreshes the memory editor's
+    /// result-range highlight so it reflects the new byte width.
+    pub fn change_result_type(&mut self, new_type: SearchType) {
+        let Some(index) = self.memory_editor_result_index else {
+            return;
+        };
+        let Some(search_context) = self.state.searches.get(self.state.current_search) else {
+            return;
+        };
+        let results = search_context.collect_results();
+        let Some(old) = results.get(index).copied() else {
+            return;
+        };
+        if old.search_type == new_type {
+            return;
+        }
+
+        // Build a new Vec with the entry replaced. set_cached_results
+        // sorts and dedupes, so we need to re-locate the entry afterwards.
+        let mut new_results: Vec<SearchResult> = (*results).clone();
+        new_results[index] = SearchResult::new(old.addr, new_type);
+        search_context.set_cached_results(new_results);
+
+        // Look up the new index (address is preserved; type may have
+        // shifted the sort position).
+        let refreshed = search_context.collect_results();
+        let new_index = refreshed.iter().position(|r| r.addr == old.addr && r.search_type == new_type);
+        self.memory_editor_result_index = new_index;
+
+        let byte_length = new_type.fixed_byte_length().unwrap_or(1);
+        self.memory_editor.update_result_type(new_type, byte_length);
     }
 
     pub fn save_cheat_table(&mut self) {
@@ -644,5 +710,21 @@ impl eframe::App for App {
                 _ => {}
             }
         }
+    }
+}
+
+/// Compute the byte length of a result for the memory-editor's
+/// result-range highlight. Fixed-width numeric types map straight to
+/// their `SearchType::fixed_byte_length()`; variable-length string
+/// searches use the originally-entered text. Unknown/Guess fall back
+/// to one byte so the highlight is at least visible.
+fn result_byte_length(result: &SearchResult, ctx: &SearchContext) -> usize {
+    if let Some(len) = result.search_type.fixed_byte_length() {
+        return len;
+    }
+    match result.search_type {
+        SearchType::String => ctx.search_value_text.len().max(1),
+        SearchType::StringUtf16 => (ctx.search_value_text.encode_utf16().count() * 2).max(1),
+        _ => 1,
     }
 }

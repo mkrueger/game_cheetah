@@ -16,9 +16,7 @@ fn main() -> eframe::Result<()> {
         &format!("{} {}", game_cheetah::APP_NAME, game_cheetah::VERSION),
         options,
         Box::new(|cc| {
-            // Use a dark visuals theme by default and slightly larger spacing
-            // so the dense tables read comfortably.
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            game_cheetah::ui::theme::apply(&cc.egui_ctx);
             Ok(Box::new(App::new()))
         }),
     )
