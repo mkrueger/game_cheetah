@@ -313,10 +313,7 @@ impl MemoryEditor {
 
                     // Resolve foreground colour.
                     let mut color = ui.style().visuals.text_color();
-                    if options.show_zero_colour
-                        && !is_selected
-                        && (matches!(mem_val, Some(val) if val == 0) || mem_val.is_none())
-                    {
+                    if options.show_zero_colour && !is_selected && (matches!(mem_val, Some(val) if val == 0) || mem_val.is_none()) {
                         color = options.zero_colour;
                     }
                     if !is_selected && frame_data.should_highlight(memory_address) {
@@ -348,8 +345,7 @@ impl MemoryEditor {
                         let intensity = hf(mem, memory_address).clamp(0.0, 1.0);
                         if intensity > 0.0 {
                             let alpha = (intensity * 180.0) as u8;
-                            ui.painter()
-                                .rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 150, 60, alpha));
+                            ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 150, 60, alpha));
                         }
                     }
 
@@ -374,12 +370,8 @@ impl MemoryEditor {
                         // Cell border so it's obvious which byte is active
                         // even when the user is between nibble strokes.
                         let border = rect.expand2(egui::vec2(1.0, 0.0));
-                        ui.painter().rect_stroke(
-                            border,
-                            egui::CornerRadius::ZERO,
-                            egui::Stroke::new(1.0, accent),
-                            egui::StrokeKind::Outside,
-                        );
+                        ui.painter()
+                            .rect_stroke(border, egui::CornerRadius::ZERO, egui::Stroke::new(1.0, accent), egui::StrokeKind::Outside);
 
                         // Underline the active nibble.
                         let nibble_idx = if frame_data.selected_low_nibble { 1.0 } else { 0.0 };
@@ -546,6 +538,19 @@ impl MemoryEditor {
     ) {
         let options = &self.options;
 
+        // Painter-based render so adjacent highlighted glyphs share a flat,
+        // contiguous background. The previous `RichText::background_color`
+        // approach drew a tight per-glyph rect that left visible seams
+        // ("borders") between neighbouring tinted bytes.
+        let font_id = options.memory_editor_ascii_text_style.resolve(ui.style());
+        let char_w = ui.fonts_mut(|f| f.glyph_width(&font_id, '0'));
+        let cell_size = egui::vec2(char_w, ui.text_style_height(&options.memory_editor_ascii_text_style));
+        let default_text_color = ui.style().visuals.text_color();
+        let highlight_bg = ui.style().visuals.code_bg_color;
+        let accent = ui.visuals().selection.bg_fill;
+        let result_bg = egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 96);
+        let highlight_text_colour = options.highlight_text_colour;
+
         ui.horizontal(|ui| {
             ui.add(egui::Separator::default().vertical().spacing(3.0));
             ui.style_mut().spacing.item_spacing.x = 0.0;
@@ -558,34 +563,32 @@ impl MemoryEditor {
                         break;
                     }
 
-                    let mem_val: u8 = read_fn(mem, memory_address).unwrap_or(0);
-                    let character = if !(32..128).contains(&mem_val) { '.' } else { mem_val as char };
-                    let mut text = RichText::new(character).text_style(options.memory_editor_ascii_text_style.clone());
+                    let (rect, _response) = ui.allocate_exact_size(cell_size, egui::Sense::hover());
 
-                    if self.frame_data.should_highlight(memory_address) {
-                        text = text
-                            .color(self.options.highlight_text_colour)
-                            .background_color(ui.style().visuals.code_bg_color);
+                    let highlighted = self.frame_data.should_highlight(memory_address);
+                    if highlighted {
+                        ui.painter().rect_filled(rect, 0.0, highlight_bg);
                     }
-
                     if self.frame_data.is_in_result_range(memory_address) {
-                        let accent = ui.visuals().selection.bg_fill;
-                        let bg = egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 96);
-                        text = text.background_color(bg);
+                        ui.painter().rect_filled(rect, 0.0, result_bg);
                     }
 
-                    // Same change-flash overlay as the hex grid, applied
-                    // as a background tint on the ASCII glyph so the user
-                    // sees the change in either column.
+                    // Live-change flash: translucent orange tint that fades
+                    // out, sourced from the integration's change tracker via
+                    // `highlight_fn`. Same colour/curve as the hex grid so
+                    // both columns flash in lockstep.
                     if let Some(hf) = highlight_fn.as_mut() {
                         let intensity = hf(mem, memory_address).clamp(0.0, 1.0);
                         if intensity > 0.0 {
                             let alpha = (intensity * 180.0) as u8;
-                            text = text.background_color(egui::Color32::from_rgba_unmultiplied(255, 150, 60, alpha));
+                            ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 150, 60, alpha));
                         }
                     }
 
-                    ui.label(text);
+                    let mem_val: u8 = read_fn(mem, memory_address).unwrap_or(0);
+                    let character = if !(32..128).contains(&mem_val) { '.' } else { mem_val as char };
+                    let color = if highlighted { highlight_text_colour } else { default_text_color };
+                    ui.painter().text(rect.center(), Align2::CENTER_CENTER, character, font_id.clone(), color);
                 }
             });
         });

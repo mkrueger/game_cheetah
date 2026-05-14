@@ -1,10 +1,10 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::atomic::Ordering,
     time::{Duration, Instant},
 };
 
-use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
+use process_memory::{ProcessHandle, PutAddress, TryIntoProcessHandle, copy_address};
 
 use crate::{
     AppError, FreezeMessage, GameCheetahEngine, MessageCommand, SearchContext, SearchMode, SearchResult, SearchType, SearchValue,
@@ -13,6 +13,7 @@ use crate::{
         memory_editor::MemoryEditor,
         process_selection,
         process_selection::{ProcessSortColumn, SortDirection},
+        value_cache::ValueCache,
     },
 };
 
@@ -29,6 +30,27 @@ pub enum AppState {
 
 /// Visible duration of a "value changed" row highlight.
 pub const CHANGE_HIGHLIGHT: Duration = Duration::from_millis(1500);
+
+/// Maximum number of `(addr -> last value)` entries kept by the in-process
+/// view's change tracker. Sized to comfortably cover any plausible visible
+/// row count plus headroom; values scrolled out of view age out via the LRU.
+const VALUE_CACHE_CAPACITY: usize = 8192;
+
+/// Cadence at which the bulk change tracker runs. The UI repaints at ~30 Hz
+/// for fluid live values, but humans can't perceive value flicker faster
+/// than ~10 Hz — reading the process at the repaint rate just wastes
+/// syscalls.
+const TRACKER_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Per-tick budget for the round-robin bulk tracker. Each tick scans this
+/// many *result rows* starting from a wrapping cursor; combined with
+/// page-grouped reads this cycles through tens of thousands of addresses
+/// well within a second on dense result sets.
+const TRACKER_WINDOW: usize = 4096;
+
+/// 4 KiB — the page size we bucket bulk-tracker addresses by so dense pages
+/// are covered with one `copy_address` instead of one read per address.
+const TRACKER_PAGE: usize = 4096;
 
 /// Channel used by the background update-check thread to report results.
 type UpdateCheckRx = crossbeam_channel::Receiver<Option<String>>;
@@ -65,11 +87,27 @@ pub struct App {
     /// Tag of the latest release if it is newer than [`crate::VERSION`].
     pub latest_version: Option<String>,
 
-    /// Last-read value string per address for the active search.
-    pub value_change_tracker: HashMap<usize, String>,
+    /// Last-read value bytes per address for the active search. Capped via
+    /// an LRU so a million-row search doesn't grow this map without bound —
+    /// the visible rows constantly refresh their entries and stay live, while
+    /// rows scrolled out of view age out and get evicted.
+    pub value_change_tracker: ValueCache<Vec<u8>>,
     /// Address → time when the value last changed. A row is highlighted
     /// while `Instant::now() - stored < CHANGE_HIGHLIGHT`.
     pub changed_addresses: HashMap<usize, Instant>,
+    /// Round-robin cursor into the result vector for the bulk change tracker.
+    /// Wraps around when it reaches the end of the result list. This lets
+    /// the tracker cover arbitrarily-large result sets in `TRACKER_WINDOW`
+    /// slices per tick without ever bailing out.
+    change_tracker_cursor: usize,
+    /// Last time the bulk change tracker actually ran. Together with
+    /// `TRACKER_INTERVAL` this throttles its rate independent of the
+    /// UI repaint rate.
+    last_change_tracker_run: Instant,
+    /// Cached `(pid, ProcessHandle)` reused across bulk-tracker invocations.
+    /// On Linux this is essentially free; on Windows it avoids re-opening
+    /// the process handle every tick.
+    cached_process_handle: Option<(process_memory::Pid, ProcessHandle)>,
 
     /// Throttle process-list refresh in [`AppState::ProcessSelection`].
     last_process_refresh: Instant,
@@ -107,8 +145,11 @@ impl Default for App {
             check_for_updates: false,
             update_check_rx: None,
             latest_version: None,
-            value_change_tracker: HashMap::new(),
+            value_change_tracker: ValueCache::new(VALUE_CACHE_CAPACITY),
             changed_addresses: HashMap::new(),
+            change_tracker_cursor: 0,
+            last_change_tracker_run: Instant::now() - TRACKER_INTERVAL * 2,
+            cached_process_handle: None,
             last_process_refresh: Instant::now() - Duration::from_secs(10),
             last_reattach_attempt: Instant::now() - Duration::from_secs(10),
             memory_editor: MemoryEditor::default(),
@@ -259,61 +300,141 @@ impl App {
 
     /// Read current values for all results in the active search and record
     /// which addresses changed since the last call.
+    ///
+    /// The tracker has four important properties that together let it scale
+    /// past the previous "give up over 4096 rows" behaviour:
+    ///
+    /// * **Throttled** — it runs at most every `TRACKER_INTERVAL` (10 Hz),
+    ///   regardless of the UI repaint rate.
+    /// * **Round-robin** — it scans `TRACKER_WINDOW` rows per invocation
+    ///   starting from a wrapping cursor, so arbitrarily large result sets
+    ///   eventually get covered.
+    /// * **Page-grouped** — addresses inside the same 4 KiB page share a
+    ///   single `copy_address` call. For dense result sets that's an order-
+    ///   of-magnitude syscall reduction over per-address reads.
+    /// * **Byte-diffed** — the cache stores raw process bytes; we never
+    ///   format-then-string-compare just to detect a change.
     fn update_change_tracker(&mut self) {
-        /// Upper bound on the number of results we'll re-read per tick.
-        /// At ~1 syscall per address, going much beyond this stalls the UI.
-        const MAX_TRACKED_RESULTS: usize = 4096;
+        if self.last_change_tracker_run.elapsed() < TRACKER_INTERVAL {
+            return;
+        }
+        self.last_change_tracker_run = Instant::now();
 
         let search_index = self.state.current_search;
         let results = self.state.searches[search_index].collect_results();
-        if results.len() > MAX_TRACKED_RESULTS {
-            self.value_change_tracker.clear();
-            self.changed_addresses.clear();
+        let total = results.len();
+        if total == 0 {
             return;
         }
+
         let pid = self.state.pid;
-        let now = Instant::now();
-
-        let search_value_text = self.state.searches[search_index].search_value_text.clone();
-        let string_byte_len = search_value_text.len();
-        let string_char_count = search_value_text.chars().count();
-
-        let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle() else {
+        let Some(handle) = self.ensure_process_handle(pid) else {
             return;
         };
 
-        for result in results.iter() {
-            let value_str = if let Some(byte_len) = result.search_type.fixed_byte_length() {
-                let Ok(buf) = copy_address(result.addr, byte_len, &handle) else { continue };
-                SearchValue(result.search_type, buf).to_string()
-            } else if matches!(result.search_type, SearchType::String | SearchType::StringUtf16) {
-                let utf16 = result.search_type == SearchType::StringUtf16;
-                let max_bytes = if utf16 { string_char_count * 2 } else { string_byte_len };
-                let Some(s) = in_process_view::read_string_from_process(pid as process_memory::Pid, result.addr, utf16, max_bytes) else {
-                    continue;
-                };
-                s
-            } else {
-                continue;
-            };
+        let search_value_text = self.state.searches[search_index].search_value_text.clone();
+        let string_byte_len = search_value_text.len().max(1);
+        let string_char_count = search_value_text.chars().count().max(1);
 
-            let prev = self.value_change_tracker.insert(result.addr, value_str.clone());
-            if let Some(prev_val) = prev
-                && prev_val != value_str
-            {
-                self.changed_addresses.insert(result.addr, now);
+        // Tracking byte width per type. Strings get the user-typed string's
+        // byte/unit count as the read window.
+        let bytes_for = |ty: SearchType| -> usize {
+            if let Some(n) = ty.fixed_byte_length() {
+                return n;
+            }
+            match ty {
+                SearchType::String => string_byte_len,
+                SearchType::StringUtf16 => string_char_count.saturating_mul(2),
+                _ => 0,
+            }
+        };
+
+        // Round-robin window of the result list.
+        let start = self.change_tracker_cursor.min(total.saturating_sub(1));
+        let end = start.saturating_add(TRACKER_WINDOW).min(total);
+        let wrapped = end == total;
+        let window = &results[start..end];
+
+        // Group window addresses by 4 KiB page so one syscall covers all
+        // hits sharing a page.
+        let mut by_page: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (i, r) in window.iter().enumerate() {
+            by_page.entry(r.addr & !(TRACKER_PAGE - 1)).or_default().push(i);
+        }
+
+        let now = Instant::now();
+
+        for (_page_base, idxs) in by_page.iter() {
+            // Compute the [min, max) span covering every address in this page
+            // bucket. The bucket already shares a 4 KiB page so the span is
+            // bounded above by ~PAGE + max-type-len.
+            let mut min_addr = usize::MAX;
+            let mut max_end = 0usize;
+            for &i in idxs {
+                let r = &window[i];
+                let len = bytes_for(r.search_type);
+                if len == 0 {
+                    continue;
+                }
+                min_addr = min_addr.min(r.addr);
+                max_end = max_end.max(r.addr.saturating_add(len));
+            }
+            if min_addr == usize::MAX || max_end <= min_addr {
+                continue;
+            }
+            // Cap span at 2 pages so a single very-long string entry can't
+            // pull a huge read window.
+            let span = (max_end - min_addr).min(TRACKER_PAGE * 2);
+
+            let Ok(buf) = copy_address(min_addr, span, &handle) else { continue };
+
+            for &i in idxs {
+                let r = &window[i];
+                let len = bytes_for(r.search_type);
+                if len == 0 {
+                    continue;
+                }
+                let offset = r.addr.wrapping_sub(min_addr);
+                if offset + len > buf.len() {
+                    continue;
+                }
+                let bytes = buf[offset..offset + len].to_vec();
+                if let Some(prev) = self.value_change_tracker.put(r.addr, bytes.clone())
+                    && prev != bytes
+                {
+                    self.changed_addresses.insert(r.addr, now);
+                }
             }
         }
 
-        // Prune addresses no longer in the result set.
-        let live: std::collections::HashSet<usize> = results.iter().map(|r| r.addr).collect();
-        self.value_change_tracker.retain(|addr, _| live.contains(addr));
-        self.changed_addresses.retain(|addr, _| live.contains(addr));
+        self.change_tracker_cursor = if wrapped { 0 } else { end };
+
+        // Only prune after a full sweep — otherwise we'd repeatedly drop
+        // entries the round-robin still needs to track.
+        if wrapped {
+            let live: std::collections::HashSet<usize> = results.iter().map(|r| r.addr).collect();
+            self.value_change_tracker.retain(|addr| live.contains(addr));
+            self.changed_addresses.retain(|addr, _| live.contains(addr));
+        }
+    }
+
+    /// Return (a copy of) the cached `ProcessHandle` for `pid`, opening a
+    /// fresh one only when the pid has changed since last call. `ProcessHandle`
+    /// is `Copy` on all supported platforms so handing back a copy is cheap;
+    /// the cache simply avoids the per-tick `try_into_process_handle()` call.
+    fn ensure_process_handle(&mut self, pid: process_memory::Pid) -> Option<ProcessHandle> {
+        let matches = matches!(self.cached_process_handle, Some((p, _)) if p == pid);
+        if !matches {
+            let handle = pid.try_into_process_handle().ok()?;
+            self.cached_process_handle = Some((pid, handle));
+        }
+        self.cached_process_handle.map(|(_, h)| h)
     }
 
     pub fn clear_change_tracker(&mut self) {
         self.value_change_tracker.clear();
         self.changed_addresses.clear();
+        self.change_tracker_cursor = 0;
     }
 
     // ---- Actions invoked from the views --------------------------------
@@ -333,6 +454,7 @@ impl App {
         self.app_state = AppState::MainWindow;
         self.state = GameCheetahEngine::default();
         self.clear_change_tracker();
+        self.cached_process_handle = None;
         self.editing_result = None;
     }
 

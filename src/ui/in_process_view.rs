@@ -626,26 +626,62 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     return;
                 };
                 let is_frozen = freezed.contains(&result.addr);
-                let recently_changed = app.changed_addresses.get(&result.addr).map(|t| t.elapsed() < CHANGE_HIGHLIGHT).unwrap_or(false);
 
-                // Read or look up the row's current value text.
-                let value_text = if let Some(cached) = app.value_change_tracker.get(&result.addr) {
-                    cached.clone()
-                } else if let Some(byte_len) = result.search_type.fixed_byte_length() {
+                // Always read fresh raw bytes from the target so the display
+                // and the change diff reflect the process's current state.
+                // Comparing raw bytes (not formatted strings) skips a String
+                // allocation per row per frame, and dovetails with the bulk
+                // tracker which works in raw bytes too.
+                let raw_bytes: Vec<u8> = if let Some(byte_len) = result.search_type.fixed_byte_length() {
                     match pid.try_into_process_handle() {
-                        Ok(handle) => match copy_address(result.addr, byte_len, &handle) {
-                            Ok(buf) => SearchValue(result.search_type, buf).to_string(),
-                            Err(_) => String::new(),
-                        },
-                        Err(_) => String::new(),
+                        Ok(handle) => copy_address(result.addr, byte_len, &handle).unwrap_or_default(),
+                        Err(_) => Vec::new(),
                     }
                 } else if matches!(result.search_type, SearchType::String | SearchType::StringUtf16) {
                     let utf16 = result.search_type == SearchType::StringUtf16;
                     let max_bytes = if utf16 { string_char_count * 2 } else { string_byte_len };
-                    read_string_from_process(pid, result.addr, utf16, max_bytes).unwrap_or_default()
+                    read_bytes_from_process(pid, result.addr, max_bytes).unwrap_or_default()
                 } else {
-                    String::new()
+                    Vec::new()
                 };
+
+                // Diff this frame's fresh bytes against the previous-value
+                // record. The LRU bounds growth on million-row searches so
+                // only the rows the user is actually looking at stay tracked
+                // (the bulk tracker covers the rest in round-robin fashion).
+                let prev_bytes = app.value_change_tracker.put(result.addr, raw_bytes.clone());
+                if let Some(prev_bytes) = prev_bytes
+                    && prev_bytes != raw_bytes
+                {
+                    app.changed_addresses.insert(result.addr, std::time::Instant::now());
+                }
+
+                // Format for display. Done after the diff so unchanged rows
+                // skip the alloc-and-decode entirely when bytes are empty.
+                let value_text = if raw_bytes.is_empty() {
+                    String::new()
+                } else if matches!(result.search_type, SearchType::String | SearchType::StringUtf16) {
+                    decode_string_bytes(&raw_bytes, result.search_type == SearchType::StringUtf16)
+                } else {
+                    SearchValue(result.search_type, raw_bytes).to_string()
+                };
+
+                // Linear fade from 1.0 right after a change down to 0.0 at
+                // `CHANGE_HIGHLIGHT`. Drives the orange backdrop tint — same
+                // treatment as the memory editor's per-byte change overlay.
+                let change_intensity = app
+                    .changed_addresses
+                    .get(&result.addr)
+                    .map(|t| {
+                        let elapsed = t.elapsed();
+                        if elapsed >= CHANGE_HIGHLIGHT {
+                            0.0
+                        } else {
+                            1.0 - (elapsed.as_secs_f32() / CHANGE_HIGHLIGHT.as_secs_f32())
+                        }
+                    })
+                    .unwrap_or(0.0);
+                let recently_changed = change_intensity > 0.0;
 
                 // Address column
                 row.col(|ui| {
@@ -701,10 +737,17 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                         r
                     };
 
-                    if recently_changed {
-                        // Subtle backdrop for changed cells
-                        ui.painter()
-                            .rect_filled(response.rect.expand(2.0), 2.0, egui::Color32::from_rgba_unmultiplied(255, 180, 130, 24));
+                    if change_intensity > 0.0 {
+                        // Translucent orange tint that fades out — same colour
+                        // and alpha curve as the memory editor's per-byte
+                        // change overlay. Painted on top of the value editor
+                        // so the cell flashes orange and decays to default.
+                        let alpha = (change_intensity * 180.0) as u8;
+                        ui.painter().rect_filled(
+                            response.rect.expand(2.0),
+                            3.0,
+                            egui::Color32::from_rgba_unmultiplied(255, 150, 60, alpha),
+                        );
                     }
                 });
 
@@ -768,6 +811,36 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     let _ = AppState::InProcess;
 }
 
+/// Read up to `max_bytes` raw bytes from the target process at `addr`.
+/// Used as a primitive by both the change-tracker (which diffs raw bytes)
+/// and `read_string_from_process` (which decodes them into a UTF-8 / UTF-16
+/// string for display). Returns `None` only on read failure.
+pub fn read_bytes_from_process(pid: process_memory::Pid, addr: usize, max_bytes: usize) -> Option<Vec<u8>> {
+    let handle = pid.try_into_process_handle().ok()?;
+    copy_address(addr, max_bytes.max(1), &handle).ok()
+}
+
+/// Decode a UTF-8 (or UTF-16LE if `utf16le`) NUL-terminated string out of
+/// a raw byte buffer previously read from process memory. Used by both the
+/// row renderer and the bulk change-tracker so identical bytes always
+/// produce identical display strings.
+pub fn decode_string_bytes(bytes: &[u8], utf16le: bool) -> String {
+    if utf16le {
+        let mut units: Vec<u16> = Vec::with_capacity(bytes.len() / 2);
+        for chunk in bytes.chunks_exact(2) {
+            let u = u16::from_le_bytes([chunk[0], chunk[1]]);
+            if u == 0 {
+                break;
+            }
+            units.push(u);
+        }
+        String::from_utf16_lossy(&units)
+    } else {
+        let nul = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+        String::from_utf8_lossy(&bytes[..nul]).into_owned()
+    }
+}
+
 /// Read a contiguous NUL-terminated UTF-8 or UTF-16LE string from the target
 /// process. Returns `None` only if the entire process-memory read fails;
 /// otherwise a (possibly empty / lossy) `String` is always returned.
@@ -775,21 +848,6 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
 /// Public so the change-tracker in [`App`] can use the exact same read path
 /// the row renderer falls back to, keeping the cached strings consistent.
 pub fn read_string_from_process(pid: process_memory::Pid, addr: usize, utf16le: bool, max_bytes: usize) -> Option<String> {
-    let handle = pid.try_into_process_handle().ok()?;
-    if utf16le {
-        let buf = copy_address(addr, max_bytes.max(2), &handle).ok()?;
-        let mut units: Vec<u16> = Vec::with_capacity(buf.len() / 2);
-        for chunk in buf.chunks_exact(2) {
-            let u = u16::from_le_bytes([chunk[0], chunk[1]]);
-            if u == 0 {
-                break;
-            }
-            units.push(u);
-        }
-        Some(String::from_utf16_lossy(&units))
-    } else {
-        let buf = copy_address(addr, max_bytes.max(1), &handle).ok()?;
-        let nul = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-        Some(String::from_utf8_lossy(&buf[..nul]).into_owned())
-    }
+    let bytes = read_bytes_from_process(pid, addr, max_bytes.max(if utf16le { 2 } else { 1 }))?;
+    Some(decode_string_bytes(&bytes, utf16le))
 }

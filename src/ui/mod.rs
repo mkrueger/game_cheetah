@@ -6,6 +6,7 @@ pub mod mem_editor;
 pub mod memory_editor;
 pub mod process_selection;
 pub mod theme;
+pub mod value_cache;
 
 pub const APP_NAME: &str = "Game Cheetah";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
