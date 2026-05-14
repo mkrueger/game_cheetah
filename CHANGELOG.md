@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-14
+
+Feature release focused on in-process result-table responsiveness, changed-value visibility, and memory editor polish.
+
+### Added
+
+- In-process result rows now use a bounded LRU value cache, keeping live
+  change tracking responsive without unbounded growth on very large result
+  sets.
+- Changed values in the in-process result table now fade out with the same
+  orange highlight style as the memory editor.
+- Optional GitHub release update checks can notify when a newer release is
+  available and link to the latest release page.
+
+### Changed
+
+- In-process change tracking now runs at a throttled 10 Hz cadence, scans
+  large result sets in round-robin windows, groups dense addresses by 4 KiB
+  page, compares raw bytes instead of formatted strings, and reuses the
+  target process handle between ticks.
+- Visible result rows now always read fresh bytes before comparing against
+  the previous-value cache, fixing stale display and change-detection edge
+  cases.
+- Memory editor ASCII rendering now uses painter-based cell drawing so
+  highlighted ASCII bytes have seamless backgrounds without per-glyph
+  borders.
+
 ### Fixed
 
 - Result list values no longer flicker / briefly disappear during refresh.
@@ -22,6 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - String result rows now share the same live-value cache as numeric rows,
   so they no longer briefly read blank when a memory read transiently
   fails.
+- Debug-build red/orange egui paint overlays no longer appear around
+  process-view table rows while scrolling.
 
 ## [0.6.2] - 2026-05-09
 
