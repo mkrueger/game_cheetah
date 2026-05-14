@@ -193,13 +193,14 @@ impl Default for MemoryEditor {
 }
 
 fn default_options() -> MemoryEditorOptions {
-    let mut opts = MemoryEditorOptions::default();
     // The crate's defaults assume a light theme and clash with our dark
     // visuals. Tweak the colours to read well on dark backgrounds.
-    opts.address_text_colour = egui::Color32::from_rgb(150, 160, 200);
-    opts.highlight_text_colour = egui::Color32::from_rgb(255, 180, 130);
-    opts.zero_colour = egui::Color32::from_gray(90);
-    opts
+    MemoryEditorOptions {
+        address_text_colour: egui::Color32::from_rgb(150, 160, 200),
+        highlight_text_colour: egui::Color32::from_rgb(255, 180, 130),
+        zero_colour: egui::Color32::from_gray(90),
+        ..MemoryEditorOptions::default()
+    }
 }
 
 impl MemoryEditor {
@@ -221,7 +222,7 @@ impl MemoryEditor {
             if size == 0 || !m.is_read() {
                 continue;
             }
-            let end = start.checked_add(size).unwrap_or(usize::MAX);
+            let end = start.saturating_add(size);
             let name = m
                 .filename()
                 .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
@@ -468,7 +469,7 @@ fn human_bytes(n: usize) -> String {
 fn read_inspector_bytes(data: &mut EditorData, addr: Address) -> ([u8; 8], usize) {
     let mut out = [0u8; 8];
     let mut available = 0usize;
-    for i in 0..8 {
+    for (i, slot) in out.iter_mut().enumerate() {
         let target = match addr.checked_add(i) {
             Some(a) => a,
             None => break,
@@ -490,7 +491,7 @@ fn read_inspector_bytes(data: &mut EditorData, addr: Address) -> ([u8; 8], usize
         };
         match byte {
             Some(b) => {
-                out[i] = b;
+                *slot = b;
                 available = i + 1;
             }
             None => break,
@@ -842,10 +843,7 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
             // no user input. Only request a repaint while at least one
             // tracked byte is still inside the fade window.
             let now = Instant::now();
-            let needs_repaint = data
-                .change_tracker
-                .values()
-                .any(|(_, ts)| now.duration_since(*ts) < CHANGE_FADE);
+            let needs_repaint = data.change_tracker.values().any(|(_, ts)| now.duration_since(*ts) < CHANGE_FADE);
             if needs_repaint {
                 ui.ctx().request_repaint();
             }

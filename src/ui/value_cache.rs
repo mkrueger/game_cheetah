@@ -44,7 +44,8 @@ impl<V> ValueCache<V> {
         }
         self.by_tick.insert(new_tick, addr);
         let prev_value = prev.map(|(v, _)| v);
-        if prev_value.is_none() && self.map.len() > self.capacity
+        if prev_value.is_none()
+            && self.map.len() > self.capacity
             && let Some((&oldest_tick, &oldest_addr)) = self.by_tick.iter().next()
         {
             self.by_tick.remove(&oldest_tick);
@@ -78,6 +79,10 @@ impl<V> ValueCache<V> {
 
     pub fn len(&self) -> usize {
         self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
     }
 }
 

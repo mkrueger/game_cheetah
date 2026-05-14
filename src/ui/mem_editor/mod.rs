@@ -265,6 +265,7 @@ impl MemoryEditor {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_memory_values<T: ?Sized>(
         &mut self,
         ui: &mut Ui,

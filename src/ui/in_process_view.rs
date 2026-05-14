@@ -743,11 +743,8 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                         // change overlay. Painted on top of the value editor
                         // so the cell flashes orange and decays to default.
                         let alpha = (change_intensity * 180.0) as u8;
-                        ui.painter().rect_filled(
-                            response.rect.expand(2.0),
-                            3.0,
-                            egui::Color32::from_rgba_unmultiplied(255, 150, 60, alpha),
-                        );
+                        ui.painter()
+                            .rect_filled(response.rect.expand(2.0), 3.0, egui::Color32::from_rgba_unmultiplied(255, 150, 60, alpha));
                     }
                 });
 
