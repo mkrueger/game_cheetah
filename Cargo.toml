@@ -87,6 +87,11 @@ overflow-checks = false  # Disable overflow checks in release
 debug = false            # Ensure no debug info
 debug-assertions = false # Disable debug assertions
 
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = "none"
+
 [profile.release.package."*"]
 opt-level = 3
 codegen-units = 1

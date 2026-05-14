@@ -32,7 +32,12 @@ pub fn apply(ctx: &egui::Context) {
     // every interactive widget and can be flipped on through the
     // built-in style editor; force them off on every theme apply so we
     // never end up shipping a UI with debug rectangles visible.
-    style.debug = egui::style::DebugOptions::default();
+    // `Style::debug` only exists when `debug_assertions` is on (egui
+    // strips the field in release builds).
+    #[cfg(debug_assertions)]
+    {
+        style.debug = egui::style::DebugOptions::default();
+    }
 
     ctx.set_global_style(style);
 }

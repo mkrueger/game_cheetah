@@ -177,6 +177,8 @@ impl App {
         // or `show_widget_hits` etc.) sneak back on between frames — they
         // can persist via egui's built-in style editor and become visible
         // mid-session, e.g. as red rectangles appearing during scrolling.
+        // The `debug` field on `Style` is only present in debug builds.
+        #[cfg(debug_assertions)]
         if ctx.global_style().debug != egui::style::DebugOptions::default() {
             ctx.global_style_mut(|style| style.debug = egui::style::DebugOptions::default());
         }
