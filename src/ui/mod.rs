@@ -3,7 +3,6 @@ pub mod app;
 pub mod in_process_view;
 pub mod main_window;
 pub mod mem_editor;
-pub mod memory_editor;
 pub mod process_selection;
 pub mod theme;
 pub mod value_cache;

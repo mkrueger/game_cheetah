@@ -1,721 +1,1099 @@
-//! # Egui Memory Editor
+//! Live-process memory editor.
 //!
-//! Vendored from <https://github.com/Hirtol/egui_memory_editor> v0.2.14
-//! (MIT/Apache-2.0). Minor adjustments for egui 0.34: `id_source` → `id_salt`.
+//! Thin integration layer on top of the vendored hex editor in
+//! [`raw`] (originally `egui_memory_editor` by Hirtol, MIT/Apache-2.0).
 //!
-//! Provides a memory editor to be used with `egui`. Originally written for
-//! emulator development; game-cheetah uses it as the hex/ASCII back-end for
-//! the in-process memory editor view, with per-frame batched reads to limit
-//! the number of `process_memory::copy_address` syscalls.
+//! Responsibilities of this wrapper:
 //!
-//! Look at [`MemoryEditor`] to get started.
-use std::collections::BTreeMap;
+//! - Translate the target's `proc_maps` regions into the vendored editor's
+//!   address ranges so the user gets a region dropdown with a meaningful
+//!   label (`name@start  size`).
+//! - Maintain a `byte cache` populated once per tick from the editor's
+//!   visible range. The vendored editor calls `read_fn(addr)` many times
+//!   per frame — without caching this would translate to one
+//!   `copy_address` syscall per visible byte every frame; with caching
+//!   we issue exactly one syscall covering the entire visible window.
+//! - Track per-byte change timestamps for fade-in highlights.
+//! - Wire writes back through `process_memory::PutAddress`.
+
+pub mod raw;
+
+use std::collections::HashMap;
 use std::ops::Range;
+use std::time::{Duration, Instant};
 
-use egui::{Align2, Context, RichText, ScrollArea, Sense, TextWrapMode, Ui, Vec2, Window};
+use i18n_embed_fl::fl;
+use proc_maps::get_process_maps;
+use process_memory::{ProcessHandle, PutAddress, TryIntoProcessHandle, copy_address};
 
-use self::option_data::{BetweenFrameData, MemoryEditorOptions};
+use crate::{SearchType, ui::app::App};
 
-pub mod option_data;
+use self::raw::{
+    Address, MemoryEditor as RawEditor,
+    option_data::{Endianness, MemoryEditorOptions},
+};
 
-/// A memory address that should be read from/written to.
-pub type Address = usize;
+/// Highlight fade duration for recently-changed bytes.
+const CHANGE_FADE: Duration = Duration::from_millis(1500);
 
-/// The main struct for the editor window.
-/// This should persist between frames as it keeps track of quite a bit of state.
-#[derive(Clone)]
-pub struct MemoryEditor {
-    /// The name of the `egui` window, can be left blank.
-    window_name: String,
-    /// The collection of address ranges, the GUI will start at the lower bound and go up to the upper bound.
-    pub(crate) address_ranges: BTreeMap<String, Range<Address>>,
-    /// A collection of options relevant for the `MemoryEditor` window.
-    pub options: MemoryEditorOptions,
-    /// Data for layout between frames, rather hacky.
-    frame_data: BetweenFrameData,
-    /// The visible range of addresses from the last frame.
-    visible_range: Range<Address>,
+/// Outer padding when refreshing the cache — read a little above and
+/// below the visible range so light scrolling doesn't show `--` flicker.
+const CACHE_PREFETCH: usize = 256;
+
+/// Maximum size of a single cache fill in bytes. Guards against accidental
+/// reads of huge regions if `visible_range()` ever returns something
+/// degenerate.
+const MAX_CACHE_READ: usize = 64 * 1024;
+
+/// Maximum number of write operations remembered for undo/redo. Older
+/// entries are dropped from the bottom of the stack once the cap is hit.
+const UNDO_STACK_LIMIT: usize = 256;
+
+/// One reversible write: the bytes that lived at `addr` before the write
+/// and the bytes the user (or undo/redo) replaced them with. Multi-byte
+/// writes (inspector edits) are stored as a single record so undo
+/// restores the entire value atomically. The caret state at the moment
+/// the write happened is also captured so undo/redo restores the user's
+/// editing context, not just the bytes.
+#[derive(Debug, Clone)]
+struct WriteRecord {
+    addr: Address,
+    before: Vec<u8>,
+    after: Vec<u8>,
+    /// Caret position before the write (so undo can put the cursor back
+    /// where the user was when they made the change).
+    caret_before: Option<(Address, bool)>,
+    /// Caret position right after the write (so redo restores the
+    /// post-write cursor — typically one nibble past `addr`).
+    caret_after: Option<(Address, bool)>,
 }
 
-impl MemoryEditor {
-    pub fn new() -> Self {
-        MemoryEditor {
-            window_name: "Memory Editor".to_string(),
-            address_ranges: BTreeMap::new(),
-            options: Default::default(),
-            frame_data: Default::default(),
-            visible_range: Default::default(),
+#[derive(Debug, Clone)]
+struct RegionInfo {
+    range: Range<Address>,
+    label: String,
+    readable: bool,
+    writable: bool,
+}
+
+pub struct MemoryEditor {
+    raw: RawEditor,
+    data: EditorData,
+}
+
+struct EditorData {
+    /// Process handle captured at the start of each frame. The vendored
+    /// closures need access via the `mem: &mut T` parameter, so we stash
+    /// it here and clear it on close.
+    handle: Option<ProcessHandle>,
+    /// Cache populated by [`MemoryEditor::tick`] covering the visible
+    /// range + padding. `None` for bytes that failed to read.
+    cache: HashMap<Address, Option<u8>>,
+    /// Per-byte last value + time it most recently changed. Drives the
+    /// short orange highlight after a write or natural change.
+    change_tracker: HashMap<Address, (u8, Instant)>,
+    /// Regions parsed from `proc_maps`, kept around so the region info
+    /// panel can describe the address the editor is focused on.
+    regions: Vec<RegionInfo>,
+    /// Address the editor was opened at — used for the "back to origin"
+    /// jump button and for region info.
+    origin_address: Address,
+    /// In-progress inspector edit: which address/kind the user is typing
+    /// into and the partial text. Cleared on submit, on Escape, or
+    /// whenever the highlighted address moves away.
+    inspector_edit: Option<InspectorEdit>,
+    /// Search type of the result the editor was opened on. Drives the
+    /// type-picker in the toolbar and the size of the result-range
+    /// highlight.
+    current_result_type: Option<SearchType>,
+    /// Byte length of the result the editor was opened on. Together
+    /// with `origin_address` this gives the address range painted with
+    /// the result-highlight accent.
+    current_result_byte_length: usize,
+    /// Reversible writes performed since the editor was opened.
+    /// Pushed by [`apply_write`]; popped by `Ctrl+Z`.
+    undo_stack: Vec<WriteRecord>,
+    /// Writes that were just undone and can be re-applied with `Ctrl+Y`.
+    /// Cleared as soon as the user makes a fresh write.
+    redo_stack: Vec<WriteRecord>,
+    /// Caret position captured at the start of the current frame so the
+    /// hex-grid write closure (which only sees `EditorData`, not the raw
+    /// editor) can stamp it onto new undo records.
+    caret_snapshot: Option<(Address, bool)>,
+}
+
+/// The numeric interpretations exposed by the bottom data-inspector
+/// panel. Each kind is editable: typing a value and pressing Enter
+/// writes the equivalent bytes back to the target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InspectorKind {
+    U8,
+    I8,
+    U16,
+    I16,
+    U32,
+    I32,
+    U64,
+    I64,
+    F32,
+    F64,
+}
+
+impl InspectorKind {
+    const fn byte_count(self) -> usize {
+        match self {
+            InspectorKind::U8 | InspectorKind::I8 => 1,
+            InspectorKind::U16 | InspectorKind::I16 => 2,
+            InspectorKind::U32 | InspectorKind::I32 | InspectorKind::F32 => 4,
+            InspectorKind::U64 | InspectorKind::I64 | InspectorKind::F64 => 8,
         }
     }
 
-    /// Returns the visible range of the last frame.
-    pub fn visible_range(&self) -> &Range<Address> {
-        &self.visible_range
-    }
-
-    /// Remove every previously-registered address range.
-    pub fn clear_address_ranges(&mut self) {
-        self.address_ranges.clear();
-        self.options.selected_address_range.clear();
-    }
-
-    /// Currently selected address range name.
-    pub fn selected_range_name(&self) -> &str {
-        &self.options.selected_address_range
-    }
-
-    /// Force-select a range by name (no-op if it doesn't exist).
-    pub fn select_range(&mut self, name: &str) {
-        if self.address_ranges.contains_key(name) {
-            self.options.selected_address_range = name.to_string();
+    const fn label(self) -> &'static str {
+        match self {
+            InspectorKind::U8 => "u8",
+            InspectorKind::I8 => "i8",
+            InspectorKind::U16 => "u16",
+            InspectorKind::I16 => "i16",
+            InspectorKind::U32 => "u32",
+            InspectorKind::I32 => "i32",
+            InspectorKind::U64 => "u64",
+            InspectorKind::I64 => "i64",
+            InspectorKind::F32 => "f32",
+            InspectorKind::F64 => "f64",
         }
     }
-
-    /// The address most recently highlighted by the user (right-click in
-    /// the grid, the Goto bar, or a programmatic [`Self::goto_address`]).
-    /// Useful for a data-inspector panel that needs to read bytes at the
-    /// caret position.
-    pub fn highlighted_address(&self) -> Option<Address> {
-        self.frame_data.selected_highlight_address.or(self.frame_data.selected_edit_address)
-    }
-
-    /// Endianness configured in the data-preview section. Inspector UIs
-    /// outside the vendored editor can use this to mirror the user's
-    /// choice.
-    pub fn endianness(&self) -> option_data::Endianness {
-        self.options.data_preview.selected_endianness
-    }
-
-    /// Caret position in the hex grid, if any: `(address, on_low_nibble)`.
-    pub fn caret(&self) -> Option<(Address, bool)> {
-        self.frame_data.selected_edit_address.map(|a| (a, self.frame_data.selected_low_nibble))
-    }
-
-    /// Restore a previously captured caret position. The address is
-    /// validated against the currently-selected range; an out-of-range
-    /// address simply clears the selection.
-    pub fn set_caret(&mut self, caret: Option<(Address, bool)>) {
-        if let Some(range) = self.address_ranges.get(&self.options.selected_address_range).cloned() {
-            match caret {
-                Some((addr, on_low)) => {
-                    self.frame_data.set_selected_edit_address(Some(addr), &range);
-                    self.frame_data.selected_low_nibble = on_low;
-                }
-                None => {
-                    self.frame_data.set_selected_edit_address(None, &range);
-                }
-            }
-        }
-    }
-
-    pub fn window_ui_read_only<T: ?Sized>(&mut self, ctx: &Context, is_open: &mut bool, mem: &mut T, read_fn: impl FnMut(&mut T, Address) -> Option<u8>) {
-        type DummyWriteFunction<T> = fn(&mut T, Address, u8);
-        self.window_ui_impl(ctx, is_open, mem, read_fn, None::<DummyWriteFunction<T>>);
-    }
-
-    pub fn window_ui<T: ?Sized>(
-        &mut self,
-        ctx: &Context,
-        is_open: &mut bool,
-        mem: &mut T,
-        read_fn: impl FnMut(&mut T, Address) -> Option<u8>,
-        write_fn: impl FnMut(&mut T, Address, u8),
-    ) {
-        self.window_ui_impl(ctx, is_open, mem, read_fn, Some(write_fn));
-    }
-
-    fn window_ui_impl<T: ?Sized>(
-        &mut self,
-        ctx: &Context,
-        is_open: &mut bool,
-        mem: &mut T,
-        read_fn: impl FnMut(&mut T, Address) -> Option<u8>,
-        write_fn: Option<impl FnMut(&mut T, Address, u8)>,
-    ) {
-        Window::new(self.window_name.clone())
-            .open(is_open)
-            .hscroll(false)
-            .vscroll(false)
-            .resizable(true)
-            .show(ctx, |ui| {
-                self.shrink_window_ui(ui);
-                type DummyHighlightFunction<T> = fn(&mut T, Address) -> f32;
-                self.draw_editor_contents_impl(ui, mem, read_fn, write_fn, None::<DummyHighlightFunction<T>>);
-            });
-    }
-
-    pub fn draw_editor_contents_read_only<T: ?Sized>(&mut self, ui: &mut Ui, mem: &mut T, read_fn: impl FnMut(&mut T, Address) -> Option<u8>) {
-        type DummyWriteFunction<T> = fn(&mut T, Address, u8);
-        type DummyHighlightFunction<T> = fn(&mut T, Address) -> f32;
-        self.draw_editor_contents_impl(ui, mem, read_fn, None::<DummyWriteFunction<T>>, None::<DummyHighlightFunction<T>>);
-    }
-
-    pub fn draw_editor_contents<T: ?Sized>(
-        &mut self,
-        ui: &mut Ui,
-        mem: &mut T,
-        read_fn: impl FnMut(&mut T, Address) -> Option<u8>,
-        write_fn: impl FnMut(&mut T, Address, u8),
-    ) {
-        type DummyHighlightFunction<T> = fn(&mut T, Address) -> f32;
-        self.draw_editor_contents_impl(ui, mem, read_fn, Some(write_fn), None::<DummyHighlightFunction<T>>);
-    }
-
-    /// Same as [`Self::draw_editor_contents`] but also takes a closure
-    /// that returns a per-byte fade intensity in `0.0..=1.0`. Bytes with
-    /// a non-zero intensity get a translucent orange overlay so the user
-    /// notices them blinking when the target process modifies them.
-    pub fn draw_editor_contents_with_highlight<T: ?Sized>(
-        &mut self,
-        ui: &mut Ui,
-        mem: &mut T,
-        read_fn: impl FnMut(&mut T, Address) -> Option<u8>,
-        write_fn: impl FnMut(&mut T, Address, u8),
-        highlight_fn: impl FnMut(&mut T, Address) -> f32,
-    ) {
-        self.draw_editor_contents_impl(ui, mem, read_fn, Some(write_fn), Some(highlight_fn));
-    }
-
-    fn draw_editor_contents_impl<T: ?Sized>(
-        &mut self,
-        ui: &mut Ui,
-        mem: &mut T,
-        mut read_fn: impl FnMut(&mut T, Address) -> Option<u8>,
-        mut write_fn: Option<impl FnMut(&mut T, Address, u8)>,
-        mut highlight_fn: Option<impl FnMut(&mut T, Address) -> f32>,
-    ) {
-        assert!(
-            !self.address_ranges.is_empty(),
-            "At least one address range needs to be added to render the contents!"
-        );
-
-        let MemoryEditorOptions {
-            show_ascii,
-            column_count,
-            address_text_colour,
-            highlight_text_colour,
-            selected_address_range,
-            memory_editor_address_text_style,
-            ..
-        } = self.options.clone();
-
-        let line_height = self.get_line_height(ui);
-        let address_space = self.address_ranges.get(&selected_address_range).unwrap().clone();
-        let address_characters = address_space.end.next_power_of_two().ilog2() as usize / 4;
-        let max_lines = address_space.len().div_ceil(column_count);
-
-        self.handle_keyboard_edit_input(&address_space, ui.ctx());
-
-        // Hex input is independent of arrow-key navigation: typing `0`..`9`
-        // / `a`..`f` while a cell is selected updates the byte. Done once
-        // per frame here (not per row) so an event is only consumed once.
-        if write_fn.is_some()
-            && let Some(edit_addr) = self.frame_data.selected_edit_address
-        {
-            self.consume_hex_input(ui.ctx(), mem, &mut read_fn, &mut write_fn, edit_addr, &address_space);
-        }
-
-        let mut scroll = ScrollArea::vertical()
-            .id_salt(selected_address_range)
-            .max_height(f32::INFINITY)
-            .auto_shrink([false, true]);
-
-        if let Some(line) = self.frame_data.goto_address_line.take() {
-            let new_offset = (line_height + ui.spacing().item_spacing.y) * (line as f32);
-            scroll = scroll.vertical_scroll_offset(new_offset);
-        }
-
-        scroll.show_rows(ui, line_height, max_lines, |ui, line_range| {
-            let start_address_range = address_space.start + (line_range.start * column_count);
-            let end_address_range = address_space.start + (line_range.end * column_count);
-            self.visible_range = start_address_range..end_address_range;
-
-            egui::Grid::new("mem_edit_grid")
-                .striped(true)
-                .spacing(Vec2::new(15.0, ui.style().spacing.item_spacing.y))
-                .show(ui, |ui| {
-                    ui.style_mut().wrap_mode = Some(TextWrapMode::Extend);
-                    // Inter-byte gap: the selected byte is now rendered as a
-                    // normal label with a painter-drawn caret rectangle, so no
-                    // widget is wider than the surrounding bytes. Keep a small
-                    // fixed gap for readability.
-                    ui.style_mut().spacing.item_spacing.x = 6.0;
-
-                    for start_row in line_range.clone() {
-                        let start_address = address_space.start + (start_row * column_count);
-                        let line_range = start_address..start_address + column_count;
-                        let highlight_in_range = matches!(self.frame_data.selected_highlight_address, Some(address) if line_range.contains(&address));
-
-                        let start_text = RichText::new(format!("0x{:01$X}:", start_address, address_characters))
-                            .color(if highlight_in_range { highlight_text_colour } else { address_text_colour })
-                            .text_style(memory_editor_address_text_style.clone());
-
-                        ui.label(start_text);
-
-                        self.draw_memory_values(ui, mem, &mut read_fn, &mut write_fn, &mut highlight_fn, start_address, &address_space);
-
-                        if show_ascii {
-                            self.draw_ascii_sidebar(ui, mem, &mut read_fn, &mut highlight_fn, start_address, &address_space);
-                        }
-
-                        ui.end_row();
-                    }
-                });
-            self.frame_data.previous_frame_editor_width = ui.min_rect().width();
-        });
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn draw_memory_values<T: ?Sized>(
-        &mut self,
-        ui: &mut Ui,
-        mem: &mut T,
-        read_fn: &mut impl FnMut(&mut T, Address) -> Option<u8>,
-        write_fn: &mut Option<impl FnMut(&mut T, Address, u8)>,
-        highlight_fn: &mut Option<impl FnMut(&mut T, Address) -> f32>,
-        start_address: Address,
-        address_space: &Range<Address>,
-    ) {
-        let frame_data = &mut self.frame_data;
-        let options = &self.options;
-        let writable = write_fn.is_some();
-
-        // Uniform cell width derived directly from the monospace glyph width.
-        // Every byte (selected or not) occupies an identical slot so the
-        // layout never shifts. Rendering is painter-based (no `Label` widget)
-        // so the cell never claims focus and we have full control over where
-        // the nibble underline sits.
-        let font_id = options.memory_editor_text_style.resolve(ui.style());
-        let char_w = ui.fonts_mut(|f| f.glyph_width(&font_id, '0'));
-        let cell_width = char_w * 2.0 + 4.0;
-        let cell_height = ui.text_style_height(&options.memory_editor_text_style);
-        let accent = ui.visuals().selection.bg_fill;
-
-        for grid_column in 0..options.column_count.div_ceil(8) {
-            let start_address = start_address + 8 * grid_column;
-
-            ui.horizontal(|ui| {
-                let column_count = (options.column_count - 8 * grid_column).min(8);
-
-                for column_index in 0..column_count {
-                    let memory_address = start_address + column_index;
-
-                    if !address_space.contains(&memory_address) {
-                        break;
-                    }
-
-                    let mem_val: Option<u8> = read_fn(mem, memory_address);
-                    let is_selected = frame_data.selected_edit_address == Some(memory_address);
-
-                    let label_text = match mem_val {
-                        Some(val) => format!("{:02X}", val),
-                        None => options.none_display_value.clone(),
-                    };
-
-                    // Resolve foreground colour.
-                    let mut color = ui.style().visuals.text_color();
-                    if options.show_zero_colour && !is_selected && (matches!(mem_val, Some(val) if val == 0) || mem_val.is_none()) {
-                        color = options.zero_colour;
-                    }
-                    if !is_selected && frame_data.should_highlight(memory_address) {
-                        color = options.highlight_text_colour;
-                    }
-
-                    // Allocate the cell rect and a click sense. We deliberately
-                    // do NOT use a `Label` widget here: the previous Label-based
-                    // implementation could keep a faint focus outline on the
-                    // last-clicked widget after the caret moved away, which is
-                    // exactly the "underline stays on the old cell" symptom.
-                    let cell_size = egui::vec2(cell_width, cell_height);
-                    let (rect, response) = ui.allocate_exact_size(cell_size, Sense::click());
-
-                    // Background tints (subtle highlight + result range).
-                    if frame_data.should_subtle_highlight(memory_address, options.data_preview.selected_data_format) {
-                        ui.painter().rect_filled(rect, 0.0, ui.style().visuals.code_bg_color);
-                    }
-                    if frame_data.is_in_result_range(memory_address) {
-                        let bg = egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 96);
-                        ui.painter().rect_filled(rect, 0.0, bg);
-                    }
-
-                    // Live-change flash: paint a translucent orange tint
-                    // that fades out, sourced from the integration's
-                    // change tracker via `highlight_fn`. This is the
-                    // signal that the target process modified this byte.
-                    if let Some(hf) = highlight_fn.as_mut() {
-                        let intensity = hf(mem, memory_address).clamp(0.0, 1.0);
-                        if intensity > 0.0 {
-                            let alpha = (intensity * 180.0) as u8;
-                            ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 150, 60, alpha));
-                        }
-                    }
-
-                    // Paint the two hex digits centered in the cell. We split
-                    // the text into two glyphs so each nibble has a known
-                    // x-range and we can underline the active one precisely.
-                    let text_w = char_w * 2.0;
-                    let text_left = rect.center().x - text_w / 2.0;
-                    let center_y = rect.center().y;
-                    let chars: Vec<char> = label_text.chars().collect();
-                    for (i, ch) in chars.iter().take(2).enumerate() {
-                        ui.painter().text(
-                            egui::pos2(text_left + char_w * (i as f32 + 0.5), center_y),
-                            Align2::CENTER_CENTER,
-                            ch,
-                            font_id.clone(),
-                            color,
-                        );
-                    }
-
-                    if is_selected {
-                        // Cell border so it's obvious which byte is active
-                        // even when the user is between nibble strokes.
-                        let border = rect.expand2(egui::vec2(1.0, 0.0));
-                        ui.painter()
-                            .rect_stroke(border, egui::CornerRadius::ZERO, egui::Stroke::new(1.0, accent), egui::StrokeKind::Outside);
-
-                        // Underline the active nibble.
-                        let nibble_idx = if frame_data.selected_low_nibble { 1.0 } else { 0.0 };
-                        let nibble_x0 = text_left + char_w * nibble_idx;
-                        let underline_y = rect.bottom() - 1.0;
-                        ui.painter().line_segment(
-                            [egui::pos2(nibble_x0, underline_y), egui::pos2(nibble_x0 + char_w, underline_y)],
-                            egui::Stroke::new(1.5, accent),
-                        );
-                    }
-
-                    if response.clicked() {
-                        if writable {
-                            // Click position selects high or low nibble.
-                            let click_pos = response.interact_pointer_pos().unwrap_or(rect.center());
-                            let on_low = click_pos.x > rect.center().x;
-                            frame_data.set_selected_edit_address(Some(memory_address), address_space);
-                            frame_data.selected_low_nibble = on_low;
-                        } else {
-                            frame_data.set_highlight_address(memory_address);
-                        }
-                    }
-
-                    if response.secondary_clicked() {
-                        frame_data.set_highlight_address(memory_address);
-                    }
-                }
-            });
-        }
-    }
-
-    /// Read hex digits typed since last frame and apply them directly to the
-    /// currently selected nibble. This behaves like a classic hex editor:
-    /// the caret sits on either the high or the low nibble of a byte;
-    /// typing a hex digit overwrites that nibble and advances the caret one
-    /// nibble to the right (rolling over to the next byte's high nibble).
-    fn consume_hex_input<T: ?Sized>(
-        &mut self,
-        ctx: &Context,
-        mem: &mut T,
-        read_fn: &mut impl FnMut(&mut T, Address) -> Option<u8>,
-        write_fn: &mut Option<impl FnMut(&mut T, Address, u8)>,
-        edit_addr: Address,
-        address_space: &Range<Address>,
-    ) {
-        // Don't steal input from the Goto box or Inspector fields.
-        if ctx.text_edit_focused() {
-            return;
-        }
-
-        // Snapshot the textual events. egui maps typed characters to
-        // `Event::Text(_)` regardless of the actual physical key — exactly
-        // what we want for hex input.
-        let typed: String = ctx.input(|i| {
-            i.events
-                .iter()
-                .filter_map(|e| match e {
-                    egui::Event::Text(s) => Some(s.clone()),
-                    _ => None,
-                })
-                .collect()
-        });
-
-        let mut current_addr = edit_addr;
-        for ch in typed.chars() {
-            let Some(digit) = ch.to_digit(16) else {
-                continue;
-            };
-            let nibble = digit as u8;
-
-            let old_value = read_fn(mem, current_addr).unwrap_or(0);
-            let on_low = self.frame_data.selected_low_nibble;
-            let new_value = if on_low {
-                (old_value & 0xF0) | nibble
-            } else {
-                (nibble << 4) | (old_value & 0x0F)
-            };
-            if let Some(write) = write_fn.as_mut() {
-                write(mem, current_addr, new_value);
-            }
-
-            // Advance one nibble. High → low (same byte); low → next byte's high.
-            if on_low {
-                let next_address = current_addr.saturating_add(1);
-                self.frame_data.set_selected_edit_address(Some(next_address), address_space);
-                self.frame_data.selected_low_nibble = false;
-                self.ensure_visible(next_address, address_space);
-                current_addr = next_address;
-            } else {
-                self.frame_data.selected_low_nibble = true;
-            }
-        }
-    }
-
-    /// Move the selected edit address and scroll the viewport just enough
-    /// to bring the new position into view.
-    fn move_caret(&mut self, new_address: Address, address_space: &Range<Address>) {
-        self.frame_data.set_selected_edit_address(Some(new_address), address_space);
-        self.ensure_visible(new_address, address_space);
-    }
-
-    /// Move the caret by `delta` nibbles (signed). The nibble position is
-    /// computed as `address * 2 + (low ? 1 : 0)`, so `+1` walks high→low
-    /// within a byte and then onto the next byte's high nibble, and `-1`
-    /// performs the inverse.
-    fn move_caret_nibble(&mut self, current_address: Address, delta: i64, address_space: &Range<Address>) {
-        let on_low = self.frame_data.selected_low_nibble;
-        let nibble_pos = (current_address as i64) * 2 + if on_low { 1 } else { 0 };
-        let new_pos = nibble_pos.saturating_add(delta);
-        if new_pos < 0 {
-            return;
-        }
-        let new_addr = (new_pos / 2) as Address;
-        let new_low = (new_pos % 2) == 1;
-        if !address_space.contains(&new_addr) {
-            return;
-        }
-        // set_selected_edit_address resets selected_low_nibble; restore it.
-        self.frame_data.set_selected_edit_address(Some(new_addr), address_space);
-        self.frame_data.selected_low_nibble = new_low;
-        self.ensure_visible(new_addr, address_space);
-    }
-
-    /// Schedule a scroll if `address` is outside the visible address window.
-    /// Picks the smallest scroll that brings `address` back into view.
-    fn ensure_visible(&mut self, address: Address, address_space: &Range<Address>) {
-        let visible = &self.visible_range;
-        if !address_space.contains(&address) {
-            return;
-        }
-        let column_count = self.options.column_count;
-        let next_line = address.saturating_sub(address_space.start) / column_count;
-        let visible_top_line = visible.start.saturating_sub(address_space.start) / column_count;
-        // `ScrollArea::show_rows` over-reports the visible row count by one
-        // (it includes a partial trailing row that isn't fully on screen).
-        // Treat that trailing row as not visible — otherwise pressing Down
-        // when the caret is on the bottommost fully-visible row doesn't
-        // scroll because the address still falls inside `visible_range`.
-        let visible_bottom_line = visible.end.saturating_sub(address_space.start).saturating_sub(1) / column_count;
-        let visible_bottom_full = visible_bottom_line.saturating_sub(1);
-
-        if next_line >= visible_top_line && next_line <= visible_bottom_full {
-            return;
-        }
-
-        let target_top_line = if next_line > visible_bottom_full {
-            // Move the viewport down just enough so `next_line` is the new
-            // last fully-visible row.
-            visible_top_line + (next_line - visible_bottom_full)
-        } else {
-            next_line
-        };
-        self.frame_data.goto_address_line = Some(target_top_line);
-    }
-
-    fn draw_ascii_sidebar<T: ?Sized>(
-        &mut self,
-        ui: &mut Ui,
-        mem: &mut T,
-        read_fn: &mut impl FnMut(&mut T, Address) -> Option<u8>,
-        highlight_fn: &mut Option<impl FnMut(&mut T, Address) -> f32>,
-        start_address: Address,
-        address_space: &Range<Address>,
-    ) {
-        let options = &self.options;
-
-        // Painter-based render so adjacent highlighted glyphs share a flat,
-        // contiguous background. The previous `RichText::background_color`
-        // approach drew a tight per-glyph rect that left visible seams
-        // ("borders") between neighbouring tinted bytes.
-        let font_id = options.memory_editor_ascii_text_style.resolve(ui.style());
-        let char_w = ui.fonts_mut(|f| f.glyph_width(&font_id, '0'));
-        let cell_size = egui::vec2(char_w, ui.text_style_height(&options.memory_editor_ascii_text_style));
-        let default_text_color = ui.style().visuals.text_color();
-        let highlight_bg = ui.style().visuals.code_bg_color;
-        let accent = ui.visuals().selection.bg_fill;
-        let result_bg = egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 96);
-        let highlight_text_colour = options.highlight_text_colour;
-
-        ui.horizontal(|ui| {
-            ui.add(egui::Separator::default().vertical().spacing(3.0));
-            ui.style_mut().spacing.item_spacing.x = 0.0;
-
-            ui.horizontal(|ui| {
-                for i in 0..options.column_count {
-                    let memory_address = start_address + i;
-
-                    if !address_space.contains(&memory_address) {
-                        break;
-                    }
-
-                    let (rect, _response) = ui.allocate_exact_size(cell_size, egui::Sense::hover());
-
-                    let highlighted = self.frame_data.should_highlight(memory_address);
-                    if highlighted {
-                        ui.painter().rect_filled(rect, 0.0, highlight_bg);
-                    }
-                    if self.frame_data.is_in_result_range(memory_address) {
-                        ui.painter().rect_filled(rect, 0.0, result_bg);
-                    }
-
-                    // Live-change flash: translucent orange tint that fades
-                    // out, sourced from the integration's change tracker via
-                    // `highlight_fn`. Same colour/curve as the hex grid so
-                    // both columns flash in lockstep.
-                    if let Some(hf) = highlight_fn.as_mut() {
-                        let intensity = hf(mem, memory_address).clamp(0.0, 1.0);
-                        if intensity > 0.0 {
-                            let alpha = (intensity * 180.0) as u8;
-                            ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 150, 60, alpha));
-                        }
-                    }
-
-                    let mem_val: u8 = read_fn(mem, memory_address).unwrap_or(0);
-                    let character = if !(32..128).contains(&mem_val) { '.' } else { mem_val as char };
-                    let color = if highlighted { highlight_text_colour } else { default_text_color };
-                    ui.painter().text(rect.center(), Align2::CENTER_CENTER, character, font_id.clone(), color);
-                }
-            });
-        });
-    }
-
-    fn get_line_height(&self, ui: &mut Ui) -> f32 {
-        let address_size = ui.text_style_height(&self.options.memory_editor_address_text_style);
-        let body_size = ui.text_style_height(&self.options.memory_editor_text_style);
-        let ascii_size = ui.text_style_height(&self.options.memory_editor_ascii_text_style);
-        address_size.max(body_size).max(ascii_size)
-    }
-
-    fn shrink_window_ui(&self, ui: &mut Ui) {
-        ui.set_max_width(self.frame_data.previous_frame_editor_width);
-    }
-
-    fn handle_keyboard_edit_input(&mut self, address_range: &Range<Address>, ctx: &Context) {
-        use egui::Key::*;
-
-        let Some(current_address) = self.frame_data.selected_edit_address else {
-            return;
-        };
-
-        // If the user is typing in the Goto box or Inspector, don't steal
-        // arrows/backspace/escape for the hex grid. Clicking a byte requests
-        // focus for its label, which clears this condition on the next pass.
-        if ctx.text_edit_focused() {
-            return;
-        }
-
-        // Escape clears the selection so the user can use the rest of the
-        // app's keyboard shortcuts again.
-        if ctx.input(|i| i.key_pressed(Escape)) {
-            self.frame_data.set_selected_edit_address(None, address_range);
-            return;
-        }
-
-        // Backspace: step back one nibble. On a low nibble it lands on the
-        // high nibble of the same byte; on a high nibble it lands on the
-        // low nibble of the previous byte. This matches typical hex-editor
-        // back-stepping behaviour.
-        if ctx.input(|i| i.key_pressed(Backspace)) {
-            self.move_caret_nibble(current_address, -1, address_range);
-            return;
-        }
-
-        const ARROWS: [egui::Key; 4] = [ArrowLeft, ArrowRight, ArrowDown, ArrowUp];
-        let key_pressed = ARROWS.iter().find(|&&k| ctx.input(|i| i.key_pressed(k)));
-        if let Some(key) = key_pressed {
-            match key {
-                ArrowLeft => self.move_caret_nibble(current_address, -1, address_range),
-                ArrowRight => self.move_caret_nibble(current_address, 1, address_range),
-                ArrowDown => {
-                    let next = current_address + self.options.column_count;
-                    self.move_caret(next, address_range);
-                }
-                ArrowUp => {
-                    let next = current_address.saturating_sub(self.options.column_count);
-                    self.move_caret(next, address_range);
-                }
-                _ => unreachable!(),
-            }
-        }
-    }
-
-    // ** Builder methods **
-
-    #[must_use]
-    pub fn with_window_title(mut self, title: impl Into<String>) -> Self {
-        self.window_name = title.into();
-        self
-    }
-
-    #[inline]
-    #[must_use]
-    pub fn with_address_range(mut self, range_name: impl Into<String>, address_range: Range<Address>) -> Self {
-        self.set_address_range(range_name, address_range);
-        self
-    }
-
-    pub fn set_address_range(&mut self, range_name: impl Into<String>, address_range: Range<Address>) {
-        self.address_ranges.insert(range_name.into(), address_range);
-
-        if self.options.selected_address_range.is_empty()
-            && let Some((name, _)) = self.address_ranges.iter().next()
-        {
-            self.options.selected_address_range = name.clone();
-        }
-    }
-
-    #[inline]
-    #[must_use]
-    pub fn with_options(mut self, options: MemoryEditorOptions) -> Self {
-        self.set_options(options);
-        self
-    }
-
-    pub fn set_options(&mut self, options: MemoryEditorOptions) {
-        self.options = options;
-    }
-
-    /// Programmatically jump to a given address: scrolls to it on the next
-    /// frame and highlights it.
-    pub fn goto_address(&mut self, address: Address) {
-        // Find which range contains the address (if any) and switch to it.
-        let target_range = self
-            .address_ranges
-            .iter()
-            .find(|(_, r)| r.contains(&address))
-            .map(|(n, r)| (n.clone(), r.clone()));
-        if let Some((name, range)) = target_range {
-            self.options.selected_address_range = name;
-            self.frame_data.goto_address_line = address.checked_sub(range.start).map(|o| o / self.options.column_count);
-            self.frame_data.selected_highlight_address = Some(address);
-        }
-    }
-
-    /// Mark a contiguous byte range as the "current cheat result" so the editor
-    /// can render a persistent translucent accent background over it.
-    pub fn set_result_highlight_range(&mut self, range: Option<Range<Address>>) {
-        self.frame_data.result_highlight_range = range;
-    }
+}
+
+#[derive(Debug, Clone)]
+struct InspectorEdit {
+    address: Address,
+    kind: InspectorKind,
+    text: String,
 }
 
 impl Default for MemoryEditor {
     fn default() -> Self {
-        MemoryEditor::new()
+        Self {
+            raw: RawEditor::new().with_options(default_options()),
+            data: EditorData {
+                handle: None,
+                cache: HashMap::new(),
+                change_tracker: HashMap::new(),
+                regions: Vec::new(),
+                origin_address: 0,
+                inspector_edit: None,
+                current_result_type: None,
+                current_result_byte_length: 1,
+                undo_stack: Vec::new(),
+                redo_stack: Vec::new(),
+                caret_snapshot: None,
+            },
+        }
     }
+}
+
+fn default_options() -> MemoryEditorOptions {
+    // The crate's defaults assume a light theme and clash with our dark
+    // visuals. Tweak the colours to read well on dark backgrounds.
+    MemoryEditorOptions {
+        address_text_colour: egui::Color32::from_rgb(150, 160, 200),
+        highlight_text_colour: egui::Color32::from_rgb(255, 180, 130),
+        zero_colour: egui::Color32::from_gray(90),
+        ..MemoryEditorOptions::default()
+    }
+}
+
+impl MemoryEditor {
+    /// (Re-)scan the target's memory map and configure the editor to open
+    /// on the region containing `address`. `byte_length` is the size of the
+    /// result currently being edited (used for the result-range highlight).
+    /// Returns an error string ready to be pushed onto the app's error state
+    /// if the map can't be read.
+    pub fn initialize(&mut self, pid: process_memory::Pid, address: usize, search_type: SearchType, byte_length: usize) -> Result<(), String> {
+        let pid_t = pid;
+        let maps = get_process_maps(pid_t).map_err(|e| fl!(crate::LANGUAGE_LOADER, "memory-editor-error-read-map", pid = pid, error = e.to_string()))?;
+
+        self.data.regions.clear();
+        self.raw.clear_address_ranges();
+
+        for m in maps {
+            let start = m.start();
+            let size = m.size();
+            if size == 0 || !m.is_read() {
+                continue;
+            }
+            let end = start.saturating_add(size);
+            let name = m
+                .filename()
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+                .unwrap_or_else(|| fl!(crate::LANGUAGE_LOADER, "memory-editor-region-anonymous"));
+
+            // Combo-box label: address-prefixed name so duplicates from the
+            // same shared library are still individually addressable, and
+            // size shown with binary prefix.
+            let label = format!("{name} @ 0x{start:X}  ({})", human_bytes(size));
+
+            self.data.regions.push(RegionInfo {
+                range: start..end,
+                label: label.clone(),
+                readable: m.is_read(),
+                writable: m.is_write(),
+            });
+            self.raw.set_address_range(label, start..end);
+        }
+
+        if self.data.regions.is_empty() {
+            return Err(fl!(crate::LANGUAGE_LOADER, "memory-editor-error-no-regions", pid = pid));
+        }
+
+        self.data.origin_address = address;
+        self.data.cache.clear();
+        self.data.change_tracker.clear();
+        self.data.undo_stack.clear();
+        self.data.redo_stack.clear();
+        self.data.current_result_type = Some(search_type);
+        self.data.current_result_byte_length = byte_length.max(1);
+        self.raw.goto_address(address);
+        self.raw
+            .set_result_highlight_range(Some(address..address.saturating_add(self.data.current_result_byte_length)));
+
+        // Warm the cache once so the first frame already shows bytes
+        // rather than the `--` placeholder.
+        self.fill_cache_around(pid_t, address.saturating_sub(CACHE_PREFETCH)..address.saturating_add(CACHE_PREFETCH));
+
+        Ok(())
+    }
+
+    /// Public accessor for the search type the editor was opened on.
+    pub fn current_result_type(&self) -> Option<SearchType> {
+        self.data.current_result_type
+    }
+
+    /// Update the in-editor representation of the current result's type.
+    /// Refreshes the highlight range that paints the bytes belonging to
+    /// the result. Called from [`App::change_result_type`] after the
+    /// cached search results have been mutated.
+    pub fn update_result_type(&mut self, search_type: SearchType, byte_length: usize) {
+        self.data.current_result_type = Some(search_type);
+        self.data.current_result_byte_length = byte_length.max(1);
+        let address = self.data.origin_address;
+        self.raw
+            .set_result_highlight_range(Some(address..address.saturating_add(self.data.current_result_byte_length)));
+    }
+
+    pub fn reset_change_tracker(&mut self) {
+        self.data.change_tracker.clear();
+        self.data.cache.clear();
+        self.data.handle = None;
+        self.data.inspector_edit = None;
+        self.data.current_result_type = None;
+        self.raw.set_result_highlight_range(None);
+    }
+
+    /// Per-frame syscall: re-read the bytes the editor was showing last
+    /// frame plus a small padding band. Called from `App::tick` while in
+    /// the [`crate::ui::app::AppState::MemoryEditor`] state.
+    pub fn tick(&mut self, pid: process_memory::Pid) {
+        let visible = self.raw.visible_range().clone();
+        if visible.is_empty() {
+            // First frame after open: no visible range yet. Cache was
+            // already warmed in `initialize` so just return.
+            return;
+        }
+        let start = visible.start.saturating_sub(CACHE_PREFETCH);
+        let end = visible.end.saturating_add(CACHE_PREFETCH);
+        self.fill_cache_around(pid, start..end);
+
+        // Don't let the change tracker grow indefinitely while the editor
+        // is open on a long session.
+        self.data.change_tracker.retain(|_, (_, t)| t.elapsed() < Duration::from_secs(60));
+    }
+
+    /// Read `range` into `data.cache` in as few syscalls as possible.
+    /// The range is clipped to readable regions; bytes that fall outside
+    /// any region are marked `None`.
+    fn fill_cache_around(&mut self, pid: process_memory::Pid, range: Range<Address>) {
+        let Ok(handle) = pid.try_into_process_handle() else {
+            return;
+        };
+        // Forget bytes far outside the new window so the cache stays bounded.
+        let keep_start = range.start.saturating_sub(CACHE_PREFETCH);
+        let keep_end = range.end.saturating_add(CACHE_PREFETCH);
+        self.data.cache.retain(|addr, _| *addr >= keep_start && *addr < keep_end);
+
+        let now = Instant::now();
+        let mut cursor = range.start;
+        while cursor < range.end {
+            // Find a region we can read from at `cursor`. If there isn't
+            // one, advance to the next region's start (or end of range).
+            let region = self.data.regions.iter().find(|r| r.range.contains(&cursor) && r.readable);
+            let segment_end = match region {
+                Some(r) => range.end.min(r.range.end),
+                None => self
+                    .data
+                    .regions
+                    .iter()
+                    .filter(|r| r.range.start > cursor && r.readable)
+                    .map(|r| r.range.start)
+                    .min()
+                    .unwrap_or(range.end)
+                    .min(range.end),
+            };
+
+            if let Some(_r) = region {
+                let mut chunk_start = cursor;
+                while chunk_start < segment_end {
+                    let chunk_end = (chunk_start + MAX_CACHE_READ).min(segment_end);
+                    let len = chunk_end - chunk_start;
+                    match copy_address(chunk_start, len, &handle) {
+                        Ok(buf) => {
+                            for (i, b) in buf.iter().enumerate() {
+                                let addr = chunk_start + i;
+                                match self.data.change_tracker.get(&addr).map(|(v, _)| *v) {
+                                    Some(prev) if prev != *b => {
+                                        self.data.change_tracker.insert(addr, (*b, now));
+                                    }
+                                    None => {
+                                        // First time we see this byte —
+                                        // don't flash it.
+                                        self.data.change_tracker.insert(addr, (*b, now - CHANGE_FADE));
+                                    }
+                                    _ => {}
+                                }
+                                self.data.cache.insert(addr, Some(*b));
+                            }
+                        }
+                        Err(_) => {
+                            for offset in 0..len {
+                                self.data.cache.insert(chunk_start + offset, None);
+                            }
+                        }
+                    }
+                    chunk_start = chunk_end;
+                }
+            } else {
+                // Gap between regions — mark as unreadable.
+                for addr in cursor..segment_end {
+                    self.data.cache.insert(addr, None);
+                }
+            }
+
+            // Avoid getting stuck if find() returned an empty segment.
+            cursor = segment_end.max(cursor + 1);
+        }
+    }
+
+    /// Region currently containing `address` (if any), for the info bar.
+    fn region_of(&self, address: Address) -> Option<&RegionInfo> {
+        self.data.regions.iter().find(|r| r.range.contains(&address))
+    }
+
+    /// Programmatically jump to and highlight the original opening address.
+    pub fn goto_origin(&mut self) {
+        let addr = self.data.origin_address;
+        self.raw.goto_address(addr);
+    }
+
+    pub fn origin_address(&self) -> Address {
+        self.data.origin_address
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.data.undo_stack.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.data.redo_stack.is_empty()
+    }
+
+    /// Revert the most recent write. The byte(s) are written back to the
+    /// target with their pre-write value and the record is moved onto
+    /// the redo stack. No-op if [`Self::can_undo`] is `false` or the
+    /// process handle is missing.
+    pub fn undo(&mut self) -> bool {
+        let Some(record) = self.data.undo_stack.pop() else {
+            return false;
+        };
+        if write_raw(&self.data, record.addr, &record.before) {
+            apply_to_cache(&mut self.data, record.addr, &record.before);
+            self.raw.set_caret(record.caret_before);
+            self.data.redo_stack.push(record);
+            cap_stack(&mut self.data.redo_stack);
+            true
+        } else {
+            // Push the record back so the user can retry once the write
+            // failure is resolved (e.g. region became writable again).
+            self.data.undo_stack.push(record);
+            false
+        }
+    }
+
+    /// Re-apply the most recently undone write.
+    pub fn redo(&mut self) -> bool {
+        let Some(record) = self.data.redo_stack.pop() else {
+            return false;
+        };
+        if write_raw(&self.data, record.addr, &record.after) {
+            apply_to_cache(&mut self.data, record.addr, &record.after);
+            self.raw.set_caret(record.caret_after);
+            self.data.undo_stack.push(record);
+            cap_stack(&mut self.data.undo_stack);
+            true
+        } else {
+            self.data.redo_stack.push(record);
+            false
+        }
+    }
+}
+
+fn human_bytes(n: usize) -> String {
+    const KIB: usize = 1024;
+    const MIB: usize = KIB * 1024;
+    const GIB: usize = MIB * 1024;
+    if n >= GIB {
+        format!("{:.1} GiB", n as f64 / GIB as f64)
+    } else if n >= MIB {
+        format!("{:.1} MiB", n as f64 / MIB as f64)
+    } else if n >= KIB {
+        format!("{:.1} KiB", n as f64 / KIB as f64)
+    } else {
+        format!("{n} B")
+    }
+}
+
+/// Read up to 8 bytes starting at `addr` from the cache (with a one-shot
+/// `copy_address` fallback). The returned tuple is the buffer (zero-padded
+/// when bytes are missing) and the number of bytes that were actually
+/// available, so the inspector can render `--` when the requested type is
+/// wider than the readable window.
+fn read_inspector_bytes(data: &mut EditorData, addr: Address) -> ([u8; 8], usize) {
+    let mut out = [0u8; 8];
+    let mut available = 0usize;
+    for (i, slot) in out.iter_mut().enumerate() {
+        let target = match addr.checked_add(i) {
+            Some(a) => a,
+            None => break,
+        };
+        let byte = match data.cache.get(&target).copied() {
+            Some(Some(b)) => Some(b),
+            Some(None) => None,
+            None => {
+                // Fall back to a one-shot read so the inspector still
+                // works on the very first frame after the highlight
+                // moves to a fresh address.
+                let handle = data.handle.as_ref();
+                handle
+                    .and_then(|h| copy_address(target, 1, h).ok().and_then(|buf| buf.first().copied()))
+                    .inspect(|b| {
+                        data.cache.insert(target, Some(*b));
+                    })
+            }
+        };
+        match byte {
+            Some(b) => {
+                *slot = b;
+                available = i + 1;
+            }
+            None => break,
+        }
+    }
+    (out, available)
+}
+
+fn format_float_f32(val: f32) -> String {
+    if !val.is_finite() {
+        return format!("{val}");
+    }
+    let abs = val.abs();
+    if abs == 0.0 {
+        "0.0".to_string()
+    } else if abs >= 1e6 || abs <= 1e-3 {
+        format!("{val:.3e}")
+    } else {
+        format!("{val:.4}")
+    }
+}
+
+fn format_float_f64(val: f64) -> String {
+    if !val.is_finite() {
+        return format!("{val}");
+    }
+    let abs = val.abs();
+    if abs == 0.0 {
+        "0.0".to_string()
+    } else if abs >= 1e7 || abs <= 1e-4 {
+        format!("{val:.4e}")
+    } else {
+        format!("{val:.6}")
+    }
+}
+
+fn format_kind(kind: InspectorKind, bytes: &[u8; 8], available: usize, endian: Endianness) -> Option<String> {
+    if available < kind.byte_count() {
+        return None;
+    }
+    let be = matches!(endian, Endianness::Big);
+    Some(match kind {
+        InspectorKind::U8 => u8::from_le_bytes([bytes[0]]).to_string(),
+        InspectorKind::I8 => (bytes[0] as i8).to_string(),
+        InspectorKind::U16 => {
+            let arr = [bytes[0], bytes[1]];
+            if be { u16::from_be_bytes(arr) } else { u16::from_le_bytes(arr) }.to_string()
+        }
+        InspectorKind::I16 => {
+            let arr = [bytes[0], bytes[1]];
+            if be { i16::from_be_bytes(arr) } else { i16::from_le_bytes(arr) }.to_string()
+        }
+        InspectorKind::U32 => {
+            let arr = [bytes[0], bytes[1], bytes[2], bytes[3]];
+            if be { u32::from_be_bytes(arr) } else { u32::from_le_bytes(arr) }.to_string()
+        }
+        InspectorKind::I32 => {
+            let arr = [bytes[0], bytes[1], bytes[2], bytes[3]];
+            if be { i32::from_be_bytes(arr) } else { i32::from_le_bytes(arr) }.to_string()
+        }
+        InspectorKind::U64 => if be { u64::from_be_bytes(*bytes) } else { u64::from_le_bytes(*bytes) }.to_string(),
+        InspectorKind::I64 => if be { i64::from_be_bytes(*bytes) } else { i64::from_le_bytes(*bytes) }.to_string(),
+        InspectorKind::F32 => {
+            let arr = [bytes[0], bytes[1], bytes[2], bytes[3]];
+            format_float_f32(if be { f32::from_be_bytes(arr) } else { f32::from_le_bytes(arr) })
+        }
+        InspectorKind::F64 => format_float_f64(if be { f64::from_be_bytes(*bytes) } else { f64::from_le_bytes(*bytes) }),
+    })
+}
+
+/// Parse `input` as the given kind and return the bytes that should be
+/// written to memory in the given endianness.
+fn parse_kind(kind: InspectorKind, input: &str, endian: Endianness) -> Result<Vec<u8>, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("empty".to_string());
+    }
+    let be = matches!(endian, Endianness::Big);
+    // `to_le_bytes()` is the canonical layout; reverse to swap to big.
+    let swap = |mut v: Vec<u8>| -> Vec<u8> {
+        if be {
+            v.reverse();
+        }
+        v
+    };
+    match kind {
+        InspectorKind::U8 => trimmed.parse::<u8>().map(|v| vec![v]).map_err(|e| e.to_string()),
+        InspectorKind::I8 => trimmed.parse::<i8>().map(|v| vec![v as u8]).map_err(|e| e.to_string()),
+        InspectorKind::U16 => trimmed.parse::<u16>().map(|v| swap(v.to_le_bytes().to_vec())).map_err(|e| e.to_string()),
+        InspectorKind::I16 => trimmed.parse::<i16>().map(|v| swap(v.to_le_bytes().to_vec())).map_err(|e| e.to_string()),
+        InspectorKind::U32 => trimmed.parse::<u32>().map(|v| swap(v.to_le_bytes().to_vec())).map_err(|e| e.to_string()),
+        InspectorKind::I32 => trimmed.parse::<i32>().map(|v| swap(v.to_le_bytes().to_vec())).map_err(|e| e.to_string()),
+        InspectorKind::U64 => trimmed.parse::<u64>().map(|v| swap(v.to_le_bytes().to_vec())).map_err(|e| e.to_string()),
+        InspectorKind::I64 => trimmed.parse::<i64>().map(|v| swap(v.to_le_bytes().to_vec())).map_err(|e| e.to_string()),
+        InspectorKind::F32 => trimmed.parse::<f32>().map(|v| swap(v.to_le_bytes().to_vec())).map_err(|e| e.to_string()),
+        InspectorKind::F64 => trimmed.parse::<f64>().map(|v| swap(v.to_le_bytes().to_vec())).map_err(|e| e.to_string()),
+    }
+}
+
+pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
+    let pid_t = app.state.pid as process_memory::Pid;
+    let accent = ui.visuals().selection.bg_fill;
+
+    egui::Panel::top("memory_editor_top")
+        .frame(
+            egui::Frame::new()
+                .fill(egui::Color32::from_rgb(22, 25, 29))
+                .inner_margin(egui::Margin::symmetric(20, 10))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 50, 60))),
+        )
+        .show_inside(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "memory-editor-title"))
+                        .size(15.0)
+                        .strong()
+                        .color(accent),
+                );
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(format!("PID {}", app.state.pid)).size(13.0).weak().monospace());
+
+                ui.add_space(10.0);
+                let sep_color = egui::Color32::from_rgb(60, 65, 75);
+                let (sep_rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 20.0), egui::Sense::hover());
+                ui.painter().rect_filled(sep_rect, egui::CornerRadius::ZERO, sep_color);
+                ui.add_space(10.0);
+
+                let origin = app.memory_editor.origin_address();
+                ui.label(egui::RichText::new("origin:").size(13.0).weak());
+                ui.label(
+                    egui::RichText::new(format!("0x{origin:X}"))
+                        .size(13.0)
+                        .monospace()
+                        .color(egui::Color32::from_rgb(220, 165, 90)),
+                );
+
+                let region_info = app.memory_editor.region_of(origin).map(|r| {
+                    let access = match (r.readable, r.writable) {
+                        (true, true) => "rw",
+                        (true, false) => "r-",
+                        (false, true) => "-w",
+                        (false, false) => "--",
+                    };
+                    (r.label.clone(), access)
+                });
+                if let Some((label, access)) = region_info {
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new(label).size(13.0).weak());
+                    ui.label(egui::RichText::new(format!("[{access}]")).size(12.0).weak().monospace());
+                } else {
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "memory-editor-region-unmapped"))
+                            .size(13.0)
+                            .weak()
+                            .italics(),
+                    );
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let btn = |label: String| egui::Button::new(egui::RichText::new(label).size(14.0)).min_size(egui::vec2(0.0, 28.0));
+                    if ui.add(btn(fl!(crate::LANGUAGE_LOADER, "close-button"))).clicked() {
+                        app.close_memory_editor();
+                    }
+                    if ui
+                        .add(btn("\u{21A9}  Origin".to_string()))
+                        .on_hover_text("Jump back to the address the editor was opened at")
+                        .clicked()
+                    {
+                        app.memory_editor.goto_origin();
+                    }
+
+                    // Undo / Redo buttons. Disabled when there's nothing
+                    // on the respective stack so the user gets immediate
+                    // visual feedback that a shortcut would be a no-op.
+                    let can_redo = app.memory_editor.can_redo();
+                    let can_undo = app.memory_editor.can_undo();
+                    ui.add_space(6.0);
+                    if ui
+                        .add_enabled(can_redo, btn("\u{21BB}".to_string()))
+                        .on_hover_text(fl!(crate::LANGUAGE_LOADER, "memory-editor-redo-tooltip"))
+                        .clicked()
+                    {
+                        app.memory_editor.redo();
+                    }
+                    if ui
+                        .add_enabled(can_undo, btn("\u{21BA}".to_string()))
+                        .on_hover_text(fl!(crate::LANGUAGE_LOADER, "memory-editor-undo-tooltip"))
+                        .clicked()
+                    {
+                        app.memory_editor.undo();
+                    }
+
+                    // Result-type picker — lets the user reinterpret the
+                    // current cheat result as a different fixed-width
+                    // numeric type (e.g. promote an int8 hit to int32).
+                    if let Some(current_type) = app.memory_editor.current_result_type() {
+                        ui.add_space(6.0);
+                        let mut selected = current_type;
+                        const NUMERIC_TYPES: &[SearchType] = &[
+                            SearchType::Byte,
+                            SearchType::Short,
+                            SearchType::Int,
+                            SearchType::Int64,
+                            SearchType::Float,
+                            SearchType::Double,
+                        ];
+                        let selectable = NUMERIC_TYPES.contains(&current_type);
+                        let selected_text = current_type.get_short_description_text();
+                        // Wide enough for the longest English label
+                        // ("Double") plus a little slack for translations,
+                        // without taking up half the toolbar.
+                        let combo = egui::ComboBox::from_id_salt("memory_editor_result_type")
+                            .selected_text(selected_text)
+                            .width(100.0);
+                        if selectable {
+                            let response = combo.show_ui(ui, |ui| {
+                                for &ty in NUMERIC_TYPES {
+                                    ui.selectable_value(&mut selected, ty, ty.get_short_description_text());
+                                }
+                            });
+                            response.response.on_hover_text("Reinterpret the current result as a different numeric type");
+                            if selected != current_type {
+                                app.change_result_type(selected);
+                            }
+                        } else {
+                            // Variable-length types (Guess/Unknown/String/StringUtf16) — not
+                            // editable from the picker. Show a read-only label so the user
+                            // still sees what the result was scanned as.
+                            ui.add_enabled_ui(false, |ui| {
+                                let _ = combo.show_ui(ui, |_| {});
+                            })
+                            .response
+                            .on_hover_text("Variable-length results cannot be reinterpreted from the editor");
+                        }
+                        ui.label(egui::RichText::new("Type:").size(13.0).weak());
+                    }
+                });
+            });
+        });
+
+    // Establish the process handle for this frame at the outer level so
+    // both the inspector bottom panel and the hex grid central panel can
+    // see it. Cleared each frame; closures inside `draw_editor_contents`
+    // read it via the shared `data.handle` field.
+    app.memory_editor.data.handle = pid_t.try_into_process_handle().ok();
+    let handle_attached = app.memory_editor.data.handle.is_some();
+
+    // Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z — undo & redo for memory writes.
+    // Suppressed while a text field has focus so the shortcut still
+    // performs in-field undo on Goto / Inspector edits.
+    if handle_attached && !ui.ctx().text_edit_focused() {
+        let (undo, redo) = ui.ctx().input(|i| {
+            let ctrl = i.modifiers.command;
+            let shift = i.modifiers.shift;
+            let undo = ctrl && !shift && i.key_pressed(egui::Key::Z);
+            let redo = ctrl && (i.key_pressed(egui::Key::Y) || (shift && i.key_pressed(egui::Key::Z)));
+            (undo, redo)
+        });
+        if undo {
+            app.memory_editor.undo();
+        }
+        if redo {
+            app.memory_editor.redo();
+        }
+    }
+
+    // Inspector lives in its own bottom panel so the hex grid scroll
+    // area knows its exact height and `visible_range` matches what the
+    // user actually sees. Without this, the scroll area inside the
+    // central panel grew taller than the visible viewport, which made
+    // arrow-key scrolling stutter when moving down past the last row.
+    if handle_attached {
+        egui::Panel::bottom("memory_editor_inspector")
+            .resizable(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(22, 25, 30))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(55, 62, 72)))
+                    .inner_margin(egui::Margin::symmetric(16, 12)),
+            )
+            .show_inside(ui, |ui| {
+                inspector_body(&mut app.memory_editor, ui);
+            });
+    }
+
+    egui::CentralPanel::default()
+        .frame(egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::symmetric(20, 14)))
+        .show_inside(ui, |ui| {
+            if !handle_attached {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 120, 120),
+                    fl!(crate::LANGUAGE_LOADER, "memory-editor-error-attach", error = "process unavailable".to_string()),
+                );
+                return;
+            }
+
+            // Destructure so we can borrow the raw editor and the data
+            // separately — the vendored API takes `&mut T` and we want T
+            // to be our `EditorData` so the closures can mutate the cache.
+            let MemoryEditor { raw, data } = &mut app.memory_editor;
+
+            // Capture caret state so the per-byte write closure (which
+            // only sees `EditorData`) can stamp it onto new undo
+            // records as `caret_before`.
+            data.caret_snapshot = raw.caret();
+            let undo_len_before = data.undo_stack.len();
+
+            raw.draw_editor_contents_with_highlight(
+                ui,
+                data,
+                |d, addr| match d.cache.get(&addr).copied() {
+                    Some(Some(b)) => Some(b),
+                    Some(None) => None,
+                    None => {
+                        // Cache miss — fall back to a one-shot read so
+                        // the very first frame after opening isn't
+                        // blank. The batched tick() will pick this up
+                        // afterwards.
+                        let handle = d.handle.as_ref()?;
+                        match copy_address(addr, 1, handle) {
+                            Ok(buf) if !buf.is_empty() => {
+                                d.cache.insert(addr, Some(buf[0]));
+                                Some(buf[0])
+                            }
+                            _ => {
+                                d.cache.insert(addr, None);
+                                None
+                            }
+                        }
+                    }
+                },
+                |d, addr, byte| {
+                    let caret = d.caret_snapshot;
+                    apply_write(d, addr, &[byte], caret);
+                },
+                |d, addr| change_intensity(d, addr),
+            );
+
+            // The hex grid advances the caret one nibble after a write;
+            // patch the post-write caret onto every undo record added
+            // this frame so redo restores the user's editing context.
+            let caret_after = raw.caret();
+            for record in &mut data.undo_stack[undo_len_before..] {
+                record.caret_after = caret_after;
+            }
+
+            // Animate the change-flash overlay smoothly even when there's
+            // no user input. Only request a repaint while at least one
+            // tracked byte is still inside the fade window.
+            let now = Instant::now();
+            let needs_repaint = data.change_tracker.values().any(|(_, ts)| now.duration_since(*ts) < CHANGE_FADE);
+            if needs_repaint {
+                ui.ctx().request_repaint();
+            }
+        });
+}
+
+/// Render the inspector body. The caller is responsible for wrapping
+/// this in a `Panel::bottom` (or similar) so the hex grid above gets a
+/// well-defined remaining height. Shows the bytes at the currently
+/// highlighted address decoded as every common numeric type; each
+/// entry is editable, Enter writes the value to the target.
+fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) {
+    let accent = ui.visuals().selection.bg_fill;
+    let highlight = editor.raw.highlighted_address();
+    let endian = editor.raw.endianness();
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Inspector").size(14.0).strong().color(accent));
+        ui.add_space(8.0);
+        match highlight {
+            Some(addr) => {
+                ui.label(egui::RichText::new(format!("@ 0x{addr:X}")).size(13.0).monospace().weak());
+            }
+            None => {
+                ui.label(egui::RichText::new("right-click a byte in the grid to inspect it").size(13.0).weak().italics());
+            }
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let label = match endian {
+                Endianness::Little => "little-endian",
+                Endianness::Big => "big-endian",
+            };
+            ui.label(egui::RichText::new(format!("{label}  |  Enter writes, Esc cancels")).size(12.0).weak());
+        });
+    });
+
+    let Some(addr) = highlight else {
+        ui.add_space(4.0);
+        return;
+    };
+
+    // Read 8 bytes (cache-first, syscall fallback) and forget any
+    // stale edit buffer that doesn't match this address.
+    let (bytes, available) = read_inspector_bytes(&mut editor.data, addr);
+    if let Some(edit) = editor.data.inspector_edit.as_ref()
+        && edit.address != addr
+    {
+        editor.data.inspector_edit = None;
+    }
+
+    ui.add_space(4.0);
+    ui.columns(3, |cols| {
+        cols[0].label(egui::RichText::new("Unsigned").size(12.0).weak());
+        cols[1].label(egui::RichText::new("Signed").size(12.0).weak());
+        cols[2].label(egui::RichText::new("Float").size(12.0).weak());
+        for col in &mut cols[..] {
+            col.separator();
+        }
+        inspector_column(
+            &mut cols[0],
+            &mut editor.data,
+            addr,
+            &bytes,
+            available,
+            endian,
+            &[InspectorKind::U8, InspectorKind::U16, InspectorKind::U32, InspectorKind::U64],
+        );
+        inspector_column(
+            &mut cols[1],
+            &mut editor.data,
+            addr,
+            &bytes,
+            available,
+            endian,
+            &[InspectorKind::I8, InspectorKind::I16, InspectorKind::I32, InspectorKind::I64],
+        );
+        inspector_column(
+            &mut cols[2],
+            &mut editor.data,
+            addr,
+            &bytes,
+            available,
+            endian,
+            &[InspectorKind::F32, InspectorKind::F64],
+        );
+    });
+    ui.add_space(2.0);
+}
+
+fn inspector_column(ui: &mut egui::Ui, data: &mut EditorData, addr: Address, bytes: &[u8; 8], available: usize, endian: Endianness, kinds: &[InspectorKind]) {
+    for &kind in kinds {
+        ui.horizontal(|ui| {
+            ui.add_sized(egui::vec2(34.0, 20.0), egui::Label::new(egui::RichText::new(kind.label()).monospace().weak()));
+
+            let displayed_value = format_kind(kind, bytes, available, endian);
+            let editing = matches!(&data.inspector_edit, Some(edit) if edit.kind == kind && edit.address == addr);
+
+            // The displayed buffer is either the live edit text or the
+            // current value rendered as a string. `--` when the type
+            // doesn't fit in the readable window.
+            let mut buf = if editing {
+                data.inspector_edit.as_ref().map(|e| e.text.clone()).unwrap_or_default()
+            } else {
+                displayed_value.clone().unwrap_or_else(|| "--".to_string())
+            };
+
+            let parse_error = editing && parse_kind(kind, &buf, endian).is_err();
+            let text_color = if parse_error {
+                Some(egui::Color32::from_rgb(220, 120, 120))
+            } else if displayed_value.is_none() {
+                Some(ui.visuals().widgets.inactive.fg_stroke.color)
+            } else {
+                None
+            };
+
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut buf)
+                    .desired_width(170.0)
+                    .font(egui::TextStyle::Monospace)
+                    .text_color_opt(text_color),
+            );
+
+            if response.changed() {
+                data.inspector_edit = Some(InspectorEdit {
+                    address: addr,
+                    kind,
+                    text: buf.clone(),
+                });
+            }
+
+            let enter_pressed = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let escape_pressed = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape));
+
+            // Commit only on Enter. Live-writing while typing is too easy
+            // to trigger accidentally and can produce surprising transient
+            // values in the target process.
+            if enter_pressed {
+                if let Ok(write_bytes) = parse_kind(kind, &buf, endian) {
+                    // Inspector writes don't move the hex-grid caret;
+                    // record the inspector's address as both the before
+                    // and after caret so undo/redo restore the user's
+                    // focus point.
+                    apply_write(data, addr, &write_bytes, Some((addr, false)));
+                    data.inspector_edit = None;
+                    response.surrender_focus();
+                }
+            } else if escape_pressed || response.lost_focus() {
+                data.inspector_edit = None;
+            }
+        });
+    }
+}
+
+/// Write `bytes` starting at `addr` to the target process and update the
+/// cache/change-tracker so the UI reflects the write immediately. Also
+/// captures the previous bytes from the cache, pushes an undo entry,
+/// and clears the redo stack. Returns whether the write succeeded.
+///
+/// `caret_before` is the caret position at the moment the user
+/// initiated the write — used by undo to restore the editing context.
+/// The corresponding `caret_after` is filled in by the surrounding
+/// frame logic once the post-write caret is known.
+fn apply_write(data: &mut EditorData, addr: Address, bytes: &[u8], caret_before: Option<(Address, bool)>) -> bool {
+    if bytes.is_empty() || data.handle.is_none() {
+        return false;
+    }
+
+    // Snapshot what's currently at `addr..addr+bytes.len()` so the write
+    // is reversible. Bytes that aren't cached fall back to a fresh read
+    // from the target — this is the only path that needs the original
+    // value, so we accept the extra syscall here.
+    let before = read_current(data, addr, bytes.len());
+
+    if !write_raw(data, addr, bytes) {
+        return false;
+    }
+    apply_to_cache(data, addr, bytes);
+
+    if before.as_slice() != bytes {
+        data.redo_stack.clear();
+        data.undo_stack.push(WriteRecord {
+            addr,
+            before,
+            after: bytes.to_vec(),
+            caret_before,
+            // Filled in after the panel finishes drawing this frame, so
+            // the post-write caret reflects any movement (e.g. nibble
+            // advance) the editor performed in response to this write.
+            caret_after: caret_before,
+        });
+        cap_stack(&mut data.undo_stack);
+    }
+
+    true
+}
+
+/// Read `len` bytes starting at `addr`, preferring cached values and
+/// falling back to a one-shot `copy_address` for any byte not in cache.
+/// Missing bytes are reported as `0`.
+fn read_current(data: &EditorData, addr: Address, len: usize) -> Vec<u8> {
+    let handle = data.handle.as_ref();
+    (0..len)
+        .map(|i| {
+            let a = addr + i;
+            match data.cache.get(&a).copied() {
+                Some(Some(b)) => b,
+                _ => handle.and_then(|h| copy_address(a, 1, h).ok()).and_then(|v| v.first().copied()).unwrap_or(0),
+            }
+        })
+        .collect()
+}
+
+/// Best-effort raw write to the target. Does not touch undo/redo state.
+fn write_raw(data: &EditorData, addr: Address, bytes: &[u8]) -> bool {
+    match data.handle.as_ref() {
+        Some(handle) => handle.put_address(addr, bytes).is_ok(),
+        None => false,
+    }
+}
+
+/// Mark `addr..addr+bytes.len()` as written in the cache and the
+/// change-tracker so the highlight fade kicks in.
+fn apply_to_cache(data: &mut EditorData, addr: Address, bytes: &[u8]) {
+    let now = Instant::now();
+    for (i, b) in bytes.iter().enumerate() {
+        let a = addr + i;
+        data.cache.insert(a, Some(*b));
+        data.change_tracker.insert(a, (*b, now));
+    }
+}
+
+fn cap_stack(stack: &mut Vec<WriteRecord>) {
+    if stack.len() > UNDO_STACK_LIMIT {
+        let overflow = stack.len() - UNDO_STACK_LIMIT;
+        stack.drain(0..overflow);
+    }
+}
+
+/// Fade intensity in `0.0..=1.0` for the byte at `addr`. Returns `0.0`
+/// for bytes that haven't changed recently or aren't tracked yet. Drives
+/// the orange overlay drawn by the hex grid and the ASCII sidebar.
+fn change_intensity(data: &EditorData, addr: Address) -> f32 {
+    let (_, ts) = match data.change_tracker.get(&addr) {
+        Some(entry) => entry,
+        None => return 0.0,
+    };
+    let elapsed = ts.elapsed();
+    if elapsed >= CHANGE_FADE {
+        return 0.0;
+    }
+    1.0 - (elapsed.as_secs_f32() / CHANGE_FADE.as_secs_f32())
 }

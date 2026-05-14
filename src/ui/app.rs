@@ -10,7 +10,7 @@ use crate::{
     AppError, FreezeMessage, GameCheetahEngine, MessageCommand, SearchContext, SearchMode, SearchResult, SearchType, SearchValue,
     ui::{
         in_process_view, main_window,
-        memory_editor::MemoryEditor,
+        mem_editor::MemoryEditor,
         process_selection,
         process_selection::{ProcessSortColumn, SortDirection},
         value_cache::ValueCache,
@@ -850,7 +850,7 @@ impl eframe::App for App {
             AppState::About => main_window::view_about(self, ui),
             AppState::ProcessSelection => process_selection::view_process_selection(self, ui),
             AppState::InProcess => in_process_view::view_in_process(self, ui),
-            AppState::MemoryEditor => crate::ui::memory_editor::view_memory_editor(self, ui),
+            AppState::MemoryEditor => crate::ui::mem_editor::view_memory_editor(self, ui),
         }
 
         // Global escape handling for dismissable dialogs.
