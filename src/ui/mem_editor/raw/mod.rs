@@ -18,6 +18,11 @@ use self::option_data::{BetweenFrameData, MemoryEditorOptions};
 
 pub mod option_data;
 
+// Vendored data-preview helper. Not yet wired into the UI, but kept compiled
+// (and thus type-checked) so it can't silently rot.
+#[allow(dead_code)]
+mod utilities;
+
 /// A memory address that should be read from/written to.
 pub type Address = usize;
 
