@@ -1,6 +1,6 @@
 [package]
 name = "game-cheetah"
-version = "0.7.0"
+version = "0.7.1"
 authors = ["Mike Krüger <mkrueger@posteo.de>"]
 edition = "2024"
 rust-version = "1.89"
