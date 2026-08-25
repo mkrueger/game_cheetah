@@ -545,7 +545,6 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     let Some(search_context) = app.state.searches.get(search_index) else {
         return;
     };
-    let mut apply_filter = false;
     let results = search_context.collect_results();
     let total_results = results.len();
     let is_string = matches!(search_context.search_type, SearchType::String | SearchType::StringUtf16);
@@ -558,11 +557,6 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     let freezed: std::collections::HashSet<usize> = search_context.freezed_addresses.iter().copied().collect();
     let all_frozen = !results.is_empty() && results.iter().all(|r| freezed.contains(&r.addr));
     let frozen_count = results.iter().filter(|r| freezed.contains(&r.addr)).count();
-
-    if !is_string {
-        result_filter_row(app, ui, &mut apply_filter);
-        ui.add_space(8.0);
-    }
 
     // Capture lookups we'll need inside the row closure. Borrow checker:
     // the row closure runs inside TableBuilder::body which holds `ui`, and
@@ -837,45 +831,9 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     if cancel_edit && !started_edit {
         app.editing_result = None;
     }
-    if apply_filter {
-        app.apply_result_filter();
-    }
 
     // Silence unused warning when AppState transitions are handled elsewhere.
     let _ = AppState::InProcess;
-}
-
-/// Filter bar above the result table. Narrows the current results by their
-/// live value — either a comparison (`>1000`, `<0`) or a substring of the
-/// displayed number. The regular Undo button restores the previous list.
-fn result_filter_row(app: &mut App, ui: &mut egui::Ui, apply: &mut bool) {
-    let parse_error = crate::ResultFilter::parse(&app.result_filter).err();
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "filter-results-label")).size(14.0));
-        let response = ui.add(
-            egui::TextEdit::singleline(&mut app.result_filter)
-                .hint_text(fl!(crate::LANGUAGE_LOADER, "filter-results-hint"))
-                .desired_width(220.0)
-                .margin(egui::Margin::symmetric(10, 6))
-                .text_color_opt(parse_error.as_ref().map(|_| egui::Color32::from_rgb(220, 120, 120))),
-        );
-        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            *apply = true;
-        }
-        let enabled = parse_error.is_none() && !app.result_filter.trim().is_empty();
-        if ui
-            .add_enabled(
-                enabled,
-                egui::Button::new(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "filter-results-button")).size(14.0)).min_size(egui::vec2(0.0, 28.0)),
-            )
-            .clicked()
-        {
-            *apply = true;
-        }
-        if let Some(err) = &parse_error {
-            ui.colored_label(egui::Color32::from_rgb(220, 120, 120), format!("\u{26A0}  {err}"));
-        }
-    });
 }
 
 /// Read up to `max_bytes` raw bytes from the target process at `addr`.

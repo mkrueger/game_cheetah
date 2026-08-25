@@ -41,10 +41,6 @@ initial-search-button = Initial search
 update-button = Update
 clear-button = Clear
 close-button = Close
-
-filter-results-label = Filter:
-filter-results-hint = e.g. > 1000, < 0 or 1800
-filter-results-button = Apply filter
 hide-results-button = Hide results
 show-results-button = Show results
 rename-button = Rename

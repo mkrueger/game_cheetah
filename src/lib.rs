@@ -14,9 +14,6 @@ pub mod update_check;
 pub mod search_value;
 pub use search_value::*;
 
-pub mod result_filter;
-pub use result_filter::*;
-
 pub mod search_context;
 pub use search_context::*;
 

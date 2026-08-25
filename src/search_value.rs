@@ -50,21 +50,6 @@ pub fn format_value(search_type: SearchType, bytes: &[u8]) -> Option<String> {
     }
 }
 
-/// Interpret raw memory bytes as a number for comparisons. `i64` values
-/// beyond 2^53 lose precision, which is irrelevant for the threshold
-/// comparisons this feeds.
-pub fn value_as_f64(search_type: SearchType, bytes: &[u8]) -> Option<f64> {
-    match search_type {
-        SearchType::Byte => bytes.first().map(|b| *b as f64),
-        SearchType::Short => fixed_bytes::<2>(bytes).map(|arr| i16::from_le_bytes(arr) as f64),
-        SearchType::Int => fixed_bytes::<4>(bytes).map(|arr| i32::from_le_bytes(arr) as f64),
-        SearchType::Int64 => fixed_bytes::<8>(bytes).map(|arr| i64::from_le_bytes(arr) as f64),
-        SearchType::Float => fixed_bytes::<4>(bytes).map(|arr| f32::from_le_bytes(arr) as f64),
-        SearchType::Double => fixed_bytes::<8>(bytes).map(f64::from_le_bytes),
-        SearchType::Guess | SearchType::Unknown | SearchType::String | SearchType::StringUtf16 => None,
-    }
-}
-
 /// A single match produced by a search pass.
 ///
 /// For most search types `search_type` mirrors [`SearchContext::search_type`],

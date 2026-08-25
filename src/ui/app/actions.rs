@@ -161,20 +161,6 @@ impl App {
         self.clear_change_tracker();
     }
 
-    /// Narrow the current results down to the ones matching the filter
-    /// expression typed above the result table.
-    pub fn apply_result_filter(&mut self) {
-        match crate::ResultFilter::parse(&self.result_filter) {
-            Ok(Some(filter)) => {
-                self.editing_result = None;
-                self.state.filter_results(self.state.current_search, filter);
-                self.clear_change_tracker();
-            }
-            Ok(None) => {}
-            Err(message) => self.state.push_error(AppError::Generic { message }),
-        }
-    }
-
     // ---- Freeze / unfreeze ---------------------------------------------
 
     pub fn toggle_freeze(&mut self, index: usize) {

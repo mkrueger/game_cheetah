@@ -71,9 +71,6 @@ pub struct App {
     /// process selection table.
     pub expanded_process_groups: HashSet<process_memory::Pid>,
 
-    /// Filter expression typed above the result table (`>1000`, `<0`, `42`).
-    pub result_filter: String,
-
     /// Brief status next to the Save/Load buttons.
     pub cheat_table_status: String,
 
@@ -141,7 +138,6 @@ impl Default for App {
             process_sort_column: ProcessSortColumn::default(),
             process_sort_direction: SortDirection::default(),
             expanded_process_groups: HashSet::new(),
-            result_filter: String::new(),
             cheat_table_status: String::new(),
             auto_reconnect: false,
             check_for_updates: false,
