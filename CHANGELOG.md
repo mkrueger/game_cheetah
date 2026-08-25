@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   across the window, and the hit count is rendered prominently. Result lists
   too large to browse are collapsed behind a hint pointing at the next useful
   step, with an option to show them anyway.
+- Result rows carry their actions as icons that appear on hover — ✕ next to
+  the address removes the row, ✏ next to the value opens the memory editor —
+  so the separate button column is gone. The frozen column is now a ❄ header
+  with the wording moved into its tooltip.
 - CI runs the checks and tests on every commit; Linux, Windows and macOS
   packages are now built when a `v*` tag is pushed and attached to that tag's
   release. The dependency audit moved to a weekly schedule.

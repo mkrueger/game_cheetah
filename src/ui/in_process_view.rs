@@ -19,6 +19,27 @@ const BROWSE_RESULT_LIMIT: usize = 1000;
 /// the type picker to the far edge of the window.
 const SEARCH_FIELD_WIDTH: f32 = 320.0;
 
+const FREEZE_ICON: &str = "\u{2744}";
+const EDIT_ICON: &str = "\u{270F}";
+const REMOVE_ICON: &str = "\u{2715}";
+/// Width reserved in a cell for its hover icon so nothing shifts when the
+/// pointer enters or leaves the row.
+const ICON_SLOT_WIDTH: f32 = 26.0;
+
+/// Row action rendered as a bare glyph. The slot is always reserved; the
+/// button only becomes visible and clickable while its row is hovered.
+fn icon_button(ui: &mut egui::Ui, visible: bool, glyph: &str, tooltip: String) -> egui::Response {
+    let button = egui::Button::new(egui::RichText::new(glyph).size(14.0))
+        .frame(false)
+        .min_size(egui::vec2(ICON_SLOT_WIDTH - 4.0, 20.0));
+    let response = ui.add_visible(visible, button);
+    if visible {
+        response.on_hover_text(tooltip).on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        response
+    }
+}
+
 pub fn view_in_process(app: &mut App, ui: &mut egui::Ui) {
     top_bar(app, ui);
     error_bar(app, ui);
@@ -617,25 +638,28 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     let mut live_write: Option<(usize, String)> = None;
     let mut commit_edit: Option<(usize, String)> = None;
     let mut cancel_edit = false;
+    // Row-level hover comes from the previous frame: the cells are built before
+    // the row response exists, and a frame of lag is invisible at 30 Hz.
+    let hovered_row = app.hovered_result_row;
+    let mut new_hovered_row: Option<usize> = None;
 
     use egui_extras::{Column, TableBuilder};
 
+    // Fixed widths only: a trailing remainder column would just reintroduce
+    // the empty strip this table used to carry around.
     let mut builder = TableBuilder::new(ui)
         .striped(true)
         .resizable(true)
+        .sense(egui::Sense::hover())
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::initial(160.0).at_least(120.0)) // address
-        // The value column absorbs the leftover width so the slack sits with
-        // the data rather than behind the row buttons.
-        .column(Column::remainder().at_least(140.0)); // value
+        .column(Column::initial(150.0).at_least(120.0)) // address + remove icon
+        .column(Column::initial(190.0).at_least(140.0)); // value + edit icon
     if show_search_types {
         builder = builder.column(Column::initial(110.0).at_least(80.0));
     }
     if !is_string {
-        // Freeze checkbox column + buttons column
-        builder = builder.column(Column::initial(110.0).at_least(80.0));
+        builder = builder.column(Column::initial(56.0).at_least(48.0));
     }
-    builder = builder.column(Column::initial(210.0).at_least(180.0));
 
     builder
         .header(32.0, |mut header| {
@@ -652,21 +676,25 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
             }
             if !is_string {
                 header.col(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
                     let mut checked = all_frozen;
                     if ui.checkbox(&mut checked, "").clicked() {
                         toggle_freeze_all = true;
                     }
-                    ui.label(fl!(crate::LANGUAGE_LOADER, "freezed-heading"));
-                    if frozen_count > 0 {
-                        ui.label(
-                            egui::RichText::new(format!("({frozen_count}/{total_results})"))
-                                .small()
-                                .color(ui.visuals().selection.bg_fill),
-                        );
-                    }
+                    let heading = fl!(crate::LANGUAGE_LOADER, "freezed-heading");
+                    let tooltip = if frozen_count > 0 {
+                        format!("{heading} ({frozen_count}/{total_results})")
+                    } else {
+                        heading
+                    };
+                    let color = if frozen_count > 0 {
+                        ui.visuals().selection.bg_fill
+                    } else {
+                        ui.visuals().weak_text_color()
+                    };
+                    ui.label(egui::RichText::new(FREEZE_ICON).size(15.0).color(color)).on_hover_text(tooltip);
                 });
             }
-            header.col(|_ui| {});
         })
         .body(|body| {
             body.rows(RESULT_ROW_HEIGHT, total_results, |mut row| {
@@ -675,6 +703,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     return;
                 };
                 let is_frozen = freezed.contains(&result.addr);
+                let row_hovered = hovered_row == Some(i);
 
                 // Always read fresh raw bytes from the target so the display
                 // and the change diff reflect the process's current state.
@@ -735,6 +764,11 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                 // Address column
                 row.col(|ui| {
                     ui.monospace(format!("0x{:X}", result.addr));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if icon_button(ui, row_hovered, REMOVE_ICON, fl!(crate::LANGUAGE_LOADER, "remove-button")).clicked() {
+                            remove_result = Some(i);
+                        }
+                    });
                 });
 
                 // Value column - always rendered as an editable text box.
@@ -764,7 +798,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     } else {
                         None
                     };
-                    let cell_width = ui.available_width().min(240.0);
+                    let cell_width = (ui.available_width() - ICON_SLOT_WIDTH).clamp(60.0, 150.0);
 
                     let response = if editing {
                         // Bind the TextEdit straight to the live editing
@@ -819,6 +853,12 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                         ui.painter()
                             .rect_filled(response.rect.expand(2.0), 3.0, egui::Color32::from_rgba_unmultiplied(255, 150, 60, alpha));
                     }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if icon_button(ui, row_hovered, EDIT_ICON, fl!(crate::LANGUAGE_LOADER, "edit-button")).clicked() {
+                            open_editor = Some(i);
+                        }
+                    });
                 });
 
                 if show_search_types {
@@ -836,18 +876,15 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     });
                 }
 
-                row.col(|ui| {
-                    if ui.small_button(fl!(crate::LANGUAGE_LOADER, "edit-button")).clicked() {
-                        open_editor = Some(i);
-                    }
-                    if ui.small_button(fl!(crate::LANGUAGE_LOADER, "remove-button")).clicked() {
-                        remove_result = Some(i);
-                    }
-                });
+                if row.response().hovered() {
+                    new_hovered_row = Some(i);
+                }
             });
         });
 
     drop(results);
+
+    app.hovered_result_row = new_hovered_row;
 
     if toggle_freeze_all {
         app.toggle_freeze_all();

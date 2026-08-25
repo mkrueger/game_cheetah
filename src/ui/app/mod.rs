@@ -71,6 +71,10 @@ pub struct App {
     /// process selection table.
     pub expanded_process_groups: HashSet<process_memory::Pid>,
 
+    /// Result row under the pointer last frame; drives the hover-only row
+    /// action icons.
+    pub hovered_result_row: Option<usize>,
+
     /// Brief status next to the Save/Load buttons.
     pub cheat_table_status: String,
 
@@ -138,6 +142,7 @@ impl Default for App {
             process_sort_column: ProcessSortColumn::default(),
             process_sort_direction: SortDirection::default(),
             expanded_process_groups: HashSet::new(),
+            hovered_result_row: None,
             cheat_table_status: String::new(),
             auto_reconnect: false,
             check_for_updates: false,
