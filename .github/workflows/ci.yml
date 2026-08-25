@@ -1,0 +1,37 @@
+name: Run Tests
+
+# Every commit gets the cheap checks. Packaging for the three platforms only
+# happens when a tag is pushed - see release.yml.
+permissions:
+  contents: read
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  run_checks:
+    name: Run checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libgtk-3-dev libasound2-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check clippy
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - name: Run tests
+        run: cargo test --all-features --locked

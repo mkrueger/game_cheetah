@@ -1,0 +1,26 @@
+name: Dependency audit
+
+# Advisories arrive independently of commits, so this runs on a schedule
+# instead of on every push.
+permissions:
+  contents: read
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+  push:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+    branches: ["main"]
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

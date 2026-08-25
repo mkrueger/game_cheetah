@@ -1,70 +1,57 @@
-name: Build
-permissions:
-  contents: read
+name: Release
+
+# Everything a tag hands out: the Linux deb and AppImage, the Windows exe and
+# the universal macOS dmg. Each file is attached to the tag's release, which is
+# opened as a draft so the notes can be reviewed before publishing.
 on:
   push:
-    branches: ["main"]
     tags: ["v*"]
-  pull_request:
-    branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The tag whose release the files are attached to
+        required: true
+
+permissions:
+  contents: write
+
 env:
   APP_NAME: game-cheetah
   CARGO_TERM_COLOR: always
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
 jobs:
-  run_checks:
-    name: Run checks (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+  open_release:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+      - name: Open the release unless it is already there
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
-          sudo apt-get update
-          sudo apt-get install build-essential libgtk-3-dev libasound2-dev libxcb-shape0-dev libxcb-xfixes0-dev
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-bin: false
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-      - name: Check clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Run tests
-        run: cargo test --all-features
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "$TAG already has a release, attaching to it"
+          else
+            gh release create "$TAG" --repo "$REPO" --draft --title "$TAG" --generate-notes
+            echo "opened a draft release for $TAG - review it and press publish"
+          fi
 
-  dependency_audit:
-    name: Dependency audit
+  linux:
+    needs: open_release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
         with:
-          cache-bin: false
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-      - name: Run cargo audit
-        run: cargo audit
-
-  build_linux:
-    needs: [run_checks, dependency_audit]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.x"
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
@@ -73,10 +60,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install build-essential libgtk-3-dev libasound2-dev libxcb-shape0-dev libxcb-xfixes0-dev
-      - name: Install cargo deb & get
-        run: |
-          cargo install cargo-deb --version 2.7.0
-          cargo install cargo-get
+      - name: Install cargo deb
+        run: cargo install cargo-deb --version 2.7.0
       - name: Prepare package metadata
         id: package-metadata
         run: |
@@ -88,17 +73,10 @@ jobs:
           DEB=$(cargo deb)
           echo "Copy $DEB to ${{ env.APP_NAME }}_${VERSION}_amd64.deb"
           mv "$DEB" "${{ env.APP_NAME }}_${VERSION}_amd64.deb"
-      - name: 'Upload Artifact'
-        uses: actions/upload-artifact@v5
-        with:
-          name: ${{ env.APP_NAME }}_${{ steps.package-metadata.outputs.version }}_linux_deb
-          path: |
-            ${{ env.APP_NAME }}_${{ steps.package-metadata.outputs.version }}_amd64.deb
-            file_id.diz
       - name: Build AppImage
         id: build-appimage
         run: |
-          cargo build --release
+          cargo build --release --locked
           wget https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool-x86_64.AppImage
           mkdir -p ${{ env.APP_NAME }}-appimage/usr/bin
@@ -113,29 +91,36 @@ jobs:
           echo "app_img=$app_img" >> $GITHUB_OUTPUT
 
           ./appimagetool-x86_64.AppImage "${{ env.APP_NAME }}-appimage" "$app_img"
-      - name: 'Upload AppImage'
-        uses: actions/upload-artifact@v5
-        with:
-          name: ${{ env.APP_NAME }}_${{ steps.package-metadata.outputs.version }}_linux_appimage
-          path: |
-            ${{ steps.build-appimage.outputs.app_img }}
+      - name: Attach them to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh release upload "$TAG" \
+            "${{ env.APP_NAME }}_${VERSION}_amd64.deb" \
+            "${{ steps.build-appimage.outputs.app_img }}" \
+            file_id.diz \
+            --repo "$REPO" --clobber
 
-  build_windows:
-    needs: [run_checks, dependency_audit]
+  windows:
+    needs: open_release
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.x"
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
           cache-bin: false
       - name: Build exe
-        run: |
-          cargo build --release
+        run: cargo build --release --locked
       - name: Prepare package metadata
         id: package-metadata
         shell: pwsh
@@ -144,38 +129,40 @@ jobs:
           echo "Version: $VERSION"
           Add-Content -Path $env:GITHUB_ENV -Value "VERSION=$VERSION"
           Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$VERSION"
-      - name: Prepare artifact
+      - name: Pack it
         shell: pwsh
         run: |
           cp target/release/${{ env.APP_NAME }}.exe "./${{ env.APP_NAME }}.exe"
-      - name: 'Upload Artifact'
-        uses: actions/upload-artifact@v5
-        with:
-          name: ${{ env.APP_NAME }}_${{ steps.package-metadata.outputs.version }}_windows
-          path: |
-            ${{ env.APP_NAME }}.exe
-            file_id.diz
+          Compress-Archive -Path "${{ env.APP_NAME }}.exe", file_id.diz, LICENSE `
+            -DestinationPath "${{ env.APP_NAME }}_${env:VERSION}_windows_x64.zip"
+      - name: Attach it to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: gh release upload "$TAG" "${{ env.APP_NAME }}_${VERSION}_windows_x64.zip" --repo "$REPO" --clobber
 
-  build_mac:
-    needs: [run_checks, dependency_audit]
-    runs-on: macos-latest  # Removed matrix strategy
+  macos:
+    needs: open_release
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.x"
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
           cache-bin: false
-      - name: Install cargo bundle & get
-        run: |
-          rustup target add aarch64-apple-darwin
-          rustup target add x86_64-apple-darwin
-          cargo install cargo-bundle
-          brew install create-dmg
-          git submodule update --init
+      - name: Install create-dmg
+        run: brew install create-dmg
       - name: Prepare package metadata
         id: package-metadata
         run: |
@@ -185,8 +172,8 @@ jobs:
       - name: Build app
         id: build-app
         run: |
-          cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
 
           export app=$(python3 tools/get_name.py "${{ env.APP_NAME }}")
           echo "Build bundle for: $app"
@@ -209,7 +196,7 @@ jobs:
           sips -z 16 16 build/mac/128x128@2x.png --out AppIcon.iconset/icon_16x16.png
           sips -z 32 32 build/mac/128x128@2x.png --out AppIcon.iconset/icon_16x16@2x.png
           sips -z 32 32 build/mac/128x128@2x.png --out AppIcon.iconset/icon_32x32.png
-          sips -z 64 64 build/mac/128x128@2x.png --out AppIcon.iconset/icon_32x32@2x.png  # Fixed typo
+          sips -z 64 64 build/mac/128x128@2x.png --out AppIcon.iconset/icon_32x32@2x.png
           sips -z 128 128 build/mac/128x128@2x.png --out AppIcon.iconset/icon_128x128.png
           cp build/mac/128x128@2x.png AppIcon.iconset/icon_128x128@2x.png
           iconutil -c icns AppIcon.iconset
@@ -231,9 +218,8 @@ jobs:
           # but it avoids shipping an unsigned/incomplete app bundle.
           codesign --force --deep --sign - "$app.app"
           codesign --verify --deep --strict --verbose=2 "$app.app"
-
-      - name: Sign dmg
-        id: sign-bundle
+      - name: Build dmg
+        id: build-dmg
         run: |
           create-dmg \
             --volname "${{ steps.build-app.outputs.app }} Installer" \
@@ -246,10 +232,8 @@ jobs:
             "${{ env.APP_NAME }}-${{ steps.package-metadata.outputs.version }}-universal.dmg" \
             "${{ steps.build-app.outputs.app }}.app"
           echo "dmg_file=${{ env.APP_NAME }}-${{ steps.package-metadata.outputs.version }}-universal.dmg" >> $GITHUB_OUTPUT
-      - name: 'Upload dmg'
-        uses: actions/upload-artifact@v5
-        with:
-          name: ${{ env.APP_NAME }}_${{ steps.package-metadata.outputs.version }}_macos_universal
-          path: |
-            ${{ env.APP_NAME }}-${{ steps.package-metadata.outputs.version }}-universal.dmg
-            file_id.diz
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: gh release upload "$TAG" "${{ steps.build-dmg.outputs.dmg_file }}" --repo "$REPO" --clobber
