@@ -35,7 +35,25 @@ Use it to search values in a running process, narrow down result sets, edit memo
   - Auto-reconnect to a process with the same name after restart
   - Optional update checks against GitHub releases
 
-## Game Cheetah in action
+## Screenshots
+
+### Find a process
+
+![Filter and select a running process](assets/process_list.png)
+
+### Search and refine values
+
+![Search results with live values and freeze controls](assets/search_results.png)
+
+### Change values in a running game
+
+![Game Cheetah editing values while FTL is running](assets/change_value.png)
+
+### Inspect memory
+
+![Hex memory editor with the numeric inspector](assets/memory_editor.png)
+
+## Video demo
 
 [![Watch the video](https://img.youtube.com/vi/ng_1LBaUS48/maxresdefault.jpg)](https://youtu.be/ng_1LBaUS48)
 
