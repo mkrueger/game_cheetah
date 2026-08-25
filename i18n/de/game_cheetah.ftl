@@ -33,6 +33,8 @@ found-results-label =
         [1] 1 Vorkommen gefunden
        *[other] { $results } Vorkommen gefunden
     }
+result-unit-singular = Treffer
+result-unit-plural = Treffer
 
 no-results-label = Keine Vorkommen
 too-many-results-hint = Zu viele Treffer zum Durchsehen. Ändere den Wert im Spiel und klicke auf Aktualisieren, um sie einzugrenzen.
@@ -81,6 +83,8 @@ address-heading = Addresse
 value-heading = Wert
 freezed-heading = Eingefroren
 freeze-all-tooltip = Klicken, um alle Ergebnisse einzufrieren oder freizugeben
+freeze-result-tooltip = Ergebnis einfrieren
+unfreeze-result-tooltip = Ergebnis freigeben
 datatype-heading = Datentyp
 
 pid-heading = PID

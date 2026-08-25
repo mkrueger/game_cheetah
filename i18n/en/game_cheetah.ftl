@@ -33,6 +33,8 @@ found-results-label =
         [1] found one result.
        *[other] found { $results } results.
     }
+result-unit-singular = result
+result-unit-plural = results
 
 no-results-label = No results found.
 too-many-results-hint = Too many hits to look through. Change the value in the game and press Update to narrow them down.
@@ -80,6 +82,8 @@ address-heading = Address
 value-heading = Value
 freezed-heading = Frozen
 freeze-all-tooltip = Click to freeze or unfreeze every result
+freeze-result-tooltip = Freeze result
+unfreeze-result-tooltip = Unfreeze result
 datatype-heading = Data type
 
 pid-heading = PID

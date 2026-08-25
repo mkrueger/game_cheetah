@@ -17,7 +17,7 @@ const BROWSE_RESULT_LIMIT: usize = 1000;
 
 /// A search value is a handful of characters; a full-width field only pushes
 /// the type picker to the far edge of the window.
-const SEARCH_FIELD_WIDTH: f32 = 320.0;
+const SEARCH_FIELD_WIDTH: f32 = 220.0;
 
 const FREEZE_ICON: &str = "\u{2744}";
 const EDIT_ICON: &str = "\u{270F}";
@@ -28,11 +28,9 @@ const REMOVE_ICON: &str = "\u{00D7}";
 /// pointer enters or leaves the row.
 const ICON_SLOT_WIDTH: f32 = 26.0;
 
-/// Column heading: centred in its cell and bold.
+/// Text column heading: left-aligned with its data and bold.
 fn header_label(ui: &mut egui::Ui, text: String) {
-    ui.with_layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
-        ui.label(egui::RichText::new(text).strong().size(14.0));
-    });
+    ui.label(egui::RichText::new(text).text_style(egui::TextStyle::Button).strong().size(16.0));
 }
 
 /// Row action rendered as a bare glyph. The slot is always reserved; the
@@ -380,26 +378,29 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
     let accent = ui.visuals().selection.bg_fill;
     let surface = egui::Color32::from_rgb(22, 25, 30);
     let card_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(55, 62, 72));
+    let primary_btn = |label: String| {
+        egui::Button::new(egui::RichText::new(label).size(14.0).strong().color(egui::Color32::WHITE))
+            .fill(accent)
+            .stroke(egui::Stroke::new(1.0, accent))
+            .min_size(egui::vec2(110.0, 30.0))
+    };
+    let secondary_btn = |label: String| egui::Button::new(egui::RichText::new(label).size(14.0)).min_size(egui::vec2(0.0, 30.0));
 
-    // The active tab already shows the current search's name, so no
-    // additional heading is required here.
-
-    // === Input card =====================================================
+    // Input and its actions form one workflow, so they share one compact,
+    // wrapping toolbar instead of occupying two unrelated rows.
     egui::Frame::new()
         .fill(surface)
         .stroke(card_stroke)
-        .corner_radius(egui::CornerRadius::same(10))
-        .inner_margin(egui::Margin::symmetric(16, 14))
+        .corner_radius(egui::CornerRadius::same(8))
+        .inner_margin(egui::Margin::symmetric(12, 10))
         .show(ui, |ui| {
-            if selected_type == SearchType::Unknown {
-                ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                if selected_type == SearchType::Unknown {
                     ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "search-type-label")).size(14.0));
                     type_picker(app, ui, show_type_picker, selected_type);
                     ui.add_space(8.0);
                     ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "unknown-search-description")).size(13.0).weak());
-                });
-            } else {
-                ui.horizontal(|ui| {
+                } else {
                     ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "value-label")).size(14.0));
                     let mut buf = value_text.clone();
                     let response = ui.add(
@@ -426,40 +427,69 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
                         app.start_search();
                     }
                     type_picker(app, ui, show_type_picker, selected_type);
-                });
-                if let Some(err) = &parse_error {
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        ui.add_space(60.0);
-                        ui.colored_label(egui::Color32::from_rgb(220, 120, 120), format!("\u{26A0}  {err}"));
-                    });
                 }
+
+                if matches!(searching, SearchMode::None) {
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+
+                    if !is_search_complete {
+                        let enabled = parse_error.is_none() || selected_type == SearchType::Unknown;
+                        if ui
+                            .add_enabled(enabled, primary_btn(fl!(crate::LANGUAGE_LOADER, "initial-search-button")))
+                            .clicked()
+                        {
+                            app.start_search();
+                        }
+                    } else if selected_type == SearchType::Unknown {
+                        for (label, comparison) in [
+                            (fl!(crate::LANGUAGE_LOADER, "decreased-button"), UnknownComparison::Decreased),
+                            (fl!(crate::LANGUAGE_LOADER, "increased-button"), UnknownComparison::Increased),
+                            (fl!(crate::LANGUAGE_LOADER, "changed-button"), UnknownComparison::Changed),
+                        ] {
+                            if ui.add(secondary_btn(label)).clicked() {
+                                app.unknown_search(comparison);
+                            }
+                        }
+                        let unchanged_enabled = search_results > 0 || can_undo;
+                        if ui
+                            .add_enabled(unchanged_enabled, secondary_btn(fl!(crate::LANGUAGE_LOADER, "unchanged-button")))
+                            .clicked()
+                        {
+                            app.unknown_search(UnknownComparison::Unchanged);
+                        }
+                        if ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "clear-button"))).clicked() {
+                            app.clear_results();
+                        }
+                        if ui.add_enabled(can_undo, secondary_btn(fl!(crate::LANGUAGE_LOADER, "undo-button"))).clicked() {
+                            app.undo_search();
+                        }
+                        result_count_label(ui, search_results);
+                    } else {
+                        let enabled = parse_error.is_none();
+                        if ui.add_enabled(enabled, primary_btn(fl!(crate::LANGUAGE_LOADER, "update-button"))).clicked() {
+                            app.start_search();
+                        }
+                        if ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "clear-button"))).clicked() {
+                            app.clear_results();
+                        }
+                        if ui.add_enabled(can_undo, secondary_btn(fl!(crate::LANGUAGE_LOADER, "undo-button"))).clicked() {
+                            app.undo_search();
+                        }
+                        result_count_label(ui, search_results);
+                    }
+                }
+            });
+
+            if let Some(err) = &parse_error {
+                ui.add_space(4.0);
+                ui.colored_label(egui::Color32::from_rgb(220, 120, 120), format!("\u{26A0}  {err}"));
             }
         });
 
-    ui.add_space(12.0);
-
-    // === Action row =====================================================
-    let primary_btn = |label: String| {
-        egui::Button::new(egui::RichText::new(label).size(14.0).strong().color(egui::Color32::WHITE))
-            .fill(accent)
-            .stroke(egui::Stroke::new(1.0, accent))
-            .min_size(egui::vec2(160.0, 32.0))
-    };
-    let secondary_btn = |label: String| egui::Button::new(egui::RichText::new(label).size(14.0)).min_size(egui::vec2(0.0, 32.0));
-    let results_label = |ui: &mut egui::Ui, count: usize| {
-        let text = fl!(crate::LANGUAGE_LOADER, "found-results-label", results = count)
-            .chars()
-            .filter(|c| c.is_ascii())
-            .collect::<String>();
-        let mut text = egui::RichText::new(text).size(14.0).strong();
-        if count > BROWSE_RESULT_LIMIT {
-            text = text.color(ui.visuals().warn_fg_color);
-        }
-        ui.label(text);
-    };
-
     if !matches!(searching, SearchMode::None) {
+        ui.add_space(10.0);
         // Searching in progress
         let progress = if total_bytes == 0 { 0.0 } else { current_bytes as f32 / total_bytes as f32 };
         let label = if searching == SearchMode::Percent {
@@ -480,64 +510,6 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
             ui.add(egui::ProgressBar::new(progress).desired_width(ui.available_width() - 240.0).show_percentage());
             ui.label(egui::RichText::new(label).size(13.0).weak());
         });
-    } else if !is_search_complete {
-        // No search has been started yet
-        ui.horizontal(|ui| {
-            let enabled = parse_error.is_none() || selected_type == SearchType::Unknown;
-            if ui
-                .add_enabled(enabled, primary_btn(fl!(crate::LANGUAGE_LOADER, "initial-search-button")))
-                .clicked()
-            {
-                app.start_search();
-            }
-        });
-    } else if selected_type == SearchType::Unknown {
-        // Unknown-search with results, show comparison buttons
-        ui.horizontal_wrapped(|ui| {
-            if ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "decreased-button"))).clicked() {
-                app.unknown_search(UnknownComparison::Decreased);
-            }
-            if ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "increased-button"))).clicked() {
-                app.unknown_search(UnknownComparison::Increased);
-            }
-            if ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "changed-button"))).clicked() {
-                app.unknown_search(UnknownComparison::Changed);
-            }
-            let unchanged_enabled = search_results > 0 || can_undo;
-            if ui
-                .add_enabled(unchanged_enabled, secondary_btn(fl!(crate::LANGUAGE_LOADER, "unchanged-button")))
-                .clicked()
-            {
-                app.unknown_search(UnknownComparison::Unchanged);
-            }
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(8.0);
-            if ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "clear-button"))).clicked() {
-                app.clear_results();
-            }
-            if ui.add_enabled(can_undo, secondary_btn(fl!(crate::LANGUAGE_LOADER, "undo-button"))).clicked() {
-                app.undo_search();
-            }
-            ui.add_space(12.0);
-            results_label(ui, search_results);
-        });
-    } else {
-        // Regular search with results
-        ui.horizontal_wrapped(|ui| {
-            let enabled = parse_error.is_none();
-            if ui.add_enabled(enabled, primary_btn(fl!(crate::LANGUAGE_LOADER, "update-button"))).clicked() {
-                app.start_search();
-            }
-            if ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "clear-button"))).clicked() {
-                app.clear_results();
-            }
-            if ui.add_enabled(can_undo, secondary_btn(fl!(crate::LANGUAGE_LOADER, "undo-button"))).clicked() {
-                app.undo_search();
-            }
-            ui.add_space(12.0);
-            results_label(ui, search_results);
-        });
     }
 
     if matches!(searching, SearchMode::None) && search_results > 0 {
@@ -555,6 +527,20 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
             result_table(app, ui);
         }
     }
+}
+
+fn result_count_label(ui: &mut egui::Ui, count: usize) {
+    let unit = if count == 1 {
+        fl!(crate::LANGUAGE_LOADER, "result-unit-singular")
+    } else {
+        fl!(crate::LANGUAGE_LOADER, "result-unit-plural")
+    };
+    let mut text = egui::RichText::new(format!("{count} {unit}")).size(14.0).strong();
+    if count > BROWSE_RESULT_LIMIT {
+        text = text.color(ui.visuals().warn_fg_color);
+    }
+    ui.add_space(8.0);
+    ui.label(text);
 }
 
 /// Replaces the table while the result list is too large to read, so the next
@@ -674,7 +660,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     }
 
     builder
-        .header(32.0, |mut header| {
+        .header(36.0, |mut header| {
             header.col(|ui| {
                 header_label(ui, fl!(crate::LANGUAGE_LOADER, "address-heading"));
             });
@@ -707,7 +693,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     };
                     ui.with_layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
                         if ui
-                            .add(egui::Button::new(egui::RichText::new(FREEZE_ICON).size(16.0).color(color)).frame(false))
+                            .add(egui::Button::new(egui::RichText::new(FREEZE_ICON).size(18.0).strong().color(color)).frame(false))
                             .on_hover_text(tooltip)
                             .on_hover_cursor(egui::CursorIcon::PointingHand)
                             .clicked()
@@ -891,10 +877,26 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
 
                 if !is_string {
                     row.col(|ui| {
-                        let mut frozen = is_frozen;
-                        if ui.checkbox(&mut frozen, "").changed() {
-                            toggle_freeze = Some(i);
-                        }
+                        let tooltip = if is_frozen {
+                            fl!(crate::LANGUAGE_LOADER, "unfreeze-result-tooltip")
+                        } else {
+                            fl!(crate::LANGUAGE_LOADER, "freeze-result-tooltip")
+                        };
+                        let color = if is_frozen {
+                            ui.visuals().selection.bg_fill
+                        } else {
+                            ui.visuals().weak_text_color()
+                        };
+                        ui.with_layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
+                            if ui
+                                .add(egui::Button::new(egui::RichText::new(FREEZE_ICON).size(15.0).color(color)).frame(false))
+                                .on_hover_text(tooltip)
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .clicked()
+                            {
+                                toggle_freeze = Some(i);
+                            }
+                        });
                     });
                 }
 
