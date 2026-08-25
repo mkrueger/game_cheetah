@@ -158,6 +158,7 @@ impl App {
             search_context.clear_results(&self.state.freeze_sender);
         }
         self.editing_result = None;
+        self.state.show_results = false;
         self.clear_change_tracker();
     }
 

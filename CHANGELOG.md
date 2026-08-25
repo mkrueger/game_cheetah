@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The result table gives its leftover width to the value column instead of
+  stacking it behind the row buttons, the search field is no longer stretched
+  across the window, and the hit count is rendered prominently. Result lists
+  too large to browse are collapsed behind a hint pointing at the next useful
+  step, with an option to show them anyway.
 - CI runs the checks and tests on every commit; Linux, Windows and macOS
   packages are now built when a `v*` tag is pushed and attached to that tag's
   release. The dependency audit moved to a weekly schedule.

@@ -11,6 +11,14 @@ use crate::{
 /// Uniform row height used by the virtualized result table.
 const RESULT_ROW_HEIGHT: f32 = 32.0;
 
+/// Above this many hits the table is not worth browsing — narrowing the search
+/// is the only useful next step, so the list is collapsed behind a hint.
+const BROWSE_RESULT_LIMIT: usize = 1000;
+
+/// A search value is a handful of characters; a full-width field only pushes
+/// the type picker to the far edge of the window.
+const SEARCH_FIELD_WIDTH: f32 = 320.0;
+
 pub fn view_in_process(app: &mut App, ui: &mut egui::Ui) {
     top_bar(app, ui);
     error_bar(app, ui);
@@ -371,7 +379,7 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
                                 "search-value-label",
                                 valuetype = selected_type.get_description_text()
                             ))
-                            .desired_width(ui.available_width() - 220.0)
+                            .desired_width(SEARCH_FIELD_WIDTH)
                             .margin(egui::Margin::symmetric(10, 8))
                             .text_color_opt(if parse_error.is_some() {
                                 Some(egui::Color32::from_rgb(220, 120, 120))
@@ -410,16 +418,15 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
     };
     let secondary_btn = |label: String| egui::Button::new(egui::RichText::new(label).size(14.0)).min_size(egui::vec2(0.0, 32.0));
     let results_label = |ui: &mut egui::Ui, count: usize| {
-        ui.label(
-            egui::RichText::new(
-                fl!(crate::LANGUAGE_LOADER, "found-results-label", results = count)
-                    .chars()
-                    .filter(|c| c.is_ascii())
-                    .collect::<String>(),
-            )
-            .size(13.0)
-            .weak(),
-        );
+        let text = fl!(crate::LANGUAGE_LOADER, "found-results-label", results = count)
+            .chars()
+            .filter(|c| c.is_ascii())
+            .collect::<String>();
+        let mut text = egui::RichText::new(text).size(14.0).strong();
+        if count > BROWSE_RESULT_LIMIT {
+            text = text.color(ui.visuals().warn_fg_color);
+        }
+        ui.label(text);
     };
 
     if !matches!(searching, SearchMode::None) {
@@ -507,8 +514,48 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
 
     if matches!(searching, SearchMode::None) && search_results > 0 {
         ui.add_space(14.0);
-        result_table(app, ui);
+        let collapsed = search_results > BROWSE_RESULT_LIMIT && !app.state.show_results;
+        if collapsed {
+            too_many_results_panel(app, ui);
+        } else {
+            if search_results > BROWSE_RESULT_LIMIT {
+                if ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "hide-results-button"))).clicked() {
+                    app.state.show_results = false;
+                }
+                ui.add_space(8.0);
+            }
+            result_table(app, ui);
+        }
     }
+}
+
+/// Replaces the table while the result list is too large to read, so the next
+/// useful action is visible instead of thousands of rows.
+fn too_many_results_panel(app: &mut App, ui: &mut egui::Ui) {
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgb(22, 25, 30))
+        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(55, 62, 72)))
+        .corner_radius(egui::CornerRadius::same(10))
+        .inner_margin(egui::Margin::symmetric(16, 14))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("\u{1F50D}").size(20.0));
+                ui.add_space(6.0);
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "too-many-results-hint")).size(14.0));
+                    ui.add_space(8.0);
+                    if ui
+                        .add(
+                            egui::Button::new(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "show-results-button")).size(13.0))
+                                .min_size(egui::vec2(0.0, 28.0)),
+                        )
+                        .clicked()
+                    {
+                        app.state.show_results = true;
+                    }
+                });
+            });
+        });
 }
 
 fn type_picker(app: &mut App, ui: &mut egui::Ui, editable: bool, current: SearchType) {
@@ -577,16 +624,18 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
         .striped(true)
         .resizable(true)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::initial(140.0).at_least(100.0)) // address
-        .column(Column::initial(140.0).at_least(80.0)); // value
+        .column(Column::initial(160.0).at_least(120.0)) // address
+        // The value column absorbs the leftover width so the slack sits with
+        // the data rather than behind the row buttons.
+        .column(Column::remainder().at_least(140.0)); // value
     if show_search_types {
         builder = builder.column(Column::initial(110.0).at_least(80.0));
     }
     if !is_string {
-        // Freeze column + buttons column
+        // Freeze checkbox column + buttons column
         builder = builder.column(Column::initial(110.0).at_least(80.0));
     }
-    builder = builder.column(Column::remainder().at_least(160.0));
+    builder = builder.column(Column::initial(210.0).at_least(180.0));
 
     builder
         .header(32.0, |mut header| {
@@ -715,7 +764,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     } else {
                         None
                     };
-                    let cell_width = ui.available_width().min(160.0);
+                    let cell_width = ui.available_width().min(240.0);
 
                     let response = if editing {
                         // Bind the TextEdit straight to the live editing

@@ -35,6 +35,7 @@ found-results-label =
     }
 
 no-results-label = No results found.
+too-many-results-hint = Too many hits to look through. Change the value in the game and press Update to narrow them down.
 
 undo-button = Undo
 initial-search-button = Initial search

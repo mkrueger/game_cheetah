@@ -35,6 +35,7 @@ found-results-label =
     }
 
 no-results-label = Keine Vorkommen
+too-many-results-hint = Zu viele Treffer zum Durchsehen. Ändere den Wert im Spiel und klicke auf Aktualisieren, um sie einzugrenzen.
 
 undo-button = Rückgängig
 initial-search-button = Erste Suche
