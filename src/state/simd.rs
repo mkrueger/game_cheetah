@@ -89,10 +89,9 @@ pub(super) fn search_f32_simd(memory_data: &[u8], target: f32, epsilon: f32, sta
     let epsilon_vec = f32x8::splat(epsilon);
 
     // Process 32 bytes (8 f32s) at a time
-    let chunks = memory_data.chunks_exact(32);
-    let remainder = chunks.remainder();
+    let (chunks, remainder) = memory_data.as_chunks::<32>();
 
-    for (chunk_idx, chunk) in chunks.enumerate() {
+    for (chunk_idx, chunk) in chunks.iter().enumerate() {
         // Unaligned read into [f32; 8] - compiles to a single vector load.
         let arr: [f32; 8] = pod_read_unaligned(chunk);
         let data = f32x8::from(arr);
@@ -158,10 +157,9 @@ pub(super) fn search_f64_simd(memory_data: &[u8], target: f64, epsilon: f64, sta
     let epsilon_vec = f64x4::splat(epsilon);
 
     // Process 32 bytes (4 f64s) at a time
-    let chunks = memory_data.chunks_exact(32);
-    let remainder = chunks.remainder();
+    let (chunks, remainder) = memory_data.as_chunks::<32>();
 
-    for (chunk_idx, chunk) in chunks.enumerate() {
+    for (chunk_idx, chunk) in chunks.iter().enumerate() {
         let arr: [f64; 4] = pod_read_unaligned(chunk);
         let data = f64x4::from(arr);
 

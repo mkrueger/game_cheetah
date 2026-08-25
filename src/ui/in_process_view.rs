@@ -1097,8 +1097,8 @@ pub fn read_bytes_from_process(pid: process_memory::Pid, addr: usize, max_bytes:
 pub fn decode_string_bytes(bytes: &[u8], utf16le: bool) -> String {
     if utf16le {
         let mut units: Vec<u16> = Vec::with_capacity(bytes.len() / 2);
-        for chunk in bytes.chunks_exact(2) {
-            let u = u16::from_le_bytes([chunk[0], chunk[1]]);
+        for chunk in bytes.as_chunks::<2>().0 {
+            let u = u16::from_le_bytes(*chunk);
             if u == 0 {
                 break;
             }
