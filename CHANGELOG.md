@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   height back, switches byte order from its header, marks the row matching
   the search type, and adds `hex` plus a `ptr` row that resolves the value
   against the target's memory map. Value fields grow with the column and only
-  show their frame on hover or focus.
+  show their frame on hover or focus. The result-type picker also lives in the
+  inspector header now, leaving the memory-editor status bar less crowded.
 
 ### Changed
 

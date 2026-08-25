@@ -143,6 +143,15 @@ enum InspectorKind {
     F64,
 }
 
+const INSPECTOR_NUMERIC_TYPES: &[SearchType] = &[
+    SearchType::Byte,
+    SearchType::Short,
+    SearchType::Int,
+    SearchType::Int64,
+    SearchType::Float,
+    SearchType::Double,
+];
+
 impl InspectorKind {
     const fn byte_count(self) -> usize {
         match self {
@@ -789,51 +798,6 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
                     {
                         app.memory_editor.undo();
                     }
-
-                    // Result-type picker — lets the user reinterpret the
-                    // current cheat result as a different fixed-width
-                    // numeric type (e.g. promote an int8 hit to int32).
-                    if let Some(current_type) = app.memory_editor.current_result_type() {
-                        ui.add_space(6.0);
-                        let mut selected = current_type;
-                        const NUMERIC_TYPES: &[SearchType] = &[
-                            SearchType::Byte,
-                            SearchType::Short,
-                            SearchType::Int,
-                            SearchType::Int64,
-                            SearchType::Float,
-                            SearchType::Double,
-                        ];
-                        let selectable = NUMERIC_TYPES.contains(&current_type);
-                        let selected_text = current_type.get_short_description_text();
-                        // Wide enough for the longest English label
-                        // ("Double") plus a little slack for translations,
-                        // without taking up half the toolbar.
-                        let combo = egui::ComboBox::from_id_salt("memory_editor_result_type")
-                            .selected_text(selected_text)
-                            .width(100.0);
-                        if selectable {
-                            let response = combo.show_ui(ui, |ui| {
-                                for &ty in NUMERIC_TYPES {
-                                    ui.selectable_value(&mut selected, ty, ty.get_short_description_text());
-                                }
-                            });
-                            response.response.on_hover_text("Reinterpret the current result as a different numeric type");
-                            if selected != current_type {
-                                app.change_result_type(selected);
-                            }
-                        } else {
-                            // Variable-length types (Guess/Unknown/String/StringUtf16) — not
-                            // editable from the picker. Show a read-only label so the user
-                            // still sees what the result was scanned as.
-                            ui.add_enabled_ui(false, |ui| {
-                                let _ = combo.show_ui(ui, |_| {});
-                            })
-                            .response
-                            .on_hover_text("Variable-length results cannot be reinterpreted from the editor");
-                        }
-                        ui.label(egui::RichText::new("Type:").size(13.0).weak());
-                    }
                 });
             });
         });
@@ -870,6 +834,7 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
     // central panel grew taller than the visible viewport, which made
     // arrow-key scrolling stutter when moving down past the last row.
     if handle_attached {
+        let mut requested_type = None;
         egui::Panel::bottom("memory_editor_inspector")
             .resizable(false)
             .frame(
@@ -879,8 +844,11 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
                     .inner_margin(egui::Margin::symmetric(16, 6)),
             )
             .show(ui, |ui| {
-                inspector_body(&mut app.memory_editor, ui);
+                requested_type = inspector_body(&mut app.memory_editor, ui);
             });
+        if let Some(new_type) = requested_type {
+            app.change_result_type(new_type);
+        }
     }
 
     egui::CentralPanel::default()
@@ -960,7 +928,7 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
 /// well-defined remaining height. Shows the bytes at the currently
 /// highlighted address decoded as every common numeric type; each
 /// entry is editable, Enter writes the value to the target.
-fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) {
+fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) -> Option<SearchType> {
     compact_spacing(ui);
     let accent = ui.visuals().selection.bg_fill;
     let highlight = editor.raw.highlighted_address();
@@ -968,6 +936,7 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) {
     let collapsed = editor.data.inspector_collapsed;
     let mut toggle_collapsed = false;
     let mut toggle_endian = false;
+    let mut requested_type = None;
 
     ui.horizontal(|ui| {
         if collapse_arrow(ui, collapsed, accent).clicked() {
@@ -989,6 +958,31 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(egui::RichText::new("Enter writes, Esc cancels").size(12.0).weak());
             ui.add_space(10.0);
+            if let Some(current_type) = editor.current_result_type() {
+                let mut selected = current_type;
+                let combo = egui::ComboBox::from_id_salt("memory_editor_result_type")
+                    .selected_text(current_type.get_short_description_text())
+                    .width(84.0);
+                if INSPECTOR_NUMERIC_TYPES.contains(&current_type) {
+                    let response = combo.show_ui(ui, |ui| {
+                        for &ty in INSPECTOR_NUMERIC_TYPES {
+                            ui.selectable_value(&mut selected, ty, ty.get_short_description_text());
+                        }
+                    });
+                    response.response.on_hover_text("Reinterpret the current result as a different numeric type");
+                    if selected != current_type {
+                        requested_type = Some(selected);
+                    }
+                } else {
+                    ui.add_enabled_ui(false, |ui| {
+                        let _ = combo.show_ui(ui, |_| {});
+                    })
+                    .response
+                    .on_hover_text("Variable-length results cannot be reinterpreted from the editor");
+                }
+                ui.label(egui::RichText::new("Type:").size(12.0).weak());
+                ui.add_space(10.0);
+            }
             let label = match endian {
                 Endianness::Little => "little-endian",
                 Endianness::Big => "big-endian",
@@ -1017,7 +1011,7 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) {
     }
 
     let Some(addr) = highlight.filter(|_| !editor.data.inspector_collapsed) else {
-        return;
+        return requested_type;
     };
 
     // Read 8 bytes (cache-first, syscall fallback) and forget any
@@ -1064,6 +1058,7 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) {
         inspector_readonly_row(&mut cols[2], "hex", hex);
         inspector_readonly_row(&mut cols[2], "ptr", pointer);
     });
+    requested_type
 }
 
 /// Derived value that has no meaningful write path, shown in the same grid
