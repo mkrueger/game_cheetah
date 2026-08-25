@@ -21,7 +21,9 @@ const SEARCH_FIELD_WIDTH: f32 = 320.0;
 
 const FREEZE_ICON: &str = "\u{2744}";
 const EDIT_ICON: &str = "\u{270F}";
-const REMOVE_ICON: &str = "\u{2715}";
+/// The ✕/✗/✘ dingbats are not in the bundled fonts and render as tofu; the
+/// multiplication sign is, so it stands in for the close glyph.
+const REMOVE_ICON: &str = "\u{00D7}";
 /// Width reserved in a cell for its hover icon so nothing shifts when the
 /// pointer enters or leaves the row.
 const ICON_SLOT_WIDTH: f32 = 26.0;
@@ -29,7 +31,7 @@ const ICON_SLOT_WIDTH: f32 = 26.0;
 /// Row action rendered as a bare glyph. The slot is always reserved; the
 /// button only becomes visible and clickable while its row is hovered.
 fn icon_button(ui: &mut egui::Ui, visible: bool, glyph: &str, tooltip: String) -> egui::Response {
-    let button = egui::Button::new(egui::RichText::new(glyph).size(14.0))
+    let button = egui::Button::new(egui::RichText::new(glyph).size(16.0))
         .frame(false)
         .min_size(egui::vec2(ICON_SLOT_WIDTH - 4.0, 20.0));
     let response = ui.add_visible(visible, button);
@@ -642,6 +644,11 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     // the row response exists, and a frame of lag is invisible at 30 Hz.
     let hovered_row = app.hovered_result_row;
     let mut new_hovered_row: Option<usize> = None;
+    // Hover is decided by the pointer against the row rectangle rather than by
+    // `Response::hovered()`: the latter goes false as soon as the pointer
+    // reaches the icon on top of the row, which would hide the icon, re-hover
+    // the row, and flicker forever without ever accepting a click.
+    let pointer_pos = ui.ctx().pointer_hover_pos();
 
     use egui_extras::{Column, TableBuilder};
 
@@ -876,7 +883,9 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     });
                 }
 
-                if row.response().hovered() {
+                if let Some(pos) = pointer_pos
+                    && row.response().rect.contains(pos)
+                {
                     new_hovered_row = Some(i);
                 }
             });
