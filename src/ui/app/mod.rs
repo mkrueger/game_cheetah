@@ -219,13 +219,14 @@ impl eframe::App for App {
             AppState::MemoryEditor => crate::ui::mem_editor::view_memory_editor(self, ui),
         }
 
-        // Global escape handling for dismissable dialogs.
+        // Global escape handling for dismissable dialogs. The memory editor is
+        // excluded: there Escape cancels an inspector edit or the grid
+        // selection, and it is closed through its own button.
         if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
             match self.app_state {
                 AppState::ProcessSelection | AppState::About | AppState::Settings => {
                     self.app_state = AppState::MainWindow;
                 }
-                AppState::MemoryEditor => self.close_memory_editor(),
                 _ => {}
             }
         }

@@ -178,6 +178,10 @@ impl MemoryEditor {
         self.options.data_preview.selected_endianness
     }
 
+    pub fn set_endianness(&mut self, endianness: option_data::Endianness) {
+        self.options.data_preview.selected_endianness = endianness;
+    }
+
     /// Caret position in the hex grid, if any: `(address, on_low_nibble)`.
     pub fn caret(&self) -> Option<(Address, bool)> {
         self.frame_data.selected_edit_address.map(|a| (a, self.frame_data.selected_low_nibble))

@@ -72,6 +72,7 @@ struct WriteRecord {
 struct RegionInfo {
     range: Range<Address>,
     label: String,
+    name: String,
     readable: bool,
     writable: bool,
 }
@@ -102,6 +103,9 @@ struct EditorData {
     /// into and the partial text. Cleared on submit, on Escape, or
     /// whenever the highlighted address moves away.
     inspector_edit: Option<InspectorEdit>,
+    /// Collapsed state of the bottom inspector panel, so the hex grid can
+    /// reclaim its height.
+    inspector_collapsed: bool,
     /// Search type of the result the editor was opened on. Drives the
     /// type-picker in the toolbar and the size of the result-range
     /// highlight.
@@ -163,6 +167,19 @@ impl InspectorKind {
             InspectorKind::F64 => "f64",
         }
     }
+
+    /// Row matching the search type the editor was opened on.
+    fn from_search_type(search_type: SearchType) -> Option<Self> {
+        Some(match search_type {
+            SearchType::Byte => InspectorKind::U8,
+            SearchType::Short => InspectorKind::I16,
+            SearchType::Int => InspectorKind::I32,
+            SearchType::Int64 => InspectorKind::I64,
+            SearchType::Float => InspectorKind::F32,
+            SearchType::Double => InspectorKind::F64,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -183,6 +200,7 @@ impl Default for MemoryEditor {
                 regions: Vec::new(),
                 origin_address: 0,
                 inspector_edit: None,
+                inspector_collapsed: false,
                 current_result_type: None,
                 current_result_byte_length: 1,
                 undo_stack: Vec::new(),
@@ -237,6 +255,7 @@ impl MemoryEditor {
             self.data.regions.push(RegionInfo {
                 range: start..end,
                 label: label.clone(),
+                name,
                 readable: m.is_read(),
                 writable: m.is_write(),
             });
@@ -563,6 +582,91 @@ fn format_kind(kind: InspectorKind, bytes: &[u8; 8], available: usize, endian: E
     })
 }
 
+fn read_uint(bytes: &[u8; 8], width: usize, endian: Endianness) -> u64 {
+    let slice = &bytes[..width.min(8)];
+    match endian {
+        Endianness::Big => slice.iter().fold(0u64, |acc, &b| (acc << 8) | b as u64),
+        Endianness::Little => slice.iter().rev().fold(0u64, |acc, &b| (acc << 8) | b as u64),
+    }
+}
+
+/// The widest unsigned value that fits the readable window, as hex.
+fn format_hex(bytes: &[u8; 8], available: usize, endian: Endianness) -> Option<String> {
+    let width = match available {
+        0 => return None,
+        1 => 1,
+        2..=3 => 2,
+        4..=7 => 4,
+        _ => 8,
+    };
+    let value = read_uint(bytes, width, endian);
+    Some(format!("0x{value:0>digits$X}", digits = width * 2))
+}
+
+/// The readable window interpreted as a pointer and resolved against the
+/// target's memory map, so following a struct doesn't need a manual lookup.
+fn format_pointer(regions: &[RegionInfo], bytes: &[u8; 8], available: usize, endian: Endianness) -> Option<String> {
+    if available < 8 {
+        return None;
+    }
+    let value = read_uint(bytes, 8, endian) as usize;
+    let target = regions
+        .iter()
+        .find(|region| region.range.contains(&value))
+        .map(|region| region.name.clone())
+        .unwrap_or_else(|| fl!(crate::LANGUAGE_LOADER, "memory-editor-region-unmapped"));
+    Some(format!("0x{value:X}  {target}"))
+}
+
+fn quiet_field_visuals(ui: &mut egui::Ui) {
+    let visuals = ui.visuals_mut();
+    visuals.extreme_bg_color = egui::Color32::TRANSPARENT;
+    visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
+    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(4);
+    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(4);
+    visuals.widgets.active.corner_radius = egui::CornerRadius::same(4);
+}
+
+/// The inspector stacks many short rows, so the app-wide control metrics
+/// would cost the hex grid several lines.
+fn compact_spacing(ui: &mut egui::Ui) {
+    let spacing = ui.spacing_mut();
+    spacing.item_spacing.y = 3.0;
+    spacing.interact_size.y = 18.0;
+    spacing.button_padding = egui::vec2(6.0, 1.0);
+}
+
+/// Painted rather than drawn from a font so the arrow can't turn into tofu.
+fn collapse_arrow(ui: &mut egui::Ui, collapsed: bool, color: egui::Color32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::click());
+    let center = rect.center();
+    let size = 4.0;
+    let points = if collapsed {
+        vec![
+            egui::pos2(center.x - size * 0.5, center.y - size),
+            egui::pos2(center.x - size * 0.5, center.y + size),
+            egui::pos2(center.x + size, center.y),
+        ]
+    } else {
+        vec![
+            egui::pos2(center.x - size, center.y - size * 0.5),
+            egui::pos2(center.x + size, center.y - size * 0.5),
+            egui::pos2(center.x, center.y + size),
+        ]
+    };
+    ui.painter().add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Everything a single inspector row needs about the current address.
+struct InspectorContext {
+    addr: Address,
+    bytes: [u8; 8],
+    available: usize,
+    endian: Endianness,
+    active_kind: Option<InspectorKind>,
+}
+
 /// Parse `input` as the given kind and return the bytes that should be
 /// written to memory in the given endianness.
 fn parse_kind(kind: InspectorKind, input: &str, endian: Endianness) -> Result<Vec<u8>, String> {
@@ -772,7 +876,7 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
                 egui::Frame::new()
                     .fill(egui::Color32::from_rgb(22, 25, 30))
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(55, 62, 72)))
-                    .inner_margin(egui::Margin::symmetric(16, 12)),
+                    .inner_margin(egui::Margin::symmetric(16, 6)),
             )
             .show(ui, |ui| {
                 inspector_body(&mut app.memory_editor, ui);
@@ -857,13 +961,23 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
 /// highlighted address decoded as every common numeric type; each
 /// entry is editable, Enter writes the value to the target.
 fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) {
+    compact_spacing(ui);
     let accent = ui.visuals().selection.bg_fill;
     let highlight = editor.raw.highlighted_address();
     let endian = editor.raw.endianness();
+    let collapsed = editor.data.inspector_collapsed;
+    let mut toggle_collapsed = false;
+    let mut toggle_endian = false;
 
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Inspector").size(14.0).strong().color(accent));
-        ui.add_space(8.0);
+        if collapse_arrow(ui, collapsed, accent).clicked() {
+            toggle_collapsed = true;
+        }
+        let title = egui::Button::new(egui::RichText::new("Inspector").size(14.0).strong().color(accent)).frame(false);
+        if ui.add(title).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            toggle_collapsed = true;
+        }
+        ui.add_space(4.0);
         match highlight {
             Some(addr) => {
                 ui.label(egui::RichText::new(format!("@ 0x{addr:X}")).size(13.0).monospace().weak());
@@ -873,16 +987,36 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) {
             }
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new("Enter writes, Esc cancels").size(12.0).weak());
+            ui.add_space(10.0);
             let label = match endian {
                 Endianness::Little => "little-endian",
                 Endianness::Big => "big-endian",
             };
-            ui.label(egui::RichText::new(format!("{label}  |  Enter writes, Esc cancels")).size(12.0).weak());
+            let toggle = egui::Button::new(egui::RichText::new(label).size(12.0).color(accent)).frame(false);
+            if ui
+                .add(toggle)
+                .on_hover_text("Switch byte order")
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+            {
+                toggle_endian = true;
+            }
         });
     });
 
-    let Some(addr) = highlight else {
-        ui.add_space(4.0);
+    if toggle_collapsed {
+        editor.data.inspector_collapsed = !collapsed;
+    }
+    if toggle_endian {
+        editor.raw.set_endianness(match endian {
+            Endianness::Little => Endianness::Big,
+            Endianness::Big => Endianness::Little,
+        });
+        editor.data.inspector_edit = None;
+    }
+
+    let Some(addr) = highlight.filter(|_| !editor.data.inspector_collapsed) else {
         return;
     };
 
@@ -895,52 +1029,77 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) {
         editor.data.inspector_edit = None;
     }
 
-    ui.add_space(4.0);
+    let endian = editor.raw.endianness();
+    let context = InspectorContext {
+        addr,
+        bytes,
+        available,
+        endian,
+        active_kind: editor.data.current_result_type.and_then(InspectorKind::from_search_type),
+    };
+    let hex = format_hex(&bytes, available, endian);
+    let pointer = format_pointer(&editor.data.regions, &bytes, available, endian);
+
+    ui.add_space(2.0);
     ui.columns(3, |cols| {
         cols[0].label(egui::RichText::new("Unsigned").size(12.0).weak());
         cols[1].label(egui::RichText::new("Signed").size(12.0).weak());
-        cols[2].label(egui::RichText::new("Float").size(12.0).weak());
+        cols[2].label(egui::RichText::new("Float / raw").size(12.0).weak());
         for col in &mut cols[..] {
             col.separator();
         }
         inspector_column(
             &mut cols[0],
             &mut editor.data,
-            addr,
-            &bytes,
-            available,
-            endian,
+            &context,
             &[InspectorKind::U8, InspectorKind::U16, InspectorKind::U32, InspectorKind::U64],
         );
         inspector_column(
             &mut cols[1],
             &mut editor.data,
-            addr,
-            &bytes,
-            available,
-            endian,
+            &context,
             &[InspectorKind::I8, InspectorKind::I16, InspectorKind::I32, InspectorKind::I64],
         );
-        inspector_column(
-            &mut cols[2],
-            &mut editor.data,
-            addr,
-            &bytes,
-            available,
-            endian,
-            &[InspectorKind::F32, InspectorKind::F64],
-        );
+        inspector_column(&mut cols[2], &mut editor.data, &context, &[InspectorKind::F32, InspectorKind::F64]);
+        inspector_readonly_row(&mut cols[2], "hex", hex);
+        inspector_readonly_row(&mut cols[2], "ptr", pointer);
     });
-    ui.add_space(2.0);
 }
 
-fn inspector_column(ui: &mut egui::Ui, data: &mut EditorData, addr: Address, bytes: &[u8; 8], available: usize, endian: Endianness, kinds: &[InspectorKind]) {
+/// Derived value that has no meaningful write path, shown in the same grid
+/// as the editable rows.
+fn inspector_readonly_row(ui: &mut egui::Ui, label: &str, value: Option<String>) {
+    ui.horizontal(|ui| {
+        ui.add_sized(egui::vec2(30.0, 18.0), egui::Label::new(egui::RichText::new(label).monospace().weak()));
+        match value {
+            Some(text) => {
+                ui.add(egui::Label::new(egui::RichText::new(&text).monospace()).truncate().selectable(true))
+                    .on_hover_text(text);
+            }
+            None => {
+                let color = ui.visuals().widgets.inactive.fg_stroke.color;
+                ui.label(egui::RichText::new("--").monospace().color(color));
+            }
+        }
+    });
+}
+
+fn inspector_column(ui: &mut egui::Ui, data: &mut EditorData, ctx: &InspectorContext, kinds: &[InspectorKind]) {
+    quiet_field_visuals(ui);
+    let accent = ui.visuals().selection.bg_fill;
+
     for &kind in kinds {
         ui.horizontal(|ui| {
-            ui.add_sized(egui::vec2(34.0, 20.0), egui::Label::new(egui::RichText::new(kind.label()).monospace().weak()));
+            let label = egui::RichText::new(kind.label()).monospace();
+            let label = if ctx.active_kind == Some(kind) {
+                label.strong().color(accent)
+            } else {
+                label.weak()
+            };
+            ui.add_sized(egui::vec2(30.0, 18.0), egui::Label::new(label));
 
-            let displayed_value = format_kind(kind, bytes, available, endian);
-            let editing = matches!(&data.inspector_edit, Some(edit) if edit.kind == kind && edit.address == addr);
+            let displayed_value = format_kind(kind, &ctx.bytes, ctx.available, ctx.endian);
+            let editing = matches!(&data.inspector_edit, Some(edit) if edit.kind == kind && edit.address == ctx.addr);
 
             // The displayed buffer is either the live edit text or the
             // current value rendered as a string. `--` when the type
@@ -951,7 +1110,7 @@ fn inspector_column(ui: &mut egui::Ui, data: &mut EditorData, addr: Address, byt
                 displayed_value.clone().unwrap_or_else(|| "--".to_string())
             };
 
-            let parse_error = editing && parse_kind(kind, &buf, endian).is_err();
+            let parse_error = editing && parse_kind(kind, &buf, ctx.endian).is_err();
             let text_color = if parse_error {
                 Some(egui::Color32::from_rgb(220, 120, 120))
             } else if displayed_value.is_none() {
@@ -962,14 +1121,19 @@ fn inspector_column(ui: &mut egui::Ui, data: &mut EditorData, addr: Address, byt
 
             let response = ui.add(
                 egui::TextEdit::singleline(&mut buf)
-                    .desired_width(170.0)
+                    .desired_width((ui.available_width() - 4.0).max(60.0))
+                    .margin(egui::Margin::symmetric(4, 1))
                     .font(egui::TextStyle::Monospace)
                     .text_color_opt(text_color),
             );
 
+            if displayed_value.is_none() {
+                response.clone().on_hover_text(format!("needs {} readable bytes", kind.byte_count()));
+            }
+
             if response.changed() {
                 data.inspector_edit = Some(InspectorEdit {
-                    address: addr,
+                    address: ctx.addr,
                     kind,
                     text: buf.clone(),
                 });
@@ -982,12 +1146,12 @@ fn inspector_column(ui: &mut egui::Ui, data: &mut EditorData, addr: Address, byt
             // to trigger accidentally and can produce surprising transient
             // values in the target process.
             if enter_pressed {
-                if let Ok(write_bytes) = parse_kind(kind, &buf, endian) {
+                if let Ok(write_bytes) = parse_kind(kind, &buf, ctx.endian) {
                     // Inspector writes don't move the hex-grid caret;
                     // record the inspector's address as both the before
                     // and after caret so undo/redo restore the user's
                     // focus point.
-                    apply_write(data, addr, &write_bytes, Some((addr, false)));
+                    apply_write(data, ctx.addr, &write_bytes, Some((ctx.addr, false)));
                     data.inspector_edit = None;
                     response.surrender_focus();
                 }
@@ -1096,4 +1260,57 @@ fn change_intensity(data: &EditorData, addr: Address) -> f32 {
         return 0.0;
     }
     1.0 - (elapsed.as_secs_f32() / CHANGE_FADE.as_secs_f32())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BYTES: [u8; 8] = [0x39, 0x30, 0x00, 0x00, 0x11, 0x22, 0x33, 0x44];
+
+    #[test]
+    fn hex_row_uses_the_widest_type_that_fits_the_readable_window() {
+        assert_eq!(format_hex(&BYTES, 8, Endianness::Little).unwrap(), "0x4433221100003039");
+        assert_eq!(format_hex(&BYTES, 4, Endianness::Little).unwrap(), "0x00003039");
+        assert_eq!(format_hex(&BYTES, 2, Endianness::Little).unwrap(), "0x3039");
+        assert_eq!(format_hex(&BYTES, 1, Endianness::Little).unwrap(), "0x39");
+        assert!(format_hex(&BYTES, 0, Endianness::Little).is_none());
+    }
+
+    #[test]
+    fn hex_row_follows_the_selected_byte_order() {
+        assert_eq!(format_hex(&BYTES, 4, Endianness::Big).unwrap(), "0x39300000");
+    }
+
+    #[test]
+    fn pointer_row_needs_a_full_address_width() {
+        assert!(format_pointer(&[], &BYTES, 7, Endianness::Little).is_none());
+        assert!(format_pointer(&[], &BYTES, 8, Endianness::Little).is_some());
+    }
+
+    #[test]
+    fn pointer_row_names_the_region_it_points_into() {
+        let regions = vec![RegionInfo {
+            range: 0x1000..0x2000,
+            label: "heap @ 0x1000".to_string(),
+            name: "heap".to_string(),
+            readable: true,
+            writable: true,
+        }];
+        let mut bytes = [0u8; 8];
+        bytes[..8].copy_from_slice(&0x1500u64.to_le_bytes());
+
+        let rendered = format_pointer(&regions, &bytes, 8, Endianness::Little).unwrap();
+
+        assert!(rendered.contains("0x1500"), "{rendered}");
+        assert!(rendered.contains("heap"), "{rendered}");
+    }
+
+    #[test]
+    fn inspector_highlights_the_row_matching_the_search_type() {
+        assert_eq!(InspectorKind::from_search_type(SearchType::Int), Some(InspectorKind::I32));
+        assert_eq!(InspectorKind::from_search_type(SearchType::Byte), Some(InspectorKind::U8));
+        assert_eq!(InspectorKind::from_search_type(SearchType::Double), Some(InspectorKind::F64));
+        assert_eq!(InspectorKind::from_search_type(SearchType::String), None);
+    }
 }

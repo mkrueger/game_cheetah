@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the window is resized.
 - Memory editor keyboard navigation gained Home/End for the current row,
   Ctrl+Home/Ctrl+End for the region, and Page Up/Page Down.
+- The memory editor inspector can be collapsed to give the hex grid its
+  height back, switches byte order from its header, marks the row matching
+  the search type, and adds `hex` plus a `ptr` row that resolves the value
+  against the target's memory map. Value fields grow with the column and only
+  show their frame on hover or focus.
 
 ### Changed
 
@@ -53,6 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Escape no longer closes the memory editor. It now does what the inspector
+  advertises: cancel the current edit, or clear the hex grid selection. The
+  editor is left through its Close button.
 - Memory editor rows are drawn at the exact height the scroll area advances
   by, so "Origin", arrow keys and paging land where they should instead of
   drifting. Rows are tighter, the caret is always scrolled into view with the
