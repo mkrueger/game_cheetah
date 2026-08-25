@@ -79,6 +79,7 @@ string-descr = string
 address-heading = Address
 value-heading = Value
 freezed-heading = Frozen
+freeze-all-tooltip = Click to freeze or unfreeze every result
 datatype-heading = Data type
 
 pid-heading = PID

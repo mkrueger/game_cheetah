@@ -80,6 +80,7 @@ string-descr = String
 address-heading = Addresse
 value-heading = Wert
 freezed-heading = Eingefroren
+freeze-all-tooltip = Klicken, um alle Ergebnisse einzufrieren oder freizugeben
 datatype-heading = Datentyp
 
 pid-heading = PID

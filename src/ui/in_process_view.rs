@@ -28,6 +28,13 @@ const REMOVE_ICON: &str = "\u{00D7}";
 /// pointer enters or leaves the row.
 const ICON_SLOT_WIDTH: f32 = 26.0;
 
+/// Column heading: centred in its cell and bold.
+fn header_label(ui: &mut egui::Ui, text: String) {
+    ui.with_layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
+        ui.label(egui::RichText::new(text).strong().size(14.0));
+    });
+}
+
 /// Row action rendered as a bare glyph. The slot is always reserved; the
 /// button only becomes visible and clickable while its row is hovered.
 fn icon_button(ui: &mut egui::Ui, visible: bool, glyph: &str, tooltip: String) -> egui::Response {
@@ -512,9 +519,8 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
             if ui.add_enabled(can_undo, secondary_btn(fl!(crate::LANGUAGE_LOADER, "undo-button"))).clicked() {
                 app.undo_search();
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                results_label(ui, search_results);
-            });
+            ui.add_space(12.0);
+            results_label(ui, search_results);
         });
     } else {
         // Regular search with results
@@ -529,9 +535,8 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
             if ui.add_enabled(can_undo, secondary_btn(fl!(crate::LANGUAGE_LOADER, "undo-button"))).clicked() {
                 app.undo_search();
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                results_label(ui, search_results);
-            });
+            ui.add_space(12.0);
+            results_label(ui, search_results);
         });
     }
 
@@ -671,35 +676,45 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     builder
         .header(32.0, |mut header| {
             header.col(|ui| {
-                ui.strong(fl!(crate::LANGUAGE_LOADER, "address-heading"));
+                header_label(ui, fl!(crate::LANGUAGE_LOADER, "address-heading"));
             });
             header.col(|ui| {
-                ui.strong(fl!(crate::LANGUAGE_LOADER, "value-heading"));
+                header_label(ui, fl!(crate::LANGUAGE_LOADER, "value-heading"));
             });
             if show_search_types {
                 header.col(|ui| {
-                    ui.strong(fl!(crate::LANGUAGE_LOADER, "datatype-heading"));
+                    header_label(ui, fl!(crate::LANGUAGE_LOADER, "datatype-heading"));
                 });
             }
             if !is_string {
                 header.col(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    let mut checked = all_frozen;
-                    if ui.checkbox(&mut checked, "").clicked() {
-                        toggle_freeze_all = true;
-                    }
                     let heading = fl!(crate::LANGUAGE_LOADER, "freezed-heading");
+                    let hint = fl!(crate::LANGUAGE_LOADER, "freeze-all-tooltip");
+                    // Built here rather than as a Fluent placeable: the loader
+                    // wraps substitutions in isolate marks, which the bundled
+                    // fonts draw as boxes.
                     let tooltip = if frozen_count > 0 {
-                        format!("{heading} ({frozen_count}/{total_results})")
+                        format!("{heading} ({frozen_count}/{total_results})\n{hint}")
                     } else {
-                        heading
+                        format!("{heading}\n{hint}")
                     };
-                    let color = if frozen_count > 0 {
+                    let color = if all_frozen {
                         ui.visuals().selection.bg_fill
+                    } else if frozen_count > 0 {
+                        ui.visuals().selection.bg_fill.gamma_multiply(0.6)
                     } else {
                         ui.visuals().weak_text_color()
                     };
-                    ui.label(egui::RichText::new(FREEZE_ICON).size(15.0).color(color)).on_hover_text(tooltip);
+                    ui.with_layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
+                        if ui
+                            .add(egui::Button::new(egui::RichText::new(FREEZE_ICON).size(16.0).color(color)).frame(false))
+                            .on_hover_text(tooltip)
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .clicked()
+                        {
+                            toggle_freeze_all = true;
+                        }
+                    });
                 });
             }
         })
