@@ -3,7 +3,7 @@ name = "game-cheetah"
 version = "0.7.0"
 authors = ["Mike Krüger <mkrueger@posteo.de>"]
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 description = "High-performance memory scanner/editor and game trainer for Linux, Windows, and macOS"
 license = "Apache-2.0"
 repository = "https://github.com/mkrueger/game_cheetah"
@@ -21,16 +21,16 @@ Allows to alter values in computer games or freeze them to certain values.
 """
 
 [dependencies]
-eframe = { version = "0.34.2", default-features = false, features = [
+eframe = { version = "0.36.1", default-features = false, features = [
     "default_fonts",
     "glow",
     "wayland",
     "x11",
 ] }
-egui = "0.34.2"
-egui_extras = { version = "0.34.2", features = ["all_loaders"] }
+egui = "0.36.1"
+egui_extras = { version = "0.36.1", features = ["all_loaders"] }
 process-memory = "0.5.0"
-sysinfo = "0.38.4"
+sysinfo = "0.39.6"
 gabi = "0.2.6"
 i18n-embed = { version = "0.16.0", features = [
     "fluent-system",
@@ -39,7 +39,7 @@ i18n-embed = { version = "0.16.0", features = [
 i18n-embed-fl = "0.10.0"
 once_cell = "1.21.3"
 rust-embed = "8.9.0"
-proc-maps = "0.4.0"
+proc-maps = "0.5.0"
 webbrowser = "1.0.5"
 rayon = "1.11.0"
 memchr = "2.7.6"
@@ -51,7 +51,7 @@ serde = { version = "1.0", features = ["derive"] }
 toml = "1.1.2"
 dirs = "6.0"
 opener = "0.8"
-ureq = { version = "2.10", default-features = false, features = ["tls"] }
+ureq = { version = "3.4", default-features = false, features = ["rustls"] }
 smol = "2"
 
 [dev-dependencies]

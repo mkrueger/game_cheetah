@@ -41,6 +41,11 @@ initial-search-button = Erste Suche
 update-button = Aktualisieren
 clear-button = Löschen
 close-button = Schließen
+
+filter-results-label = Filter:
+filter-results-hint = z.B. > 1000, < 0 oder 1800
+filter-results-button = Filter anwenden
+
 hide-results-button = Ergebnisse verstecken
 show-results-button = Ergebnisse zeigen
 rename-button = Umbenennen

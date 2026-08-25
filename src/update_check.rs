@@ -13,17 +13,19 @@ const RELEASE_URL: &str = "https://api.github.com/repos/mkrueger/game_cheetah/re
 /// thread; should be called from `Task::perform` with `smol::unblock` or a
 /// regular thread.
 pub fn fetch_latest_version() -> Option<String> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(5))
-        .timeout_read(Duration::from_secs(5))
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(5)))
+        .timeout_global(Some(Duration::from_secs(5)))
         .user_agent(concat!("game-cheetah/", env!("CARGO_PKG_VERSION")))
-        .build();
+        .build()
+        .into();
     let body = agent
         .get(RELEASE_URL)
-        .set("Accept", "application/vnd.github+json")
+        .header("Accept", "application/vnd.github+json")
         .call()
         .ok()?
-        .into_string()
+        .body_mut()
+        .read_to_string()
         .ok()?;
     parse_tag_name(&body)
 }

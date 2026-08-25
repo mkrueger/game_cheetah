@@ -26,19 +26,42 @@ impl SearchValue {
 
 impl Display for SearchValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self.0 {
-            SearchType::Byte => self.1.first().map(|b| b.to_string()),
-            SearchType::Short => self.fixed_bytes::<2>().map(|arr| i16::from_le_bytes(arr).to_string()),
-            SearchType::Int => self.fixed_bytes::<4>().map(|arr| i32::from_le_bytes(arr).to_string()),
-            SearchType::Int64 => self.fixed_bytes::<8>().map(|arr| i64::from_le_bytes(arr).to_string()),
-            SearchType::Float => self.fixed_bytes::<4>().map(|arr| f32::from_le_bytes(arr).to_string()),
-            SearchType::Double => self.fixed_bytes::<8>().map(|arr| f64::from_le_bytes(arr).to_string()),
-            SearchType::Guess => None,
-            SearchType::Unknown => None,
-            SearchType::String | SearchType::StringUtf16 => None,
-        }
-        .unwrap_or_else(|| "<invalid>".to_owned());
+        let s = format_value(self.0, &self.1).unwrap_or_else(|| "<invalid>".to_owned());
         f.write_str(&s)
+    }
+}
+
+fn fixed_bytes<const N: usize>(bytes: &[u8]) -> Option<[u8; N]> {
+    bytes.get(..N)?.try_into().ok()
+}
+
+/// Render raw memory bytes the way the result table displays them.
+/// `None` for types without a numeric representation (string/guess/unknown)
+/// or when `bytes` is too short.
+pub fn format_value(search_type: SearchType, bytes: &[u8]) -> Option<String> {
+    match search_type {
+        SearchType::Byte => bytes.first().map(|b| b.to_string()),
+        SearchType::Short => fixed_bytes::<2>(bytes).map(|arr| i16::from_le_bytes(arr).to_string()),
+        SearchType::Int => fixed_bytes::<4>(bytes).map(|arr| i32::from_le_bytes(arr).to_string()),
+        SearchType::Int64 => fixed_bytes::<8>(bytes).map(|arr| i64::from_le_bytes(arr).to_string()),
+        SearchType::Float => fixed_bytes::<4>(bytes).map(|arr| f32::from_le_bytes(arr).to_string()),
+        SearchType::Double => fixed_bytes::<8>(bytes).map(|arr| f64::from_le_bytes(arr).to_string()),
+        SearchType::Guess | SearchType::Unknown | SearchType::String | SearchType::StringUtf16 => None,
+    }
+}
+
+/// Interpret raw memory bytes as a number for comparisons. `i64` values
+/// beyond 2^53 lose precision, which is irrelevant for the threshold
+/// comparisons this feeds.
+pub fn value_as_f64(search_type: SearchType, bytes: &[u8]) -> Option<f64> {
+    match search_type {
+        SearchType::Byte => bytes.first().map(|b| *b as f64),
+        SearchType::Short => fixed_bytes::<2>(bytes).map(|arr| i16::from_le_bytes(arr) as f64),
+        SearchType::Int => fixed_bytes::<4>(bytes).map(|arr| i32::from_le_bytes(arr) as f64),
+        SearchType::Int64 => fixed_bytes::<8>(bytes).map(|arr| i64::from_le_bytes(arr) as f64),
+        SearchType::Float => fixed_bytes::<4>(bytes).map(|arr| f32::from_le_bytes(arr) as f64),
+        SearchType::Double => fixed_bytes::<8>(bytes).map(f64::from_le_bytes),
+        SearchType::Guess | SearchType::Unknown | SearchType::String | SearchType::StringUtf16 => None,
     }
 }
 

@@ -1,7 +1,7 @@
 use crate::{SearchResult, SearchType};
 use bytemuck::pod_read_unaligned;
 use memchr::memmem;
-use wide::{CmpLe, f32x8, f64x4};
+use wide::{f32x8, f64x4};
 
 // Float search tolerance.
 //

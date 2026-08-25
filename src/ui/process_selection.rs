@@ -168,7 +168,7 @@ pub fn view_process_selection(app: &mut App, ui: &mut egui::Ui) {
     // and the window's rounded corners stay intact.
     egui::CentralPanel::default()
         .frame(egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::symmetric(18, 12)))
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             const ACTION_BAR_HEIGHT: f32 = 42.0;
             // Gap between the table/content area and the action bar so
             // the close button doesn't sit flush against the table.

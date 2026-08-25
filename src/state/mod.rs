@@ -1,4 +1,4 @@
-use crate::{FreezeMessage, MessageCommand, SearchContext, SearchMode, SearchResult, SearchType, SearchValue, UnknownComparison};
+use crate::{FreezeMessage, MessageCommand, ResultFilter, SearchContext, SearchMode, SearchResult, SearchType, SearchValue, UnknownComparison};
 use crossbeam_channel::{select, tick};
 use i18n_embed_fl::fl;
 use memchr::memmem;
@@ -31,6 +31,10 @@ pub use string_search::search_string_in_memory;
 pub use unknown::compare_values;
 
 type UnknownPrevMap = HashMap<(usize, SearchType), [u8; 8]>;
+
+/// Refinement pass over an existing result list: given a chunk of results and
+/// a handle to the target process, return the entries that survive.
+type RefinePass = Arc<dyn Fn(&[SearchResult], &process_memory::ProcessHandle) -> Vec<SearchResult> + Send + Sync>;
 
 /// Initial-scan chunk size chosen from local profiling:
 /// - whole-region scheduling left large mappings as long-running Rayon tasks;
@@ -463,6 +467,22 @@ impl GameCheetahEngine {
     }
 
     pub fn filter_searches(&mut self, search_index: usize) {
+        let Some(search_context) = self.searches.get(search_index) else {
+            self.push_error(AppError::InvalidSearchIndex { index: search_index });
+            return;
+        };
+        let value_text = search_context.search_value_text.clone();
+        self.refine_results(search_index, Arc::new(move |chunk, handle| update_results(chunk, &value_text, handle)));
+    }
+
+    /// Narrow the current result list down to the entries whose live value
+    /// satisfies `filter`. Pushes the previous list onto the undo stack.
+    pub fn filter_results(&mut self, search_index: usize, filter: ResultFilter) {
+        self.refine_results(search_index, Arc::new(move |chunk, handle| retain_matching(chunk, &filter, handle)));
+    }
+
+    /// Re-read every current result and keep the ones `pass` returns.
+    fn refine_results(&mut self, search_index: usize, pass: RefinePass) {
         self.remove_freezes(search_index);
         let Some(search_context) = self.searches.get_mut(search_index) else {
             self.push_error(AppError::InvalidSearchIndex { index: search_index });
@@ -491,7 +511,7 @@ impl GameCheetahEngine {
         if old_results.len() <= INLINE_UPDATE_LIMIT {
             match (self.pid as process_memory::Pid).try_into_process_handle() {
                 Ok(handle) => {
-                    let updated = update_results(&old_results, &search_context.search_value_text, &handle);
+                    let updated = pass(&old_results, &handle);
                     search_context.set_cached_results(updated);
                     search_context.current_bytes.store(old_results.len(), Ordering::SeqCst);
                     search_context.search_complete.store(true, Ordering::SeqCst);
@@ -514,7 +534,7 @@ impl GameCheetahEngine {
             .map(|i| (i, min(i + max_block, old_results.len())))
             .collect();
 
-        self.spawn_update_search(search_index, old_results, chunks);
+        self.spawn_update_search(search_index, old_results, chunks, pass);
     }
 
     pub fn remove_freezes(&mut self, search_index: usize) {
@@ -657,14 +677,13 @@ impl GameCheetahEngine {
         }
     }
 
-    fn spawn_update_search(&mut self, search_index: usize, old_results: Arc<Vec<SearchResult>>, chunks: Vec<(usize, usize)>) {
+    fn spawn_update_search(&mut self, search_index: usize, old_results: Arc<Vec<SearchResult>>, chunks: Vec<(usize, usize)>, pass: RefinePass) {
         let Some(search_context) = self.searches.get_mut(search_index) else {
             self.push_error(AppError::InvalidSearchIndex { index: search_index });
             return;
         };
         let current_bytes = search_context.current_bytes.clone();
         let pid = self.pid;
-        let value_text = search_context.search_value_text.clone();
         let results_sender = search_context.results_sender.clone();
         let search_complete = search_context.search_complete.clone();
         let cache_valid = search_context.cache_valid.clone();
@@ -683,7 +702,7 @@ impl GameCheetahEngine {
                 };
 
                 let chunk = &old_results[*from..*to];
-                let updated = update_results(chunk, &value_text, &handle);
+                let updated = pass(chunk, &handle);
 
                 if !updated.is_empty() {
                     let _ = results_sender.send(updated);
@@ -1511,6 +1530,26 @@ fn pack_bytes(src: &[u8]) -> [u8; 8] {
     let n = src.len().min(8);
     out[..n].copy_from_slice(&src[..n]);
     out
+}
+
+/// Keep the results whose current value satisfies `filter`.
+fn retain_matching<T>(results: &[SearchResult], filter: &ResultFilter, handle: &T) -> Vec<SearchResult>
+where
+    T: process_memory::CopyAddress,
+{
+    results
+        .iter()
+        .copied()
+        .filter(|result| {
+            let Some(byte_len) = result.search_type.fixed_byte_length() else {
+                return false;
+            };
+            match copy_address(result.addr, byte_len, handle) {
+                Ok(buf) => filter.matches(result.search_type, &buf),
+                Err(_) => false,
+            }
+        })
+        .collect()
 }
 
 fn update_results<T>(old_results: &[SearchResult], value_text: &str, handle: &T) -> Vec<SearchResult>

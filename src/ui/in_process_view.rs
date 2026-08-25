@@ -17,7 +17,7 @@ pub fn view_in_process(app: &mut App, ui: &mut egui::Ui) {
     tab_bar(app, ui);
     egui::CentralPanel::default()
         .frame(egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::symmetric(20, 16)))
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             search_area(app, ui);
         });
 }
@@ -30,7 +30,7 @@ fn top_bar(app: &mut App, ui: &mut egui::Ui) {
                 .inner_margin(egui::Margin::symmetric(20, 10))
                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 50, 60))),
         )
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "process-label")).size(14.0).weak());
                 ui.add_space(2.0);
@@ -64,7 +64,7 @@ fn error_bar(app: &mut App, ui: &mut egui::Ui) {
         let mut dismiss = false;
         egui::Panel::top("in_process_error")
             .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(20, 6)))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 egui::Frame::new()
                     .fill(egui::Color32::from_rgba_unmultiplied(160, 50, 50, 30))
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(160, 70, 70)))
@@ -111,7 +111,7 @@ fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
                 })
                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 50, 60))),
         )
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             let accent = ui.visuals().selection.bg_fill;
             let count = app.state.searches.len();
             let mut switch_to: Option<usize> = None;
@@ -545,6 +545,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     let Some(search_context) = app.state.searches.get(search_index) else {
         return;
     };
+    let mut apply_filter = false;
     let results = search_context.collect_results();
     let total_results = results.len();
     let is_string = matches!(search_context.search_type, SearchType::String | SearchType::StringUtf16);
@@ -557,6 +558,11 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     let freezed: std::collections::HashSet<usize> = search_context.freezed_addresses.iter().copied().collect();
     let all_frozen = !results.is_empty() && results.iter().all(|r| freezed.contains(&r.addr));
     let frozen_count = results.iter().filter(|r| freezed.contains(&r.addr)).count();
+
+    if !is_string {
+        result_filter_row(app, ui, &mut apply_filter);
+        ui.add_space(8.0);
+    }
 
     // Capture lookups we'll need inside the row closure. Borrow checker:
     // the row closure runs inside TableBuilder::body which holds `ui`, and
@@ -693,7 +699,21 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                 // the row into `app.editing_result`; otherwise the box
                 // displays the live value freshly read this frame.
                 row.col(|ui| {
-                    let editing = matches!(app.editing_result, Some((idx, _)) if idx == i);
+                    // Stable per-result id: keeps focus across the
+                    // display/edit swap and stops one row's editor state
+                    // from bleeding into another when results are re-sorted
+                    // or scrolled.
+                    let value_id = egui::Id::new(("result-value", result.addr, result.search_type));
+                    let has_focus = ui.memory(|mem| mem.has_focus(value_id));
+                    // Only the focused cell may render from the edit buffer.
+                    // Every other row shows what was read from the process
+                    // this frame, so a buffer left behind by a failed commit
+                    // or a row that scrolled away can't freeze the display.
+                    let is_edit_row = matches!(app.editing_result, Some((idx, _)) if idx == i);
+                    let editing = is_edit_row && has_focus;
+                    if is_edit_row && !has_focus {
+                        cancel_edit = true;
+                    }
                     let text_color = if recently_changed {
                         Some(egui::Color32::from_rgb(255, 180, 130))
                     } else if is_frozen {
@@ -707,7 +727,12 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                         // Bind the TextEdit straight to the live editing
                         // buffer so keystrokes mutate it in place.
                         let buf = &mut app.editing_result.as_mut().unwrap().1;
-                        let r = ui.add(egui::TextEdit::singleline(buf).desired_width(cell_width).text_color_opt(text_color));
+                        let r = ui.add(
+                            egui::TextEdit::singleline(buf)
+                                .id(value_id)
+                                .desired_width(cell_width)
+                                .text_color_opt(text_color),
+                        );
                         if r.changed() {
                             // Live write: try to push every keystroke into
                             // the target process. Invalid intermediate input
@@ -730,7 +755,12 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                         // value every frame; the user transitions to
                         // edit mode the moment they focus or type.
                         let mut buf = value_text.clone();
-                        let r = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(cell_width).text_color_opt(text_color));
+                        let r = ui.add(
+                            egui::TextEdit::singleline(&mut buf)
+                                .id(value_id)
+                                .desired_width(cell_width)
+                                .text_color_opt(text_color),
+                        );
                         if r.gained_focus() || r.changed() {
                             begin_edit = Some((i, buf));
                         }
@@ -788,6 +818,10 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     if let Some(i) = open_editor {
         app.open_memory_editor(i);
     }
+    // Clicking straight from one value cell into another reports the old
+    // row's `lost_focus` and the new row's `gained_focus` in the same frame,
+    // so a cancel must never discard the edit that just started.
+    let started_edit = begin_edit.is_some();
     if let Some((i, text)) = begin_edit {
         app.editing_result = Some((i, text));
     }
@@ -800,12 +834,48 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
             app.editing_result = None;
         }
     }
-    if cancel_edit {
+    if cancel_edit && !started_edit {
         app.editing_result = None;
+    }
+    if apply_filter {
+        app.apply_result_filter();
     }
 
     // Silence unused warning when AppState transitions are handled elsewhere.
     let _ = AppState::InProcess;
+}
+
+/// Filter bar above the result table. Narrows the current results by their
+/// live value — either a comparison (`>1000`, `<0`) or a substring of the
+/// displayed number. The regular Undo button restores the previous list.
+fn result_filter_row(app: &mut App, ui: &mut egui::Ui, apply: &mut bool) {
+    let parse_error = crate::ResultFilter::parse(&app.result_filter).err();
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "filter-results-label")).size(14.0));
+        let response = ui.add(
+            egui::TextEdit::singleline(&mut app.result_filter)
+                .hint_text(fl!(crate::LANGUAGE_LOADER, "filter-results-hint"))
+                .desired_width(220.0)
+                .margin(egui::Margin::symmetric(10, 6))
+                .text_color_opt(parse_error.as_ref().map(|_| egui::Color32::from_rgb(220, 120, 120))),
+        );
+        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            *apply = true;
+        }
+        let enabled = parse_error.is_none() && !app.result_filter.trim().is_empty();
+        if ui
+            .add_enabled(
+                enabled,
+                egui::Button::new(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "filter-results-button")).size(14.0)).min_size(egui::vec2(0.0, 28.0)),
+            )
+            .clicked()
+        {
+            *apply = true;
+        }
+        if let Some(err) = &parse_error {
+            ui.colored_label(egui::Color32::from_rgb(220, 120, 120), format!("\u{26A0}  {err}"));
+        }
+    });
 }
 
 /// Read up to `max_bytes` raw bytes from the target process at `addr`.

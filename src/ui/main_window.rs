@@ -8,7 +8,7 @@ const MAIN_MENU_BUTTON_HEIGHT: f32 = 44.0;
 const SETTINGS_MAX_WIDTH: f32 = 980.0;
 
 pub fn view_main_window(app: &mut App, ui: &mut egui::Ui) {
-    egui::CentralPanel::default().show_inside(ui, |ui| {
+    egui::CentralPanel::default().show(ui, |ui| {
         let top_space = (ui.available_height() * 0.07).clamp(24.0, 72.0);
         ui.add_space(top_space);
         ui.vertical_centered(|ui| {
@@ -126,7 +126,7 @@ fn thin_divider(ui: &mut egui::Ui, width: f32) {
 }
 
 pub fn view_settings(app: &mut App, ui: &mut egui::Ui) {
-    egui::CentralPanel::default().show_inside(ui, |ui| {
+    egui::CentralPanel::default().show(ui, |ui| {
         ui.add_space(28.0);
         ui.vertical_centered(|ui| {
             ui.heading(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "settings-title")).size(34.0).strong());
@@ -174,7 +174,7 @@ pub fn view_settings(app: &mut App, ui: &mut egui::Ui) {
 }
 
 pub fn view_about(app: &mut App, ui: &mut egui::Ui) {
-    egui::CentralPanel::default().show_inside(ui, |ui| {
+    egui::CentralPanel::default().show(ui, |ui| {
         ui.add_space(40.0);
         ui.vertical_centered(|ui| {
             ui.heading(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "about-dialog-heading")).size(34.0).strong());

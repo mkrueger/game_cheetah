@@ -7,8 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Results can be narrowed down without starting a new scan: the filter bar
+  above the result table accepts comparisons (`> 1000`, `<= 0`, `!= 42`) or a
+  plain digit sequence matched as a substring of the displayed value. Undo
+  restores the previous result list
+  ([#28](https://github.com/mkrueger/game_cheetah/issues/28)).
+
+### Changed
+
+- CI runs the checks and tests on every commit; Linux, Windows and macOS
+  packages are now built when a `v*` tag is pushed and attached to that tag's
+  release. The dependency audit moved to a weekly schedule.
+- Updated dependencies: egui/eframe 0.36, sysinfo 0.39, proc-maps 0.5, ureq 3
+  and the remaining crates to their current releases. The minimum supported
+  Rust version is now 1.89.
+
 ### Fixed
 
+- Result rows always show the value read from the process while drawing. A
+  cell could stay frozen on an old edit buffer — its change highlight still
+  flashed, but the number only refreshed after focusing and unfocusing it.
 - Aggregated process rows can now be expanded to attach to an individual
   member process. Previously only the group representative was searchable,
   so memory of the other processes (e.g. Chrome's renderer processes) could

@@ -603,7 +603,7 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
                 .inner_margin(egui::Margin::symmetric(20, 10))
                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 50, 60))),
         )
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "memory-editor-title"))
@@ -774,14 +774,14 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(55, 62, 72)))
                     .inner_margin(egui::Margin::symmetric(16, 12)),
             )
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 inspector_body(&mut app.memory_editor, ui);
             });
     }
 
     egui::CentralPanel::default()
         .frame(egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::symmetric(20, 14)))
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             if !handle_attached {
                 ui.colored_label(
                     egui::Color32::from_rgb(220, 120, 120),
