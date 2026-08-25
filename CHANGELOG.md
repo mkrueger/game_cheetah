@@ -9,11 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Results can be narrowed down without starting a new scan: the filter bar
-  above the result table accepts comparisons (`> 1000`, `<= 0`, `!= 42`) or a
-  plain digit sequence matched as a substring of the displayed value. Undo
-  restores the previous result list
-  ([#28](https://github.com/mkrueger/game_cheetah/issues/28)).
+- The memory editor fills the available width: the byte count per row adapts
+  to the window in whole 8-byte groups, keeping the top address in place when
+  the window is resized.
+- Memory editor keyboard navigation gained Home/End for the current row,
+  Ctrl+Home/Ctrl+End for the region, and Page Up/Page Down.
 
 ### Changed
 
@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Memory editor rows are drawn at the exact height the scroll area advances
+  by, so "Origin", arrow keys and paging land where they should instead of
+  drifting. Rows are tighter, the caret is always scrolled into view with the
+  smallest possible movement, and the bottom edge no longer leaves a blank
+  strip where the next row belongs.
 - Result rows always show the value read from the process while drawing. A
   cell could stay frozen on an old edit buffer — its change highlight still
   flashed, but the number only refreshed after focusing and unfocusing it.

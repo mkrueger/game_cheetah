@@ -108,6 +108,10 @@ pub(crate) struct BetweenFrameData {
 
     pub goto_address_line: Option<usize>,
 
+    /// A keyboard move requested an exact minimal scroll once its target
+    /// cell is rendered.
+    pub scroll_caret_into_view: bool,
+
     /// Address range that corresponds to the cheat / search result currently being edited.
     /// All bytes in this range are highlighted with a translucent accent so the user knows
     /// where the value actually lives in memory.
