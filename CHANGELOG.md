@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Aggregated process rows can now be expanded to attach to an individual
+  member process. Previously only the group representative was searchable,
+  so memory of the other processes (e.g. Chrome's renderer processes) could
+  not be reached ([#27](https://github.com/mkrueger/game_cheetah/issues/27)).
+
 ## [0.7.0] - 2026-05-14
 
 Feature release focused on in-process result-table responsiveness, changed-value visibility, and memory editor polish.

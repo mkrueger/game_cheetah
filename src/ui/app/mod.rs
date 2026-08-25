@@ -10,7 +10,7 @@ mod tick;
 mod update_check;
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
 
@@ -67,6 +67,9 @@ pub struct App {
 
     pub process_sort_column: ProcessSortColumn,
     pub process_sort_direction: SortDirection,
+    /// Representative pids of process groups the user expanded in the
+    /// process selection table.
+    pub expanded_process_groups: HashSet<process_memory::Pid>,
 
     /// Brief status next to the Save/Load buttons.
     pub cheat_table_status: String,
@@ -134,6 +137,7 @@ impl Default for App {
             editing_result: None,
             process_sort_column: ProcessSortColumn::default(),
             process_sort_direction: SortDirection::default(),
+            expanded_process_groups: HashSet::new(),
             cheat_table_status: String::new(),
             auto_reconnect: false,
             check_for_updates: false,

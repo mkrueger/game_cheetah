@@ -114,6 +114,26 @@ pub struct ProcessInfo {
     pub cmd: String,
     pub user: String,
     pub memory: usize,
+    /// Every process of an aggregated group, including this entry's own
+    /// representative. Empty when the entry stands for a single process.
+    ///
+    /// Only one process can be attached at a time, so the group members must
+    /// stay individually selectable — otherwise the memory of every
+    /// non-representative process (e.g. Chrome's renderer processes) would be
+    /// unreachable.
+    pub instances: Vec<ProcessInfo>,
+}
+
+/// Convert a sysinfo pid to the platform's `process_memory::Pid`.
+fn convert_pid(pid: u32) -> Option<process_memory::Pid> {
+    #[cfg(target_os = "windows")]
+    {
+        Some(pid)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        pid.try_into().ok()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -587,11 +607,7 @@ impl GameCheetahEngine {
 
             // Take the first (best) process from the group
             if let Some((pid, process)) = group.first() {
-                let pid_u32 = pid.as_u32();
-                #[cfg(target_os = "windows")]
-                let conv_pid = pid_u32;
-                #[cfg(not(target_os = "windows"))]
-                let Ok(conv_pid) = pid_u32.try_into() else {
+                let Some(conv_pid) = convert_pid(pid.as_u32()) else {
                     continue;
                 };
 
@@ -608,12 +624,34 @@ impl GameCheetahEngine {
                     format!("{:?}", process.cmd())
                 };
 
+                // Keep every group member around so the UI can expand the
+                // group and attach to a specific process. Aggregating the
+                // list must not hide memory from the search.
+                let instances: Vec<ProcessInfo> = if instance_count > 1 {
+                    group
+                        .iter()
+                        .filter_map(|(pid, process)| {
+                            Some(ProcessInfo {
+                                pid: convert_pid(pid.as_u32())?,
+                                name: process.name().to_string_lossy().to_string(),
+                                cmd: format!("{:?}", process.cmd()),
+                                user: process.user_id().map(|u| u.to_string()).unwrap_or_default(),
+                                memory: process.memory() as usize,
+                                instances: Vec::new(),
+                            })
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
                 self.processes.push(ProcessInfo {
                     pid: conv_pid,
                     name,
                     cmd,
                     user,
                     memory: largest_group_memory as usize, // Use total group memory instead
+                    instances,
                 });
             }
         }

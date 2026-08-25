@@ -94,6 +94,28 @@ enum RowFont {
     Monospace,
 }
 
+/// One rendered line of the process table: either a (possibly aggregated)
+/// top-level entry or one member of an expanded group.
+struct ProcessRow {
+    process: ProcessInfo,
+    /// Number of processes represented by this row; `0` for child rows.
+    group_size: usize,
+    expanded: bool,
+    is_child: bool,
+}
+
+fn process_matches_filter(process: &ProcessInfo, filter: &str) -> bool {
+    if filter.is_empty() {
+        return true;
+    }
+    contains_ignore_ascii_case(&process.name, filter)
+        || contains_ignore_ascii_case(&process.cmd, filter)
+        || process.pid.to_string().contains(filter)
+        || process.instances.iter().any(|child| {
+            contains_ignore_ascii_case(&child.name, filter) || contains_ignore_ascii_case(&child.cmd, filter) || child.pid.to_string().contains(filter)
+        })
+}
+
 /// Build a `LayoutJob` for a table cell. The substring(s) matching the
 /// active filter are rendered with a highlighted background, which
 /// makes it obvious why a given row matched.
@@ -190,15 +212,7 @@ fn view_process_selection_inner(app: &mut App, ui: &mut egui::Ui) {
     let shown_after_filter = if filter.is_empty() {
         total
     } else {
-        app.state
-            .processes
-            .iter()
-            .filter(|process| {
-                contains_ignore_ascii_case(&process.name, &filter)
-                    || contains_ignore_ascii_case(&process.cmd, &filter)
-                    || process.pid.to_string().contains(&filter)
-            })
-            .count()
+        app.state.processes.iter().filter(|process| process_matches_filter(process, &filter)).count()
     };
     let count_text = if filter.is_empty() {
         fl!(crate::LANGUAGE_LOADER, "process-count-total", total = total)
@@ -255,17 +269,7 @@ fn view_process_selection_inner(app: &mut App, ui: &mut egui::Ui) {
 
     ui.add_space(8.0);
 
-    let mut filtered_processes: Vec<&ProcessInfo> = app
-        .state
-        .processes
-        .iter()
-        .filter(|process| {
-            filter.is_empty()
-                || contains_ignore_ascii_case(&process.name, &filter)
-                || contains_ignore_ascii_case(&process.cmd, &filter)
-                || process.pid.to_string().contains(&filter)
-        })
-        .collect();
+    let mut filtered_processes: Vec<&ProcessInfo> = app.state.processes.iter().filter(|process| process_matches_filter(process, &filter)).collect();
 
     match app.process_sort_column {
         ProcessSortColumn::Pid => filtered_processes.sort_by(|a, b| match app.process_sort_direction {
@@ -287,8 +291,34 @@ fn view_process_selection_inner(app: &mut App, ui: &mut egui::Ui) {
     }
 
     // Take an owned snapshot so we can safely select inside the loop.
-    let process_rows: Vec<ProcessInfo> = filtered_processes.iter().map(|p| (*p).clone()).collect();
+    // Expanded groups contribute one extra row per group member; only those
+    // child rows can be attached to, since a search always runs against a
+    // single pid.
+    let mut process_rows: Vec<ProcessRow> = Vec::with_capacity(filtered_processes.len());
+    for process in &filtered_processes {
+        let group_size = process.instances.len();
+        let expanded = group_size > 1 && app.expanded_process_groups.contains(&process.pid);
+        process_rows.push(ProcessRow {
+            process: (*process).clone(),
+            group_size,
+            expanded,
+            is_child: false,
+        });
+        if expanded {
+            let mut children: Vec<&ProcessInfo> = process.instances.iter().collect();
+            children.sort_by_key(|child| child.pid);
+            for child in children {
+                process_rows.push(ProcessRow {
+                    process: child.clone(),
+                    group_size: 0,
+                    expanded: false,
+                    is_child: true,
+                });
+            }
+        }
+    }
     let mut selected: Option<ProcessInfo> = None;
+    let mut toggle_group: Option<process_memory::Pid> = None;
 
     // If there are no rows to show we hide the whole table (incl.
     // headers) and render a prominent empty/loading state instead.
@@ -407,8 +437,19 @@ fn view_process_selection_inner(app: &mut App, ui: &mut egui::Ui) {
                 .body(|body| {
                     body.rows(30.0, process_rows.len(), |mut row| {
                         let i = row.index();
-                        let process = &process_rows[i];
+                        let ProcessRow {
+                            process,
+                            group_size,
+                            expanded,
+                            is_child,
+                        } = &process_rows[i];
+                        let is_group = *group_size > 1;
                         row.col(|ui| {
+                            if *is_child {
+                                ui.add_space(18.0);
+                            } else if is_group {
+                                ui.label(egui::RichText::new(if *expanded { "\u{25BC}" } else { "\u{25B6}" }).size(10.0).weak());
+                            }
                             let pid_str = process.pid.to_string();
                             let job = highlight_job(ui, &pid_str, &filter, ui.visuals().text_color(), RowFont::Monospace);
                             ui.add(egui::Label::new(job).selectable(false));
@@ -425,16 +466,19 @@ fn view_process_selection_inner(app: &mut App, ui: &mut egui::Ui) {
                             let job = highlight_job(ui, &process.cmd, &filter, ui.visuals().weak_text_color(), RowFont::Body);
                             ui.add(egui::Label::new(job).selectable(false).truncate());
                         });
-                        // Whole-row click → attach. With
+                        // Whole-row click. With
                         // `TableBuilder::sense(Sense::click())` set
                         // above, the aggregate row response already
-                        // senses clicks across every cell. Single-click
-                        // selects/attaches; double-click is also
-                        // accepted for users used to file-picker
-                        // semantics.
+                        // senses clicks across every cell. A group row
+                        // expands/collapses so every member stays
+                        // reachable; any other row attaches.
                         let response = row.response().on_hover_cursor(egui::CursorIcon::PointingHand);
                         if response.clicked() || response.double_clicked() {
-                            selected = Some(process.clone());
+                            if is_group {
+                                toggle_group = Some(process.pid);
+                            } else {
+                                selected = Some(process.clone());
+                            }
                         }
                     });
                 });
@@ -451,6 +495,12 @@ fn view_process_selection_inner(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
         });
+    }
+
+    if let Some(pid) = toggle_group
+        && !app.expanded_process_groups.remove(&pid)
+    {
+        app.expanded_process_groups.insert(pid);
     }
 
     if let Some(process) = selected {
