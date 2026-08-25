@@ -70,6 +70,13 @@ impl App {
             }
         }
 
+        let current_search_was_active = self.app_state == AppState::InProcess
+            && self
+                .state
+                .searches
+                .get(self.state.current_search)
+                .is_some_and(|search| !matches!(search.searching, SearchMode::None));
+
         // Search context state machine: cycle each context's search-mode
         // flag back to `None` once `search_complete` flips.
         for search_context in &mut self.state.searches {
@@ -103,7 +110,7 @@ impl App {
                 }
                 // Finalize in-flight searches so the tracker refresh below
                 // sees the final result set.
-                {
+                let completed_without_results = {
                     let ctx_search = &mut self.state.searches[self.state.current_search];
                     if !matches!(ctx_search.searching, SearchMode::None) {
                         let _ = ctx_search.collect_results();
@@ -121,6 +128,10 @@ impl App {
                         }
                         ctx_search.searching = SearchMode::None;
                     }
+                    current_search_was_active && ctx_search.search_complete.load(Ordering::SeqCst) && ctx_search.get_result_count() == 0
+                };
+                if completed_without_results {
+                    self.search_value_request_focus = true;
                 }
 
                 let search_running = self.state.searches.iter().any(|s| !matches!(s.searching, SearchMode::None));

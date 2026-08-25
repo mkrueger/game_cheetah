@@ -1,4 +1,4 @@
-use std::sync::atomic::Ordering;
+use std::{sync::atomic::Ordering, time::Duration};
 
 use i18n_embed_fl::fl;
 use process_memory::{TryIntoProcessHandle, copy_address};
@@ -27,6 +27,7 @@ const REMOVE_ICON: &str = "\u{00D7}";
 /// Width reserved in a cell for its hover icon so nothing shifts when the
 /// pointer enters or leaves the row.
 const ICON_SLOT_WIDTH: f32 = 26.0;
+const CHEAT_TABLE_TOAST_DURATION: Duration = Duration::from_secs(4);
 
 /// Text column heading: left-aligned with its data and bold.
 fn header_label(ui: &mut egui::Ui, text: String) {
@@ -56,6 +57,7 @@ pub fn view_in_process(app: &mut App, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             search_area(app, ui);
         });
+    cheat_table_toast(app, ui.ctx());
 }
 
 fn top_bar(app: &mut App, ui: &mut egui::Ui) {
@@ -68,30 +70,69 @@ fn top_bar(app: &mut App, ui: &mut egui::Ui) {
         )
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "process-label")).size(14.0).weak());
-                ui.add_space(2.0);
                 let accent = ui.visuals().selection.bg_fill;
                 ui.label(egui::RichText::new(&app.state.process_name).size(15.0).strong().color(accent));
+                ui.label(egui::RichText::new("·").size(14.0).weak());
                 ui.label(egui::RichText::new(format!("PID {}", app.state.pid)).size(13.0).weak().monospace());
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let btn = |label: String| egui::Button::new(egui::RichText::new(label).size(14.0)).min_size(egui::vec2(0.0, 28.0));
-                    if ui.add(btn(fl!(crate::LANGUAGE_LOADER, "close-button"))).clicked() {
+                    let secondary = |label: String| {
+                        egui::Button::new(egui::RichText::new(label).size(14.0))
+                            .frame(false)
+                            .min_size(egui::vec2(0.0, 28.0))
+                    };
+                    let close = egui::Button::new(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "close-button")).size(14.0)).min_size(egui::vec2(76.0, 28.0));
+                    if ui.add(close).clicked() {
                         app.back_to_main_menu();
                     }
-                    if ui.add(btn(fl!(crate::LANGUAGE_LOADER, "load-cheat-table-button"))).clicked() {
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    if ui.add(secondary(fl!(crate::LANGUAGE_LOADER, "load-cheat-table-button"))).clicked() {
                         app.load_cheat_table();
                     }
-                    if ui.add(btn(fl!(crate::LANGUAGE_LOADER, "save-cheat-table-button"))).clicked() {
+                    if ui.add(secondary(fl!(crate::LANGUAGE_LOADER, "save-cheat-table-button"))).clicked() {
                         app.save_cheat_table();
-                    }
-                    if !app.cheat_table_status.is_empty() {
-                        ui.add_space(6.0);
-                        ui.label(egui::RichText::new(&app.cheat_table_status).size(13.0).weak());
                     }
                 });
             });
         });
+}
+
+fn cheat_table_toast(app: &mut App, ctx: &egui::Context) {
+    let Some(shown_at) = app.cheat_table_status_at else {
+        return;
+    };
+    let elapsed = shown_at.elapsed();
+    if elapsed >= CHEAT_TABLE_TOAST_DURATION {
+        app.cheat_table_status.clear();
+        app.cheat_table_status_at = None;
+        return;
+    }
+
+    ctx.request_repaint_after(CHEAT_TABLE_TOAST_DURATION - elapsed);
+    let status = app.cheat_table_status.clone();
+    let mut dismiss = false;
+    egui::Area::new(egui::Id::new("cheat_table_status_toast"))
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-20.0, 104.0))
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            ui.set_max_width((ctx.content_rect().width() - 40.0).clamp(180.0, 520.0));
+            egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Label::new(egui::RichText::new(&status).size(13.0)).truncate())
+                        .on_hover_text(&status);
+                    if ui.small_button(REMOVE_ICON).clicked() {
+                        dismiss = true;
+                    }
+                });
+            });
+        });
+
+    if dismiss {
+        app.cheat_table_status.clear();
+        app.cheat_table_status_at = None;
+    }
 }
 
 fn error_bar(app: &mut App, ui: &mut egui::Ui) {
@@ -129,9 +170,8 @@ fn error_bar(app: &mut App, ui: &mut egui::Ui) {
 /// Layout:
 /// * One row of tabs with rounded top corners.
 /// * Active tab is filled with the accent colour; inactive tabs are muted.
-/// * A small `×` close button is shown on hover (and persistently on the
-///   active tab) when there is more than one search.
-/// * Trailing `+` action creates a new search.
+/// * A small `×` close button is shown only while its tab is hovered.
+/// * A trailing tab-height `+` icon button creates a new search.
 /// * The bar is horizontally scrollable so a large number of searches still
 ///   stays usable.
 fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
@@ -207,6 +247,7 @@ fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
                             let tab_w = label_w + 24.0 + close_w + if show_close { 4.0 } else { 0.0 };
 
                             let (full_rect, _) = ui.allocate_exact_size(egui::vec2(tab_w, TAB_HEIGHT), egui::Sense::hover());
+                            let tab_hovered = ui.ctx().pointer_hover_pos().is_some_and(|pos| full_rect.contains(pos));
 
                             // Reserve the close button area; the rest is the
                             // clickable tab body.
@@ -232,7 +273,7 @@ fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
                             };
                             let (bg, text_color) = if is_active {
                                 (accent, egui::Color32::WHITE)
-                            } else if body_response.hovered() {
+                            } else if tab_hovered {
                                 (egui::Color32::from_rgb(36, 40, 46), egui::Color32::from_rgb(225, 228, 232))
                             } else {
                                 (egui::Color32::from_rgb(28, 31, 36), egui::Color32::from_rgb(180, 184, 190))
@@ -247,8 +288,12 @@ fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
                             };
                             ui.painter().text(label_pos, egui::Align2::LEFT_CENTER, &name, label_font, text_color);
 
-                            if let Some(rect) = close_rect {
-                                let close_response = ui.interact(rect, egui::Id::new(("close_tab", i)), egui::Sense::click());
+                            if let Some(rect) = close_rect
+                                && tab_hovered
+                            {
+                                let close_response = ui
+                                    .interact(rect, egui::Id::new(("close_tab", i)), egui::Sense::click())
+                                    .on_hover_text(fl!(crate::LANGUAGE_LOADER, "close-tab-hover-text"));
                                 let hovered = close_response.hovered();
                                 let close_bg = if hovered {
                                     egui::Color32::from_rgba_unmultiplied(255, 255, 255, 40)
@@ -311,9 +356,9 @@ fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
 
                         ui.add_space(6.0);
 
-                        // Trailing "+" action — looks like a quiet ghost button,
-                        // not a tab.
-                        let plus_size = egui::vec2(28.0, 28.0);
+                        // Trailing "+" icon action: visually quiet, but the
+                        // same height and hit target as a search tab.
+                        let plus_size = egui::vec2(TAB_HEIGHT, TAB_HEIGHT);
                         let (plus_rect, _) = ui.allocate_exact_size(plus_size, egui::Sense::hover());
                         let plus_response = ui.interact(plus_rect, egui::Id::new("new_search_tab"), egui::Sense::click());
                         let plus_bg = if plus_response.hovered() {
@@ -332,7 +377,7 @@ fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
                         if plus_response.clicked() {
                             new_search = true;
                         }
-                        plus_response.on_hover_text(fl!(crate::LANGUAGE_LOADER, "add-search-button"));
+                        plus_response.on_hover_text(fl!(crate::LANGUAGE_LOADER, "open-tab-hover-text"));
                     });
                 });
 
@@ -355,6 +400,18 @@ fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn search_area(app: &mut App, ui: &mut egui::Ui) {
+    let undo_shortcut = !ui.memory(|memory| memory.focused().is_some())
+        && ui.input(|input| input.modifiers.command && !input.modifiers.shift && input.key_pressed(egui::Key::Z));
+    if undo_shortcut
+        && app
+            .state
+            .searches
+            .get(app.state.current_search)
+            .is_some_and(|search| matches!(search.searching, SearchMode::None) && !search.old_results.is_empty())
+    {
+        app.undo_search();
+    }
+
     let search_index = app.state.current_search;
     let Some(search_context) = app.state.searches.get(search_index) else {
         return;
@@ -364,6 +421,7 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
     let search_results = search_context.get_result_count();
     let is_search_complete = search_context.search_complete.load(Ordering::SeqCst);
     let can_undo = !search_context.old_results.is_empty();
+    let unknown_comparison = search_context.unknown_comparison;
     let searching = search_context.searching;
     let current_bytes = search_context.current_bytes.load(Ordering::Acquire);
     let total_bytes = search_context.total_bytes;
@@ -418,12 +476,19 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
                                 None
                             }),
                     );
+                    if app.search_value_request_focus {
+                        response.request_focus();
+                        app.search_value_request_focus = false;
+                    }
                     if response.changed()
                         && let Some(ctx) = app.state.searches.get_mut(search_index)
                     {
                         ctx.search_value_text = buf;
                     }
-                    if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    if (response.has_focus() || response.lost_focus())
+                        && matches!(searching, SearchMode::None)
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter))
+                    {
                         app.start_search();
                     }
                     type_picker(app, ui, show_type_picker, selected_type);
@@ -526,7 +591,34 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
             }
             result_table(app, ui);
         }
+    } else if matches!(searching, SearchMode::None) && (!is_search_complete || selected_type != SearchType::Unknown || unknown_comparison.is_some()) {
+        ui.add_space(18.0);
+        empty_results_panel(ui, is_search_complete);
     }
+}
+
+fn empty_results_panel(ui: &mut egui::Ui, search_complete: bool) {
+    let (title, hint) = if search_complete {
+        (
+            fl!(crate::LANGUAGE_LOADER, "empty-results-title"),
+            fl!(crate::LANGUAGE_LOADER, "empty-results-hint"),
+        )
+    } else {
+        (
+            fl!(crate::LANGUAGE_LOADER, "empty-search-title"),
+            fl!(crate::LANGUAGE_LOADER, "empty-search-hint"),
+        )
+    };
+
+    let available_size = ui.available_size();
+    const CONTENT_HEIGHT: f32 = 58.0;
+    const VERTICAL_POSITION: f32 = 0.32;
+    ui.allocate_ui_with_layout(available_size, egui::Layout::top_down(egui::Align::Center), |ui| {
+        ui.add_space(((available_size.y - CONTENT_HEIGHT) * VERTICAL_POSITION).max(20.0));
+        ui.label(egui::RichText::new(title).size(20.0).strong());
+        ui.add_space(7.0);
+        ui.label(egui::RichText::new(hint).size(15.0).weak());
+    });
 }
 
 fn result_count_label(ui: &mut egui::Ui, count: usize) {
@@ -631,24 +723,20 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     let mut live_write: Option<(usize, String)> = None;
     let mut commit_edit: Option<(usize, String)> = None;
     let mut cancel_edit = false;
-    // Row-level hover comes from the previous frame: the cells are built before
-    // the row response exists, and a frame of lag is invisible at 30 Hz.
-    let hovered_row = app.hovered_result_row;
     let mut new_hovered_row: Option<usize> = None;
-    // Hover is decided by the pointer against the row rectangle rather than by
-    // `Response::hovered()`: the latter goes false as soon as the pointer
-    // reaches the icon on top of the row, which would hide the icon, re-hover
-    // the row, and flicker forever without ever accepting a click.
+    // Cell hover is decided geometrically. A parent `Response::hovered()` goes
+    // false when the pointer reaches an icon inside it, causing flicker.
     let pointer_pos = ui.ctx().pointer_hover_pos();
 
     use egui_extras::{Column, TableBuilder};
 
-    // Fixed widths only: a trailing remainder column would just reintroduce
-    // the empty strip this table used to carry around.
+    // Data columns stay compact. A final empty remainder column extends the
+    // table's interaction area to the window edge, so wheel scrolling also
+    // works over the otherwise-unused space on the right.
     let mut builder = TableBuilder::new(ui)
         .striped(true)
         .resizable(true)
-        .sense(egui::Sense::hover())
+        .sense(egui::Sense::click())
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .column(Column::initial(150.0).at_least(120.0)) // address + remove icon
         .column(Column::initial(190.0).at_least(140.0)); // value + edit icon
@@ -658,6 +746,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     if !is_string {
         builder = builder.column(Column::initial(56.0).at_least(48.0));
     }
+    builder = builder.column(Column::remainder().resizable(false));
 
     builder
         .header(36.0, |mut header| {
@@ -703,6 +792,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     });
                 });
             }
+            header.col(|_| {});
         })
         .body(|body| {
             body.rows(RESULT_ROW_HEIGHT, total_results, |mut row| {
@@ -711,7 +801,6 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     return;
                 };
                 let is_frozen = freezed.contains(&result.addr);
-                let row_hovered = hovered_row == Some(i);
 
                 // Always read fresh raw bytes from the target so the display
                 // and the change diff reflect the process's current state.
@@ -770,20 +859,26 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                 let recently_changed = change_intensity > 0.0;
 
                 // Address column
-                row.col(|ui| {
-                    ui.monospace(format!("0x{:X}", result.addr));
+                let address_text = format!("0x{:X}", result.addr);
+                let (_, address_response) = row.col(|ui| {
+                    let cell_hovered = pointer_pos.is_some_and(|pos| ui.max_rect().contains(pos));
+                    ui.monospace(&address_text);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if icon_button(ui, row_hovered, REMOVE_ICON, fl!(crate::LANGUAGE_LOADER, "remove-button")).clicked() {
+                        if icon_button(ui, cell_hovered, REMOVE_ICON, fl!(crate::LANGUAGE_LOADER, "remove-button")).clicked() {
                             remove_result = Some(i);
                         }
                     });
                 });
+                if address_response.double_clicked() {
+                    open_editor = Some(i);
+                }
 
                 // Value column - always rendered as an editable text box.
                 // When the user focuses or types into the cell we capture
                 // the row into `app.editing_result`; otherwise the box
                 // displays the live value freshly read this frame.
                 row.col(|ui| {
+                    let cell_hovered = pointer_pos.is_some_and(|pos| ui.max_rect().contains(pos));
                     // Stable per-result id: keeps focus across the
                     // display/edit swap and stops one row's editor state
                     // from bleeding into another when results are re-sorted
@@ -825,13 +920,15 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                             // don't spam errors.
                             live_write = Some((i, buf.clone()));
                         }
-                        if r.lost_focus() {
-                            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                commit_edit = Some((i, buf.clone()));
-                            } else {
-                                cancel_edit = true;
-                            }
-                        } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
+                        let escape_pressed = ui.input(|input| input.key_pressed(egui::Key::Escape));
+                        if enter_pressed {
+                            commit_edit = Some((i, buf.clone()));
+                            r.surrender_focus();
+                        } else if escape_pressed {
+                            cancel_edit = true;
+                            r.surrender_focus();
+                        } else if r.lost_focus() {
                             cancel_edit = true;
                         }
                         r
@@ -863,7 +960,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if icon_button(ui, row_hovered, EDIT_ICON, fl!(crate::LANGUAGE_LOADER, "edit-button")).clicked() {
+                        if icon_button(ui, cell_hovered, EDIT_ICON, fl!(crate::LANGUAGE_LOADER, "edit-button")).clicked() {
                             open_editor = Some(i);
                         }
                     });
@@ -900,8 +997,36 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     });
                 }
 
+                row.col(|_| {});
+
+                let row_response = row.response();
+                row_response.context_menu(|ui| {
+                    if ui.button(fl!(crate::LANGUAGE_LOADER, "copy-address-menu")).clicked() {
+                        ui.ctx().copy_text(address_text.clone());
+                        ui.close();
+                    }
+                    if ui.button(fl!(crate::LANGUAGE_LOADER, "copy-value-menu")).clicked() {
+                        ui.ctx().copy_text(value_text.clone());
+                        ui.close();
+                    }
+                    ui.separator();
+                    let freeze_label = if is_frozen {
+                        fl!(crate::LANGUAGE_LOADER, "unfreeze-result-tooltip")
+                    } else {
+                        fl!(crate::LANGUAGE_LOADER, "freeze-result-tooltip")
+                    };
+                    if ui.button(freeze_label).clicked() {
+                        toggle_freeze = Some(i);
+                        ui.close();
+                    }
+                    if ui.button(fl!(crate::LANGUAGE_LOADER, "open-memory-editor-menu")).clicked() {
+                        open_editor = Some(i);
+                        ui.close();
+                    }
+                });
+
                 if let Some(pos) = pointer_pos
-                    && row.response().rect.contains(pos)
+                    && row_response.rect.contains(pos)
                 {
                     new_hovered_row = Some(i);
                 }
@@ -911,6 +1036,14 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     drop(results);
 
     app.hovered_result_row = new_hovered_row;
+
+    if remove_result.is_none()
+        && app.editing_result.is_none()
+        && !ui.memory(|memory| memory.focused().is_some())
+        && ui.input(|input| input.key_pressed(egui::Key::Delete))
+    {
+        remove_result = new_hovered_row;
+    }
 
     if toggle_freeze_all {
         app.toggle_freeze_all();

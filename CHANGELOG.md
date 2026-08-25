@@ -17,18 +17,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The result table gives its leftover width to the value column instead of
-  stacking it behind the row buttons, the search field is no longer stretched
-  across the window, and the hit count is rendered prominently. Result lists
-  too large to browse are collapsed behind a hint pointing at the next useful
-  step, with an option to show them anyway.
+- The result table extends an empty interaction column to the window edge, so
+  wheel scrolling works across the otherwise-unused space while data columns
+  remain compact. The search field is no longer stretched across the window,
+  and the hit count is rendered prominently. Result lists too large to browse
+  are collapsed behind a hint pointing at the next useful step, with an option
+  to show them anyway.
 - Search input, data type, actions and the compact result count now share one
   wrapping toolbar instead of being split across a card and a second row.
   Text table headings are bold and left-aligned with their data.
+- Search tabs show their close icon only on hover, while the trailing `+`
+  icon uses the same height and hit target as the tabs. Rename guidance stays
+  in the tab tooltip.
+- The process topbar now shows a compact `name · PID` identity, treats Save
+  and Load as secondary actions, and separates Close visually. Save/Load
+  status moved out of the bar into a dismissible four-second toast.
+- In-process keyboard controls now update a search with Enter, cancel result
+  editing with Escape, undo the last search with Ctrl/Cmd+Z, and remove the
+  hovered result row with Delete.
+- Empty searches and searches without hits now show a concise next-step
+  message, centered prominently in the remaining window, and return keyboard
+  focus to the value field.
 - Result rows carry their actions as icons that appear on hover — × next to
   the address removes the row, ✏ next to the value opens the memory editor —
-  so the separate button column is gone. Both the header and each row use a
-  clickable ❄ for freeze/unfreeze, with the wording moved into tooltips.
+  now limited to their respective cells. A row context menu copies address or
+  value, toggles freeze, or opens the memory editor; double-clicking an address
+  opens it directly. Both the header and each row use a clickable ❄ for
+  freeze/unfreeze, with the wording moved into tooltips.
 - CI runs the checks and tests on every commit; Linux, Windows and macOS
   packages are now built when a `v*` tag is pushed and attached to that tag's
   release. The dependency audit moved to a weekly schedule.
@@ -43,6 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drifting. Rows are tighter, the caret is always scrolled into view with the
   smallest possible movement, and the bottom edge no longer leaves a blank
   strip where the next row belongs.
+- Opening the memory editor and jumping back to Origin now center the origin
+  row after adaptive column layout, so the highlighted address is visible on
+  the first frame.
 - Result rows always show the value read from the process while drawing. A
   cell could stay frozen on an old edit buffer — its change highlight still
   flashed, but the number only refreshed after focusing and unfocusing it.

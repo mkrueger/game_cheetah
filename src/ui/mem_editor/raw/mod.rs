@@ -108,6 +108,11 @@ fn adaptive_column_count(available_width: f32, address_width: f32, hex_cell_widt
     best
 }
 
+fn centered_top_line(target_line: usize, max_lines: usize, visible_rows: usize) -> usize {
+    let visible_rows = visible_rows.max(1).min(max_lines.max(1));
+    target_line.saturating_sub(visible_rows / 2).min(max_lines.saturating_sub(visible_rows))
+}
+
 /// The main struct for the editor window.
 /// This should persist between frames as it keeps track of quite a bit of state.
 #[derive(Clone)]
@@ -296,7 +301,9 @@ impl MemoryEditor {
             if column_count != self.options.column_count {
                 let anchor = self.visible_range.start.max(address_space.start).min(address_space.end.saturating_sub(1));
                 self.options.column_count = column_count;
-                self.frame_data.goto_address_line = anchor.checked_sub(address_space.start).map(|offset| offset / column_count);
+                if self.frame_data.center_address_on_next_frame.is_none() {
+                    self.frame_data.goto_address_line = anchor.checked_sub(address_space.start).map(|offset| offset / column_count);
+                }
             }
         }
 
@@ -341,7 +348,20 @@ impl MemoryEditor {
             .max_height(f32::INFINITY)
             .auto_shrink([false, false]);
 
-        if let Some(line) = self.frame_data.goto_address_line.take() {
+        let mut refine_center = None;
+        if let Some(address) = self.frame_data.center_address_on_next_frame.take() {
+            let target_line = address.saturating_sub(address_space.start) / column_count;
+            // A bottom panel has no measured height on its first frame, so
+            // `available_height` overshoots; the refine pass below corrects it.
+            let visible_rows = match self.rendered_rows() {
+                0 => (ui.available_height() / row_height).floor().max(1.0) as usize,
+                rows => rows,
+            };
+            let line = centered_top_line(target_line, max_lines, visible_rows);
+            self.frame_data.goto_address_line = None;
+            scroll = scroll.vertical_scroll_offset(row_height * line as f32);
+            refine_center = Some(address);
+        } else if let Some(line) = self.frame_data.goto_address_line.take() {
             let new_offset = row_height * (line as f32);
             scroll = scroll.vertical_scroll_offset(new_offset);
         }
@@ -383,6 +403,12 @@ impl MemoryEditor {
 
             self.frame_data.previous_frame_editor_width = row_width;
         });
+
+        // Set after the pass that forced an explicit offset, so the refine
+        // scroll doesn't fight the jump it is meant to correct.
+        if refine_center.is_some() {
+            self.frame_data.center_refine_address = refine_center;
+        }
     }
 
     /// Paint one memory row into `row_rect` and handle clicks on its bytes.
@@ -413,6 +439,10 @@ impl MemoryEditor {
         let cell_size = vec2(layout.hex_cell_width, style.text_height);
 
         let row_addresses = start_address..start_address + layout.column_count;
+        if matches!(frame_data.center_refine_address, Some(address) if row_addresses.contains(&address)) {
+            ui.scroll_to_rect(row_rect, Some(egui::Align::Center));
+            frame_data.center_refine_address = None;
+        }
         let highlight_in_row = matches!(frame_data.selected_highlight_address, Some(address) if row_addresses.contains(&address));
         let address_color = if highlight_in_row {
             options.highlight_text_colour
@@ -830,17 +860,15 @@ impl MemoryEditor {
     }
 
     /// Programmatically jump to a given address: scrolls to it on the next
-    /// frame and highlights it.
+    /// frame, centers its row, and highlights it.
     pub fn goto_address(&mut self, address: Address) {
         // Find which range contains the address (if any) and switch to it.
-        let target_range = self
-            .address_ranges
-            .iter()
-            .find(|(_, r)| r.contains(&address))
-            .map(|(n, r)| (n.clone(), r.clone()));
-        if let Some((name, range)) = target_range {
+        let target_range = self.address_ranges.iter().find(|(_, r)| r.contains(&address)).map(|(name, _)| name.clone());
+        if let Some(name) = target_range {
             self.options.selected_address_range = name;
-            self.frame_data.goto_address_line = address.checked_sub(range.start).map(|o| o / self.options.column_count);
+            self.frame_data.center_address_on_next_frame = Some(address);
+            self.frame_data.center_refine_address = None;
+            self.frame_data.goto_address_line = None;
             self.frame_data.selected_highlight_address = Some(address);
         }
     }
@@ -921,5 +949,16 @@ mod tests {
         assert!(last_hex_end <= layout.hex_end());
         assert!(layout.hex_end() < layout.separator_x());
         assert!(layout.separator_x() < layout.ascii_x(0));
+    }
+
+    #[test]
+    fn programmatic_jump_centers_target_row() {
+        assert_eq!(centered_top_line(50, 100, 20), 40);
+    }
+
+    #[test]
+    fn centered_jump_clamps_at_region_edges() {
+        assert_eq!(centered_top_line(3, 100, 20), 0);
+        assert_eq!(centered_top_line(98, 100, 20), 80);
     }
 }

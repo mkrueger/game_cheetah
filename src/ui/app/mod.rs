@@ -59,6 +59,9 @@ pub struct App {
     /// keyboard focus on the next frame and then clear the flag.
     pub rename_request_focus: bool,
 
+    /// One-shot request to return keyboard focus to the search value field.
+    pub search_value_request_focus: bool,
+
     /// `(row_index, typed_buffer)` while a result row's value is being
     /// edited. We don't read the live value into this buffer per frame —
     /// once the user clicks/focuses the field, it owns the keystrokes
@@ -75,8 +78,9 @@ pub struct App {
     /// action icons.
     pub hovered_result_row: Option<usize>,
 
-    /// Brief status next to the Save/Load buttons.
+    /// Brief Save/Load status shown as a transient toast.
     pub cheat_table_status: String,
+    pub cheat_table_status_at: Option<Instant>,
 
     /// Reattach to a process with the same name after the attached one exits.
     pub auto_reconnect: bool,
@@ -138,12 +142,14 @@ impl Default for App {
             renaming_search_index: None,
             rename_search_text: String::new(),
             rename_request_focus: false,
+            search_value_request_focus: false,
             editing_result: None,
             process_sort_column: ProcessSortColumn::default(),
             process_sort_direction: SortDirection::default(),
             expanded_process_groups: HashSet::new(),
             hovered_result_row: None,
             cheat_table_status: String::new(),
+            cheat_table_status_at: None,
             auto_reconnect: false,
             check_for_updates: false,
             update_check_rx: None,

@@ -108,6 +108,14 @@ pub(crate) struct BetweenFrameData {
 
     pub goto_address_line: Option<usize>,
 
+    /// Programmatic jump kept as an address until the next frame has resolved
+    /// adaptive columns and can center the correct row in the viewport.
+    pub center_address_on_next_frame: Option<Address>,
+
+    /// Address whose row should be re-centered from its real rectangle once it
+    /// is rendered, correcting the estimate used for the initial jump.
+    pub center_refine_address: Option<Address>,
+
     /// A keyboard move requested an exact minimal scroll once its target
     /// cell is rendered.
     pub scroll_caret_into_view: bool,

@@ -50,6 +50,15 @@ fn test_toggle_results_visibility() {
 }
 
 #[test]
+fn test_clear_results_requests_search_value_focus() {
+    let mut app = create_test_app();
+
+    app.clear_results();
+
+    assert!(app.search_value_request_focus);
+}
+
+#[test]
 fn test_settings_toggle_auto_reconnect() {
     let mut app = create_test_app();
 
@@ -66,6 +75,18 @@ fn test_settings_toggle_auto_reconnect() {
     assert_eq!(app.app_state, AppState::MainWindow);
     // back_to_main_menu resets engine state but preserves user settings.
     assert!(app.auto_reconnect);
+}
+
+#[test]
+fn test_back_to_main_menu_clears_cheat_table_toast() {
+    let mut app = create_test_app();
+    app.cheat_table_status = "Saved".to_owned();
+    app.cheat_table_status_at = Some(std::time::Instant::now());
+
+    app.back_to_main_menu();
+
+    assert!(app.cheat_table_status.is_empty());
+    assert!(app.cheat_table_status_at.is_none());
 }
 
 #[test]
@@ -109,6 +130,17 @@ fn test_freeze_functionality() {
 
     app.toggle_freeze(0);
     assert!(!app.state.searches[0].freezed_addresses.contains(&0x1000));
+}
+
+#[test]
+fn test_removing_last_result_requests_search_value_focus() {
+    let mut app = create_test_app();
+    let _ = app.state.searches[0].results_sender.send(vec![SearchResult::new(0x1000, SearchType::Int)]);
+
+    app.remove_result(0);
+
+    assert_eq!(app.state.searches[0].get_result_count(), 0);
+    assert!(app.search_value_request_focus);
 }
 
 #[test]

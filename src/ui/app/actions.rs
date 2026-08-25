@@ -30,12 +30,15 @@ impl App {
         self.clear_change_tracker();
         self.cached_process_handle = None;
         self.editing_result = None;
+        self.cheat_table_status.clear();
+        self.cheat_table_status_at = None;
     }
 
     // ---- Search tabs ---------------------------------------------------
 
     pub fn new_search(&mut self) {
         self.state.new_search();
+        self.search_value_request_focus = true;
         self.clear_change_tracker();
     }
 
@@ -78,6 +81,7 @@ impl App {
         if index < self.state.searches.len() {
             self.state.current_search = index;
             self.editing_result = None;
+            self.search_value_request_focus = self.state.searches[index].get_result_count() == 0;
             self.clear_change_tracker();
         }
     }
@@ -158,6 +162,7 @@ impl App {
             search_context.clear_results(&self.state.freeze_sender);
         }
         self.editing_result = None;
+        self.search_value_request_focus = true;
         self.state.show_results = false;
         self.clear_change_tracker();
     }
@@ -254,6 +259,7 @@ impl App {
                 search_context.old_results.push((*results).clone());
                 let mut new_results = (*results).clone();
                 new_results.remove(index);
+                self.search_value_request_focus = new_results.is_empty();
                 search_context.set_cached_results(new_results);
             }
         }
@@ -385,10 +391,11 @@ impl App {
 
     pub fn save_cheat_table(&mut self) {
         let path = crate::default_cheat_table_path(&self.state.process_name);
-        match crate::save_cheat_table(&self.state, &path) {
-            Ok(()) => self.cheat_table_status = format!("Saved: {}", path.display()),
-            Err(e) => self.cheat_table_status = format!("Save error: {e}"),
-        }
+        self.cheat_table_status = match crate::save_cheat_table(&self.state, &path) {
+            Ok(()) => format!("Saved: {}", path.display()),
+            Err(e) => format!("Save error: {e}"),
+        };
+        self.cheat_table_status_at = Some(std::time::Instant::now());
     }
 
     pub fn load_cheat_table(&mut self) {
@@ -403,6 +410,7 @@ impl App {
             }
             Err(e) => self.cheat_table_status = format!("Load error: {e}"),
         }
+        self.cheat_table_status_at = Some(std::time::Instant::now());
     }
 }
 

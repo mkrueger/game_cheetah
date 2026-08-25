@@ -37,6 +37,10 @@ result-unit-singular = Treffer
 result-unit-plural = Treffer
 
 no-results-label = Keine Vorkommen
+empty-search-title = Noch keine Suche
+empty-search-hint = Wert eingeben und die erste Suche starten.
+empty-results-title = Keine Treffer
+empty-results-hint = Wert ändern oder Datentyp wechseln und erneut suchen.
 too-many-results-hint = Zu viele Treffer zum Durchsehen. Ändere den Wert im Spiel und klicke auf Aktualisieren, um sie einzugrenzen.
 
 undo-button = Rückgängig
@@ -50,6 +54,9 @@ show-results-button = Ergebnisse zeigen
 rename-button = Umbenennen
 edit-button = Bearbeiten
 remove-button = Entfernen
+copy-address-menu = Adresse kopieren
+copy-value-menu = Wert kopieren
+open-memory-editor-menu = Im Speichereditor öffnen
 
 add-search-button = Neu
 
