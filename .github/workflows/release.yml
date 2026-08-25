@@ -99,7 +99,6 @@ jobs:
           gh release upload "$TAG" \
             "${{ env.APP_NAME }}_${VERSION}_amd64.deb" \
             "${{ steps.build-appimage.outputs.app_img }}" \
-            file_id.diz \
             --repo "$REPO" --clobber
 
   windows:
