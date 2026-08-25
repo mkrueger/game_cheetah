@@ -221,7 +221,7 @@ impl App {
 
         let now = Instant::now();
 
-        for (_page_base, idxs) in by_page.iter() {
+        for idxs in by_page.values() {
             // Compute the [min, max) span covering every address in this page
             // bucket. The bucket already shares a 4 KiB page so the span is
             // bounded above by ~PAGE + max-type-len.
