@@ -18,15 +18,17 @@ Use it to search values in a running process, narrow down result sets, edit memo
   - Parallel search and SIMD-aware code paths where they help
   - Memory-region filtering to skip irrelevant or unsafe regions
 - **Live process editing**
+  - Expand grouped process entries to attach to a specific process instance
   - Edit search results directly in the result table
-  - Freeze individual values or all visible results
+  - Freeze individual values or the complete result set
   - Changed-value highlighting for live rows
   - Multiple search tabs for independent searches
 - **Memory editor**
-  - Hex and ASCII memory view
-  - Direct byte inspection and editing
-  - Undo/redo support
-  - Highlighting for the selected result range
+  - Adaptive hex and ASCII view that fills the available width
+  - Direct byte inspection and editing with keyboard navigation
+  - Collapsible numeric inspector with little-/big-endian interpretation
+  - Hex and mapped-pointer views plus result-type selection
+  - Undo/redo and selected-result range highlighting
 - **Cheat tables and workflow helpers**
   - Save and load cheat-table entries
   - Rename, close, and manage searches
@@ -49,7 +51,7 @@ Release artifacts usually include:
 
 - Linux AppImage
 - Linux `.deb` package
-- Windows executable
+- Windows x64 ZIP containing the executable
 - macOS universal `.dmg`
 
 ### Install with Cargo
@@ -106,8 +108,8 @@ Common checks:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-features --locked
 ```
 
 The GitHub Actions workflow runs formatting, linting, tests, dependency audit, and multi-platform release builds.
