@@ -85,7 +85,8 @@ impl App {
 
         match self.app_state {
             AppState::ProcessSelection => {
-                if self.last_process_refresh.elapsed() >= Duration::from_millis(1000) {
+                // Do not reorder rows between mouse-down and mouse-up.
+                if self.last_process_refresh.elapsed() >= Duration::from_millis(1000) && !ctx.input(|input| input.pointer.any_down()) {
                     self.state.update_process_data();
                     self.last_process_refresh = Instant::now();
                 }
@@ -191,7 +192,7 @@ impl App {
 
         let search_value_text = self.state.searches[search_index].search_value_text.clone();
         let string_byte_len = search_value_text.len().max(1);
-        let string_char_count = search_value_text.chars().count().max(1);
+        let string_utf16_byte_len = SearchType::StringUtf16.byte_length_for_text(&search_value_text).unwrap_or(0).max(2);
 
         // Tracking byte width per type. Strings get the user-typed string's
         // byte/unit count as the read window.
@@ -201,7 +202,7 @@ impl App {
             }
             match ty {
                 SearchType::String => string_byte_len,
-                SearchType::StringUtf16 => string_char_count.saturating_mul(2),
+                SearchType::StringUtf16 => string_utf16_byte_len,
                 _ => 0,
             }
         };
@@ -286,5 +287,31 @@ impl App {
             self.cached_process_handle = Some((pid, handle));
         }
         self.cached_process_handle.map(|(_, h)| h)
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use crate::SearchResult;
+
+    #[test]
+    fn change_tracker_reads_and_detects_changes_in_utf16_surrogate_pairs() {
+        let mut app = App::default();
+        app.state.pid = std::process::id() as _;
+        let mut bytes = SearchType::StringUtf16.from_string("😀").unwrap().1;
+        let addr = bytes.as_ptr() as usize;
+        app.state.searches[0].search_value_text = "😀".to_owned();
+        app.state.searches[0].set_cached_results(vec![SearchResult::new(addr, SearchType::StringUtf16)]);
+
+        app.update_change_tracker();
+        assert_eq!(app.value_change_tracker.put(addr, bytes.clone()), Some(bytes.clone()));
+        assert!(!app.changed_addresses.contains_key(&addr));
+
+        bytes[2] = 1; // 😀 -> 😁: only the low surrogate changes.
+        app.last_change_tracker_run = idle_last_run();
+        app.update_change_tracker();
+        assert!(app.changed_addresses.contains_key(&addr));
+        assert_eq!(app.value_change_tracker.put(addr, bytes.clone()), Some(bytes));
     }
 }

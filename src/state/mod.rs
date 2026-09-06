@@ -110,6 +110,10 @@ fn collect_next_previous_values(next_prev: Arc<Mutex<UnknownPrevMap>>) -> Unknow
 #[derive(Debug, Clone)]
 pub struct ProcessInfo {
     pub pid: process_memory::Pid,
+    /// Combined with the PID, identifies a process across list refreshes.
+    pub start_time: u64,
+    /// Full executable path, also the stable key for an aggregated group.
+    pub executable: String,
     pub name: String,
     pub cmd: String,
     pub user: String,
@@ -475,8 +479,7 @@ impl GameCheetahEngine {
         search_context.total_bytes = old_results.len();
         search_context.current_bytes.swap(0, Ordering::SeqCst);
 
-        // Need to dereference Arc to clone the underlying Vec for old_results history
-        search_context.old_results.push((*old_results).clone());
+        search_context.push_undo_state(Arc::clone(&old_results));
 
         let (tx, rx) = SearchContext::result_channel();
         search_context.results_sender = tx;
@@ -518,18 +521,28 @@ impl GameCheetahEngine {
     }
 
     pub fn remove_freezes(&mut self, search_index: usize) {
-        if let Some(search_context) = self.searches.get_mut(search_index) {
-            GameCheetahEngine::remove_freezes_from(&self.freeze_sender, &mut search_context.freezed_addresses);
+        let Some(search_context) = self.searches.get_mut(search_index) else {
+            return;
+        };
+        let addresses = std::mem::take(&mut search_context.freezed_addresses);
+        for addr in addresses {
+            self.unfreeze_if_unused(addr);
         }
     }
 
-    pub fn remove_freezes_from(freeze_sender: &crossbeam_channel::Sender<FreezeMessage>, freezes: &mut std::collections::HashSet<usize>) {
-        for result in freezes.iter() {
-            freeze_sender
-                .send(FreezeMessage::from_addr(MessageCommand::Unfreeze, *result))
-                .unwrap_or_default();
+    /// Release one tab's ownership without stopping another tab's freeze.
+    pub fn remove_freeze(&mut self, search_index: usize, addr: usize) {
+        if let Some(search) = self.searches.get_mut(search_index)
+            && search.freezed_addresses.remove(&addr)
+        {
+            self.unfreeze_if_unused(addr);
         }
-        freezes.clear();
+    }
+
+    fn unfreeze_if_unused(&mut self, addr: usize) {
+        if !self.searches.iter().any(|search| search.freezed_addresses.contains(&addr)) {
+            self.send_freeze(FreezeMessage::from_addr(MessageCommand::Unfreeze, addr));
+        }
     }
 
     pub fn update_process_data(&mut self) {
@@ -559,7 +572,8 @@ impl GameCheetahEngine {
             return;
         };
 
-        // Group processes by cmd to identify duplicates
+        // Use the executable path rather than a representative PID so a
+        // group's identity survives the exit of its oldest member.
         let mut process_groups: HashMap<String, Vec<(&Pid, &Process)>> = HashMap::new();
 
         for (pid, process) in sys.processes() {
@@ -573,23 +587,20 @@ impl GameCheetahEngine {
                 continue;
             }
 
-            // Group by cmd to identify process groups
-            let key = if let Some(cmd) = process.cmd().first() {
-                cmd.to_string_lossy().to_string()
-            } else {
-                continue;
-            };
+            let Some(executable) = process.exe() else { continue };
+            let key = executable.to_string_lossy().into_owned();
             process_groups.entry(key).or_default().push((pid, process));
         }
 
         // For each group, pick the best representative
-        for (_cmd, mut group) in process_groups {
+        for (executable, mut group) in process_groups {
             if group.is_empty() {
                 continue;
             }
 
-            // Calculate total memory for the entire process group
-            let largest_group_memory: u64 = group.iter().map(|(_, p)| p.memory()).max().unwrap_or(0);
+            // Sum RSS, not unique physical memory: shared pages may be
+            // counted more than once. The UI labels this explicitly.
+            let group_memory = group.iter().fold(0u64, |sum, (_, p)| sum.saturating_add(p.memory()));
 
             // Sort by criteria to pick the main process:
             // 1. Lowest PID in the group (usually the parent/main process)
@@ -616,12 +627,12 @@ impl GameCheetahEngine {
                 // Get the process name
                 let name = process.name().to_string_lossy().to_string();
 
-                // Build command line, and note if there are multiple instances
+                // Keep command data free of UI labels and debug formatting.
                 let instance_count = group.len();
-                let cmd = if instance_count > 1 {
-                    format!("{:?} [{} processes]", process.cmd(), instance_count)
+                let cmd = if process.cmd().is_empty() {
+                    executable.clone()
                 } else {
-                    format!("{:?}", process.cmd())
+                    format_command_line(process.cmd())
                 };
 
                 // Keep every group member around so the UI can expand the
@@ -633,8 +644,14 @@ impl GameCheetahEngine {
                         .filter_map(|(pid, process)| {
                             Some(ProcessInfo {
                                 pid: convert_pid(pid.as_u32())?,
+                                start_time: process.start_time(),
+                                executable: executable.clone(),
                                 name: process.name().to_string_lossy().to_string(),
-                                cmd: format!("{:?}", process.cmd()),
+                                cmd: if process.cmd().is_empty() {
+                                    executable.clone()
+                                } else {
+                                    format_command_line(process.cmd())
+                                },
                                 user: process.user_id().map(|u| u.to_string()).unwrap_or_default(),
                                 memory: process.memory() as usize,
                                 instances: Vec::new(),
@@ -647,10 +664,12 @@ impl GameCheetahEngine {
 
                 self.processes.push(ProcessInfo {
                     pid: conv_pid,
+                    start_time: process.start_time(),
+                    executable,
                     name,
                     cmd,
                     user,
-                    memory: largest_group_memory as usize, // Use total group memory instead
+                    memory: usize::try_from(group_memory).unwrap_or(usize::MAX),
                     instances,
                 });
             }
@@ -992,8 +1011,13 @@ impl GameCheetahEngine {
 
         let old_results = search_context.collect_results();
         if old_results.len() < 100000 {
-            search_context.old_results.push((*old_results).clone());
+            search_context.push_undo_state(Arc::clone(&old_results));
+        } else {
+            // A skipped history entry must not leave an older, unrelated
+            // pass available as if it were the immediate predecessor.
+            search_context.old_results.clear();
         }
+        search_context.unknown_comparison = Some(comparison);
 
         // Reset channel/cache
         let (tx, rx) = SearchContext::result_channel();
@@ -1410,6 +1434,28 @@ fn lookup_start_time(pid: process_memory::Pid) -> Option<u64> {
     system.process(Pid::from(pid as usize)).map(|p| p.start_time())
 }
 
+/// Human-readable argument boundaries, not shell syntax intended for execution.
+fn format_command_line(args: &[std::ffi::OsString]) -> String {
+    args.iter()
+        .map(|arg| {
+            let arg = arg.to_string_lossy();
+            if arg.is_empty() || arg.chars().any(|c| c.is_whitespace() || c == '"') {
+                format!(
+                    "\"{}\"",
+                    arg.replace('\\', "\\\\")
+                        .replace('"', "\\\"")
+                        .replace('\n', "\\n")
+                        .replace('\r', "\\r")
+                        .replace('\t', "\\t")
+                )
+            } else {
+                arg.into_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 static SYSTEM: Lazy<Arc<Mutex<(System, Instant)>>> = Lazy::new(|| Arc::new(Mutex::new((System::new(), Instant::now() - Duration::from_secs(1)))));
 
 /// Maximum bytes per scan chunk handed to a worker thread. Picked to balance
@@ -1696,5 +1742,17 @@ mod tests {
         };
 
         assert_eq!(err.to_string(), "Failed to write 0xABCD: denied");
+    }
+
+    #[test]
+    fn command_line_display_preserves_argument_boundaries() {
+        let args = ["/games/My Game/game", "--level", "two words", "", "say \"hello\"", "a\nb"];
+        let args: Vec<_> = args.into_iter().map(std::ffi::OsString::from).collect();
+        assert_eq!(
+            format_command_line(&args),
+            "\"/games/My Game/game\" --level \"two words\" \"\" \"say \\\"hello\\\"\" \"a\\nb\""
+        );
+        assert_eq!(format_command_line(&["/games/game".into(), "--fullscreen".into()]), "/games/game --fullscreen");
+        assert!(format_command_line(&[]).is_empty());
     }
 }

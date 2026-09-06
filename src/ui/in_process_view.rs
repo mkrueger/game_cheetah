@@ -421,6 +421,7 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
     let search_results = search_context.get_result_count();
     let is_search_complete = search_context.search_complete.load(Ordering::SeqCst);
     let can_undo = !search_context.old_results.is_empty();
+    let has_snapshot = search_context.memory_snapshot.read().is_ok_and(|pages| !pages.is_empty());
     let unknown_comparison = search_context.unknown_comparison;
     let searching = search_context.searching;
     let current_bytes = search_context.current_bytes.load(Ordering::Acquire);
@@ -517,7 +518,7 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
                                 app.unknown_search(comparison);
                             }
                         }
-                        let unchanged_enabled = search_results > 0 || can_undo;
+                        let unchanged_enabled = search_results > 0 || has_snapshot;
                         if ui
                             .add_enabled(unchanged_enabled, secondary_btn(fl!(crate::LANGUAGE_LOADER, "unchanged-button")))
                             .clicked()
@@ -703,7 +704,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     let is_string = matches!(search_context.search_type, SearchType::String | SearchType::StringUtf16);
     let show_search_types = matches!(search_context.search_type, SearchType::Guess | SearchType::Unknown);
     let string_byte_len = search_context.search_value_text.len();
-    let string_char_count = search_context.search_value_text.chars().count();
+    let string_utf16_byte_len = SearchType::StringUtf16.byte_length_for_text(&search_context.search_value_text).unwrap_or(0);
     let pid = app.state.pid as process_memory::Pid;
 
     // Build the freezed set + an "all frozen" check once for the whole frame.
@@ -814,7 +815,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     }
                 } else if matches!(result.search_type, SearchType::String | SearchType::StringUtf16) {
                     let utf16 = result.search_type == SearchType::StringUtf16;
-                    let max_bytes = if utf16 { string_char_count * 2 } else { string_byte_len };
+                    let max_bytes = if utf16 { string_utf16_byte_len } else { string_byte_len };
                     read_bytes_from_process(pid, result.addr, max_bytes).unwrap_or_default()
                 } else {
                     Vec::new()

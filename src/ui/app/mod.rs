@@ -10,7 +10,7 @@ mod tick;
 mod update_check;
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     time::{Duration, Instant},
 };
 
@@ -22,7 +22,7 @@ use crate::{
         in_process_view, main_window,
         mem_editor::MemoryEditor,
         process_selection,
-        process_selection::{ProcessSortColumn, SortDirection},
+        process_selection::{ProcessSelectionState, ProcessSortColumn, SortDirection},
         value_cache::ValueCache,
     },
 };
@@ -70,9 +70,8 @@ pub struct App {
 
     pub process_sort_column: ProcessSortColumn,
     pub process_sort_direction: SortDirection,
-    /// Representative pids of process groups the user expanded in the
-    /// process selection table.
-    pub expanded_process_groups: HashSet<process_memory::Pid>,
+    /// Selection and expansion are keyed by process identity, never row index.
+    pub process_selection: ProcessSelectionState,
 
     /// Result row under the pointer last frame; drives the hover-only row
     /// action icons.
@@ -146,7 +145,7 @@ impl Default for App {
             editing_result: None,
             process_sort_column: ProcessSortColumn::default(),
             process_sort_direction: SortDirection::default(),
-            expanded_process_groups: HashSet::new(),
+            process_selection: ProcessSelectionState::default(),
             hovered_result_row: None,
             cheat_table_status: String::new(),
             cheat_table_status_at: None,

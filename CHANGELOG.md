@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Process selection now supports highlighted single-click selection, an explicit
+  Connect button, double-click/Enter to attach, arrow-key navigation, and
+  Ctrl/Cmd+F to focus the search. Launch with `--processes` to open it directly.
+- Process groups show instance counts beside their names; filtering opens
+  matching groups and shows only matching instances. Rows offer full command
+  tooltips and a context menu for copying PIDs and commands.
+
+### Changed
+
+- The process table puts names first, keeps its header visible while scrolling,
+  and reports actual instance counts and explicitly labelled group RSS sums.
+  Commands use readable argument formatting instead of Rust debug output.
+- Process selection survives list reordering using PID and start time. Equal
+  sort values use PID as a tie-breaker, and refresh pauses during mouse presses.
+  Reopening the picker focuses the filter; attaching revalidates the selection.
+
+### Fixed
+
+- Native application windows now use the Cheetah icon instead of the
+  windowing backend's fallback icon.
+- Loading a cheat table stops the previous table's freezes instead of leaving
+  invisible background writes running. Failed loads preserve the current table.
+- Unfreezing, clearing or closing one search no longer stops a freeze still
+  owned by another tab at the same address.
+- Editing UTF-16 results writes UTF-16LE rather than UTF-8; result display,
+  change tracking and memory-editor highlights use the full surrogate-pair width.
+- Undoing an unknown-value search restores its comparison values and initial
+  snapshot, allowing the previous search to be retried without losing matches.
+
 ## [0.7.1] - 2026-08-25
 
 ### Added

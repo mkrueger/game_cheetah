@@ -67,6 +67,15 @@ impl SearchType {
         }
     }
 
+    /// Byte width of a result, including variable-width string encodings.
+    pub fn byte_length_for_text(&self, text: &str) -> Option<usize> {
+        match self {
+            Self::String => Some(text.len()),
+            Self::StringUtf16 => Some(text.encode_utf16().count().saturating_mul(2)),
+            _ => self.fixed_byte_length(),
+        }
+    }
+
     pub fn from_string(&self, txt: &str) -> Result<SearchValue, String> {
         match self {
             SearchType::Byte => {
@@ -108,8 +117,12 @@ impl SearchType {
                 // Unknown doesn't use text input, return empty
                 Ok(SearchValue(*self, vec![]))
             }
-            SearchType::String | SearchType::StringUtf16 => {
+            SearchType::String => {
                 let val = txt.as_bytes().to_vec();
+                Ok(SearchValue(*self, val))
+            }
+            SearchType::StringUtf16 => {
+                let val = txt.encode_utf16().flat_map(u16::to_le_bytes).collect();
                 Ok(SearchValue(*self, val))
             }
         }

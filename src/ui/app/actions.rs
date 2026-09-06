@@ -15,6 +15,9 @@ impl App {
 
     pub fn attach_action(&mut self) {
         self.state.update_process_data();
+        self.last_process_refresh = std::time::Instant::now();
+        self.state.set_focus = true;
+        self.process_selection = Default::default();
         self.app_state = AppState::ProcessSelection;
     }
 
@@ -142,24 +145,20 @@ impl App {
     }
 
     pub fn unknown_search(&mut self, comparison: crate::UnknownComparison) {
-        if let Some(ctx) = self.state.searches.get_mut(self.state.current_search) {
-            ctx.unknown_comparison = Some(comparison);
-        }
         self.state.unknown_search_compare(self.state.current_search, comparison);
     }
 
     pub fn undo_search(&mut self) {
-        if let Some(search_context) = self.state.searches.get_mut(self.state.current_search)
-            && let Some(old) = search_context.old_results.pop()
-        {
-            search_context.set_cached_results(old);
+        if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
+            search_context.undo_last_search();
         }
         self.clear_change_tracker();
     }
 
     pub fn clear_results(&mut self) {
+        self.state.remove_freezes(self.state.current_search);
         if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
-            search_context.clear_results(&self.state.freeze_sender);
+            search_context.clear_results();
         }
         self.editing_result = None;
         self.search_value_request_focus = true;
@@ -192,10 +191,7 @@ impl App {
                 self.state.push_error(AppError::FreezeChannelClosed { source: e.to_string() });
             }
         } else {
-            search_context.freezed_addresses.remove(&result.addr);
-            if let Err(e) = self.state.freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr)) {
-                self.state.push_error(AppError::FreezeChannelClosed { source: e.to_string() });
-            }
+            self.state.remove_freeze(self.state.current_search, result.addr);
         }
     }
 
@@ -203,6 +199,7 @@ impl App {
         let freeze_sender = self.state.freeze_sender.clone();
         let pid = self.state.pid;
         let mut send_error = None;
+        let mut unfreeze_addresses = Vec::new();
         if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
             let results = search_context.collect_results();
             if results.is_empty() {
@@ -211,11 +208,7 @@ impl App {
             let all_frozen = results.iter().all(|r| search_context.freezed_addresses.contains(&r.addr));
             if all_frozen {
                 for result in results.iter() {
-                    if search_context.freezed_addresses.remove(&result.addr)
-                        && let Err(e) = freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
-                    {
-                        send_error.get_or_insert_with(|| AppError::FreezeChannelClosed { source: e.to_string() });
-                    }
+                    unfreeze_addresses.push(result.addr);
                 }
             } else if let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle() {
                 for result in results.iter() {
@@ -237,6 +230,9 @@ impl App {
                 }
             }
         }
+        for addr in unfreeze_addresses {
+            self.state.remove_freeze(self.state.current_search, addr);
+        }
         if let Some(error) = send_error {
             self.state.push_error(error);
         }
@@ -245,26 +241,23 @@ impl App {
     // ---- Result row mutations ------------------------------------------
 
     pub fn remove_result(&mut self, index: usize) {
-        let freeze_sender = self.state.freeze_sender.clone();
-        let mut send_error = None;
+        let mut removed_address = None;
         if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
             let results = search_context.collect_results();
             if index < results.len() {
                 let result = results[index];
-                if search_context.freezed_addresses.remove(&result.addr)
-                    && let Err(e) = freeze_sender.send(FreezeMessage::from_addr(MessageCommand::Unfreeze, result.addr))
-                {
-                    send_error = Some(AppError::FreezeChannelClosed { source: e.to_string() });
-                }
-                search_context.old_results.push((*results).clone());
+                search_context.push_undo_state(std::sync::Arc::clone(&results));
                 let mut new_results = (*results).clone();
                 new_results.remove(index);
+                if !new_results.iter().any(|other| other.addr == result.addr) {
+                    removed_address = Some(result.addr);
+                }
                 self.search_value_request_focus = new_results.is_empty();
                 search_context.set_cached_results(new_results);
             }
         }
-        if let Some(error) = send_error {
-            self.state.push_error(error);
+        if let Some(addr) = removed_address {
+            self.state.remove_freeze(self.state.current_search, addr);
         }
         self.clear_change_tracker();
     }
@@ -400,8 +393,17 @@ impl App {
 
     pub fn load_cheat_table(&mut self) {
         let path = crate::default_cheat_table_path(&self.state.process_name);
-        match crate::load_cheat_table(&path, &self.state.process_name) {
+        self.load_cheat_table_from_path(&path);
+    }
+
+    fn load_cheat_table_from_path(&mut self, path: &std::path::Path) {
+        match crate::load_cheat_table(path, &self.state.process_name) {
             Ok(searches) => {
+                // Only release old freezes after loading succeeds. Shared
+                // addresses are released when their last owning tab is cleared.
+                for index in 0..self.state.searches.len() {
+                    self.state.remove_freezes(index);
+                }
                 self.state.searches = searches;
                 self.state.current_search = 0;
                 self.editing_result = None;
@@ -420,12 +422,119 @@ impl App {
 /// searches use the originally-entered text. Unknown/Guess fall back
 /// to one byte so the highlight is at least visible.
 fn result_byte_length(result: &SearchResult, ctx: &SearchContext) -> usize {
-    if let Some(len) = result.search_type.fixed_byte_length() {
-        return len;
+    result.search_type.byte_length_for_text(&ctx.search_value_text).unwrap_or(1).max(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ADDRESS: usize = 0x1234;
+
+    fn shared_freeze_app() -> (App, crossbeam_channel::Receiver<FreezeMessage>) {
+        let mut app = App::default();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.state.freeze_sender = tx;
+        app.state.process_name = "freeze-regression".to_owned();
+        app.new_search();
+        for search in &mut app.state.searches {
+            search.set_cached_results(vec![SearchResult::new(ADDRESS, SearchType::Int)]);
+            search.freezed_addresses.insert(ADDRESS);
+        }
+        (app, rx)
     }
-    match result.search_type {
-        SearchType::String => ctx.search_value_text.len().max(1),
-        SearchType::StringUtf16 => (ctx.search_value_text.encode_utf16().count() * 2).max(1),
-        _ => 1,
+
+    #[test]
+    fn releasing_one_tab_preserves_another_tabs_freeze() {
+        for action in ["close", "close_others", "clear", "remove", "toggle", "toggle_all"] {
+            let (mut app, rx) = shared_freeze_app();
+            match action {
+                "close" => app.close_search(1),
+                "close_others" => app.close_other_searches(0),
+                "clear" => app.clear_results(),
+                "remove" => app.remove_result(0),
+                "toggle" => app.toggle_freeze(0),
+                "toggle_all" => app.toggle_freeze_all(),
+                _ => unreachable!(),
+            }
+            assert!(app.state.searches[0].freezed_addresses.contains(&ADDRESS), "{action}");
+            assert!(rx.try_recv().is_err(), "{action} stopped another tab's freeze");
+
+            app.state.remove_freezes(0);
+            let message = rx.try_recv().expect("last owner must stop the freeze");
+            assert!(matches!(message.msg, MessageCommand::Unfreeze));
+            assert_eq!(message.addr, ADDRESS);
+            assert!(rx.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn removing_one_typed_result_preserves_same_address_freeze() {
+        let (mut app, rx) = shared_freeze_app();
+        app.state.searches[1].set_cached_results(vec![SearchResult::new(ADDRESS, SearchType::Int), SearchResult::new(ADDRESS, SearchType::Float)]);
+        app.remove_result(0);
+        assert!(app.state.searches[1].freezed_addresses.contains(&ADDRESS));
+        assert!(rx.try_recv().is_err());
+    }
+
+    struct TableFixture(std::path::PathBuf);
+
+    impl TableFixture {
+        fn new(app: &App) -> Self {
+            static NEXT_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!("game-cheetah-table-test-{}-{id}.toml", std::process::id()));
+            std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+            let fixture = Self(path);
+            crate::save_cheat_table(&app.state, &fixture.0).unwrap();
+            fixture
+        }
+    }
+
+    impl Drop for TableFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn loading_table_releases_old_freezes_once() {
+        let (mut app, rx) = shared_freeze_app();
+        let fixture = TableFixture::new(&app);
+        app.load_cheat_table_from_path(&fixture.0);
+        assert!(app.cheat_table_status.starts_with("Loaded:"));
+        assert!(app.state.searches.iter().all(|search| search.freezed_addresses.is_empty()));
+        assert_eq!(app.state.searches[0].get_result_count(), 1);
+        let message = rx.try_recv().expect("loading must stop the old freeze");
+        assert!(matches!(message.msg, MessageCommand::Unfreeze));
+        assert_eq!(message.addr, ADDRESS);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn failed_table_load_preserves_existing_freezes() {
+        let (mut app, rx) = shared_freeze_app();
+        let fixture = TableFixture::new(&app);
+        app.state.process_name = "different-process".to_owned();
+        app.load_cheat_table_from_path(&fixture.0);
+        assert!(app.cheat_table_status.starts_with("Load error:"));
+        assert!(app.state.searches.iter().all(|search| search.freezed_addresses.contains(&ADDRESS)));
+        assert_eq!(app.state.current_search, 1);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn editing_utf16_result_writes_utf16_without_touching_following_bytes() {
+        let mut app = App::default();
+        app.state.pid = std::process::id() as _;
+        let mut bytes = Box::new([0xCCu8; 16]);
+        let result = SearchResult::new(bytes.as_mut_ptr() as usize, SearchType::StringUtf16);
+        app.state.searches[0].search_value_text = "A😀B".to_owned();
+        app.state.searches[0].set_cached_results(vec![result]);
+        assert_eq!(result_byte_length(&result, &app.state.searches[0]), 8);
+        assert!(app.commit_result_value(0, "A😀B"));
+        assert_eq!(&bytes[..8], &[65, 0, 0x3D, 0xD8, 0, 0xDE, 66, 0]);
+        assert!(bytes[8..].iter().all(|byte| *byte == 0xCC));
     }
 }

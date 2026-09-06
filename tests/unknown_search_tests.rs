@@ -201,3 +201,110 @@ fn unknown_compare_unsupported_type_returns_false() {
         }
     }
 }
+
+#[cfg(target_os = "linux")]
+mod undo_regressions {
+    use super::*;
+    use game_cheetah::{App, SearchResult};
+    use std::{
+        sync::atomic::Ordering,
+        time::{Duration, Instant},
+    };
+
+    fn finish(app: &mut App) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !app.state.searches[0].search_complete.load(Ordering::Acquire) {
+            app.state.searches[0].collect_results();
+            assert!(Instant::now() < deadline, "comparison timed out");
+            std::thread::yield_now();
+        }
+        app.state.searches[0].collect_results();
+        app.state.searches[0].update_search_mode();
+    }
+
+    fn packed(value: i32) -> [u8; 8] {
+        let mut bytes = [0; 8];
+        bytes[..4].copy_from_slice(&value.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn unknown_undo_restores_removed_values_and_their_original_baseline() {
+        let mut app = App::default();
+        app.state.pid = std::process::id() as _;
+        let values = Box::new([10i32, 20i32]);
+        let a = values.as_ptr() as usize;
+        let b = a + 4;
+        let ctx = &mut app.state.searches[0];
+        ctx.search_type = SearchType::Unknown;
+        ctx.search_complete.store(true, Ordering::Release);
+        ctx.set_cached_results(vec![SearchResult::new(a, SearchType::Int), SearchResult::new(b, SearchType::Int)]);
+        {
+            let mut previous = ctx.previous_unknown_values.write().unwrap();
+            previous.insert((a, SearchType::Int), packed(10));
+            previous.insert((b, SearchType::Int), packed(10));
+        }
+        app.unknown_search(UnknownComparison::Unchanged);
+        finish(&mut app);
+        assert_eq!(app.state.searches[0].get_result_count(), 1);
+
+        app.undo_search();
+        assert_eq!(app.state.searches[0].get_result_count(), 2);
+        assert_eq!(app.state.searches[0].previous_unknown_values.read().unwrap()[&(b, SearchType::Int)], packed(10));
+        assert_eq!(app.state.searches[0].unknown_comparison, None);
+
+        app.unknown_search(UnknownComparison::Changed);
+        finish(&mut app);
+        let results = app.state.searches[0].collect_results();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].addr, b);
+        assert_eq!(app.state.searches[0].previous_unknown_values.read().unwrap()[&(b, SearchType::Int)], packed(20));
+
+        // Undo must also restore the old value of a surviving result.
+        app.undo_search();
+        app.unknown_search(UnknownComparison::Changed);
+        finish(&mut app);
+        assert_eq!(app.state.searches[0].collect_results()[0].addr, b);
+    }
+
+    #[test]
+    fn unknown_first_pass_undo_restores_snapshot_for_another_comparison() {
+        let mut app = App::default();
+        app.state.pid = std::process::id() as _;
+        let values = Box::new([11i32, 20i32]);
+        let base = values.as_ptr() as usize;
+        let snapshot: Vec<u8> = [10i32, 20].into_iter().flat_map(i32::to_le_bytes).collect();
+        let ctx = &mut app.state.searches[0];
+        ctx.search_type = SearchType::Unknown;
+        ctx.store_memory_snapshot(base, snapshot.clone());
+        ctx.search_complete.store(true, Ordering::Release);
+
+        app.unknown_search(UnknownComparison::Changed);
+        finish(&mut app);
+        assert!(
+            app.state.searches[0]
+                .collect_results()
+                .iter()
+                .any(|r| r.addr == base && r.search_type == SearchType::Int)
+        );
+        assert!(app.state.searches[0].memory_snapshot.read().unwrap().is_empty());
+
+        app.undo_search();
+        let ctx = &app.state.searches[0];
+        assert_eq!(ctx.get_result_count(), 0);
+        assert!(ctx.previous_unknown_values.read().unwrap().is_empty());
+        assert_eq!(&*ctx.memory_snapshot.read().unwrap()[0].1, snapshot.as_slice());
+        assert!(ctx.search_complete.load(Ordering::Acquire));
+
+        app.unknown_search(UnknownComparison::Unchanged);
+        finish(&mut app);
+        let results = app.state.searches[0].collect_results();
+        assert!(results.iter().any(|r| r.addr == base + 4 && r.search_type == SearchType::Int));
+        assert!(!results.iter().any(|r| r.addr == base && r.search_type == SearchType::Int));
+
+        app.clear_results();
+        assert!(app.state.searches[0].old_results.is_empty());
+        assert!(app.state.searches[0].memory_snapshot.read().unwrap().is_empty());
+        assert!(app.state.searches[0].previous_unknown_values.read().unwrap().is_empty());
+    }
+}

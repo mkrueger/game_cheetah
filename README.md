@@ -122,6 +122,10 @@ sudo apt install libgtk-3-dev libasound2-dev libxcb-shape0-dev libxcb-xfixes0-de
 
 ## Development
 
+To preview the process picker directly, run `cargo run -- --processes`.
+Single-click selects a row; double-click, Enter, or **Connect** attaches.
+Use the arrow keys to navigate and Ctrl/Cmd+F to return to the filter.
+
 Common checks:
 
 ```bash

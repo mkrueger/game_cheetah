@@ -1,6 +1,25 @@
 use game_cheetah::{SearchType, SearchValue, search_memory};
 
 #[test]
+fn test_string_encoding_and_byte_lengths() {
+    for text in ["", "AB", "Grüße", "😀", "A😀B"] {
+        let utf8 = SearchType::String.from_string(text).unwrap();
+        assert_eq!(utf8.1, text.as_bytes());
+        assert_eq!(SearchType::String.byte_length_for_text(text), Some(utf8.1.len()));
+
+        let utf16 = SearchType::StringUtf16.from_string(text).unwrap();
+        let expected: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert_eq!(utf16.1, expected);
+        assert_eq!(SearchType::StringUtf16.byte_length_for_text(text), Some(expected.len()));
+        assert_eq!(game_cheetah::ui::in_process_view::decode_string_bytes(&utf16.1, true), text);
+    }
+    assert_eq!(SearchType::StringUtf16.from_string("AB").unwrap().1, [65, 0, 66, 0]);
+    assert_eq!(SearchType::StringUtf16.byte_length_for_text("😀"), Some(4));
+    assert_eq!(SearchType::Int.byte_length_for_text("42"), Some(4));
+    assert_eq!(SearchType::Unknown.byte_length_for_text(""), None);
+}
+
+#[test]
 fn test_search_value_display_handles_invalid_lengths() {
     for search_type in [SearchType::Short, SearchType::Int, SearchType::Int64, SearchType::Float, SearchType::Double] {
         let value = SearchValue(search_type, vec![0x2A]);
