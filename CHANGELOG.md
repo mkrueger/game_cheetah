@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-09-06
+
 ### Added
 
 - Criterion benchmarks cover narrowing through real reads from the benchmark's
@@ -59,6 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The dependency-audit job has permission to publish its GitHub check result
+  instead of failing after a successful vulnerability scan.
 - Running as root (including sudo on Linux/macOS) shows selectable processes
   from all users instead of filtering out non-root-owned games. Normal users
   retain the same-owner filter; operating-system access restrictions still apply.
