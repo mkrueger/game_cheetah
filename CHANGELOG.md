@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The memory inspector can follow readable mapped pointer targets. A separate,
+  bounded Back/Forward history returns to previous addresses without changing
+  memory-write undo/redo history.
 - Search results support stable address/type selection, arrow keys and
   Home/End navigation, F2 to edit, and Delete to remove the selected result.
 - The search type picker includes Byte. Result rows use compact type labels,
@@ -22,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The memory-editor header separates actions from current-address, region and
+  access details. Long region names truncate with tooltips, and the pointer
+  row spans the inspector width with an explicit Open address action.
 - Search controls separate input and primary actions from result count, Undo,
   and Reset search. Counts stay together at narrow window sizes; button labels
   distinguish a fresh scan, narrowing results, and capturing an initial state.

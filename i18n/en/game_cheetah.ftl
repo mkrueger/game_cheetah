@@ -179,6 +179,14 @@ open-config-directory-button = Open
 copy-config-directory-button = Copy path
 
 # Memory editor
+memory-editor-nav-back = Previous address
+memory-editor-nav-forward = Next address
+memory-editor-origin-button = Original address
+memory-editor-origin-tooltip = Return to the address where the editor was opened
+memory-editor-redo-button = Redo
+memory-editor-follow-pointer = Open address
+memory-editor-follow-pointer-tooltip = Jump to the readable pointer target. Use Back to return to the previous address.
+memory-editor-pointer-unavailable = No readable pointer target in the known memory map
 memory-editor-inspector-title = Inspector
 memory-editor-inspector-select-hint = Right-click a byte in the grid to inspect it
 memory-editor-inspector-edit-hint = Enter writes, Esc cancels

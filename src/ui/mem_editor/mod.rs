@@ -16,6 +16,7 @@
 //! - Track per-byte change timestamps for fade-in highlights.
 //! - Wire writes back through `process_memory::PutAddress`.
 
+mod navigation;
 pub mod raw;
 
 use std::collections::HashMap;
@@ -105,6 +106,8 @@ struct EditorData {
     inspector_edit: Option<InspectorEdit>,
     /// Failed inspector submission, retained alongside the edit for retry.
     inspector_error: Option<String>,
+    /// Address navigation is independent of memory-write undo/redo.
+    navigation: navigation::NavigationHistory,
     /// Collapsed state of the bottom inspector panel, so the hex grid can
     /// reclaim its height.
     inspector_collapsed: bool,
@@ -212,6 +215,7 @@ impl Default for MemoryEditor {
                 origin_address: 0,
                 inspector_edit: None,
                 inspector_error: None,
+                navigation: navigation::NavigationHistory::default(),
                 inspector_collapsed: false,
                 current_result_type: None,
                 current_result_byte_length: 1,
@@ -279,6 +283,7 @@ impl MemoryEditor {
         }
 
         self.data.origin_address = address;
+        self.data.navigation = navigation::NavigationHistory::default();
         self.data.inspector_edit = None;
         self.data.inspector_error = None;
         self.data.cache.clear();
@@ -321,6 +326,7 @@ impl MemoryEditor {
         self.data.handle = None;
         self.data.inspector_edit = None;
         self.data.inspector_error = None;
+        self.data.navigation = navigation::NavigationHistory::default();
         self.data.current_result_type = None;
         self.raw.set_result_highlight_range(None);
     }
@@ -426,7 +432,7 @@ impl MemoryEditor {
     /// Programmatically jump to and highlight the original opening address.
     pub fn goto_origin(&mut self) {
         let addr = self.data.origin_address;
-        self.raw.goto_address(addr);
+        self.navigate_to(addr);
     }
 
     pub fn origin_address(&self) -> Address {
@@ -621,16 +627,20 @@ fn format_hex(bytes: &[u8; 8], available: usize, endian: Endianness) -> Option<S
 /// The readable window interpreted as a pointer and resolved against the
 /// target's memory map, so following a struct doesn't need a manual lookup.
 fn format_pointer(regions: &[RegionInfo], bytes: &[u8; 8], available: usize, endian: Endianness) -> Option<String> {
-    if available < 8 {
-        return None;
-    }
-    let value = read_uint(bytes, 8, endian) as usize;
+    let value = pointer_address(bytes, available, endian)?;
     let target = regions
         .iter()
         .find(|region| region.range.contains(&value))
         .map(|region| region.name.clone())
         .unwrap_or_else(|| fl!(crate::LANGUAGE_LOADER, "memory-editor-region-unmapped"));
     Some(format!("0x{value:X}  {target}"))
+}
+
+fn pointer_address(bytes: &[u8; 8], available: usize, endian: Endianness) -> Option<Address> {
+    if available < 8 {
+        return None;
+    }
+    Address::try_from(read_uint(bytes, 8, endian)).ok()
 }
 
 fn quiet_field_visuals(ui: &mut egui::Ui) {
@@ -711,9 +721,11 @@ fn parse_kind(kind: InspectorKind, input: &str, endian: Endianness) -> Result<Ve
     }
 }
 
-pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
-    let pid_t = app.state.pid as process_memory::Pid;
+/// Keep navigation/actions separate from location details so long region
+/// names cannot push the Close button out of the window.
+fn editor_header(editor: &mut MemoryEditor, pid: process_memory::Pid, ui: &mut egui::Ui) -> bool {
     let accent = ui.visuals().selection.bg_fill;
+    let mut close = false;
 
     egui::Panel::top("memory_editor_top")
         .frame(
@@ -731,82 +743,111 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
                         .color(accent),
                 );
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new(format!("PID {}", app.state.pid)).size(13.0).weak().monospace());
-
-                ui.add_space(10.0);
-                let sep_color = egui::Color32::from_rgb(60, 65, 75);
-                let (sep_rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 20.0), egui::Sense::hover());
-                ui.painter().rect_filled(sep_rect, egui::CornerRadius::ZERO, sep_color);
-                ui.add_space(10.0);
-
-                let origin = app.memory_editor.origin_address();
-                ui.label(egui::RichText::new("origin:").size(13.0).weak());
-                ui.label(
-                    egui::RichText::new(format!("0x{origin:X}"))
-                        .size(13.0)
-                        .monospace()
-                        .color(egui::Color32::from_rgb(220, 165, 90)),
-                );
-
-                let region_info = app.memory_editor.region_of(origin).map(|r| {
-                    let access = match (r.readable, r.writable) {
-                        (true, true) => "rw",
-                        (true, false) => "r-",
-                        (false, true) => "-w",
-                        (false, false) => "--",
-                    };
-                    (r.label.clone(), access)
-                });
-                if let Some((label, access)) = region_info {
-                    ui.add_space(8.0);
-                    ui.label(egui::RichText::new(label).size(13.0).weak());
-                    ui.label(egui::RichText::new(format!("[{access}]")).size(12.0).weak().monospace());
-                } else {
-                    ui.add_space(8.0);
-                    ui.label(
-                        egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "memory-editor-region-unmapped"))
-                            .size(13.0)
-                            .weak()
-                            .italics(),
-                    );
-                }
-
+                ui.label(egui::RichText::new(format!("PID {pid}")).size(13.0).weak().monospace());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let btn = |label: String| egui::Button::new(egui::RichText::new(label).size(14.0)).min_size(egui::vec2(0.0, 28.0));
-                    if ui.add(btn(fl!(crate::LANGUAGE_LOADER, "close-button"))).clicked() {
-                        app.close_memory_editor();
+                    if ui.button(fl!(crate::LANGUAGE_LOADER, "close-button")).clicked() {
+                        close = true;
                     }
+                });
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().button_padding = egui::vec2(8.0, 4.0);
+                ui.spacing_mut().interact_size.y = 28.0;
+                let button = |text: String| egui::Button::new(egui::RichText::new(text).size(13.0)).frame(false);
+                ui.horizontal(|ui| {
                     if ui
-                        .add(btn("\u{21A9}  Origin".to_string()))
-                        .on_hover_text("Jump back to the address the editor was opened at")
+                        .add_enabled(editor.can_go_back(), button("⏴".to_owned()))
+                        .on_hover_text(fl!(crate::LANGUAGE_LOADER, "memory-editor-nav-back"))
                         .clicked()
                     {
-                        app.memory_editor.goto_origin();
+                        editor.go_back();
                     }
-
-                    // Undo / Redo buttons. Disabled when there's nothing
-                    // on the respective stack so the user gets immediate
-                    // visual feedback that a shortcut would be a no-op.
-                    let can_redo = app.memory_editor.can_redo();
-                    let can_undo = app.memory_editor.can_undo();
-                    ui.add_space(6.0);
                     if ui
-                        .add_enabled(can_redo, btn("\u{21BB}".to_string()))
-                        .on_hover_text(fl!(crate::LANGUAGE_LOADER, "memory-editor-redo-tooltip"))
+                        .add_enabled(editor.can_go_forward(), button("⏵".to_owned()))
+                        .on_hover_text(fl!(crate::LANGUAGE_LOADER, "memory-editor-nav-forward"))
                         .clicked()
                     {
-                        app.memory_editor.redo();
+                        editor.go_forward();
                     }
                     if ui
-                        .add_enabled(can_undo, btn("\u{21BA}".to_string()))
+                        .add(button(fl!(crate::LANGUAGE_LOADER, "memory-editor-origin-button")))
+                        .on_hover_text(format!(
+                            "{}\n0x{:X}",
+                            fl!(crate::LANGUAGE_LOADER, "memory-editor-origin-tooltip"),
+                            editor.origin_address()
+                        ))
+                        .clicked()
+                    {
+                        editor.goto_origin();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(editor.can_undo(), button(fl!(crate::LANGUAGE_LOADER, "undo-button")))
                         .on_hover_text(fl!(crate::LANGUAGE_LOADER, "memory-editor-undo-tooltip"))
                         .clicked()
                     {
-                        app.memory_editor.undo();
+                        editor.undo();
+                    }
+                    if ui
+                        .add_enabled(editor.can_redo(), button(fl!(crate::LANGUAGE_LOADER, "memory-editor-redo-button")))
+                        .on_hover_text(fl!(crate::LANGUAGE_LOADER, "memory-editor-redo-tooltip"))
+                        .clicked()
+                    {
+                        editor.redo();
+                    }
+                });
+            });
+            ui.separator();
+            let address = editor.current_address();
+            let region = editor.region_of(address);
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "memory-editor-address-label"))
+                        .size(12.0)
+                        .weak(),
+                );
+                ui.add(
+                    egui::Label::new(egui::RichText::new(format!("0x{address:X}")).size(13.0).monospace())
+                        .wrap_mode(egui::TextWrapMode::Extend)
+                        .selectable(true),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(region) = region {
+                        let (access, tooltip) = match (region.readable, region.writable) {
+                            (true, true) => ("rw", fl!(crate::LANGUAGE_LOADER, "memory-editor-access-rw")),
+                            (true, false) => ("r-", fl!(crate::LANGUAGE_LOADER, "memory-editor-access-r")),
+                            (false, true) => ("-w", fl!(crate::LANGUAGE_LOADER, "memory-editor-access-w")),
+                            (false, false) => ("--", fl!(crate::LANGUAGE_LOADER, "memory-editor-access-none")),
+                        };
+                        ui.label(egui::RichText::new(format!("[{access}]")).size(12.0).monospace())
+                            .on_hover_text(tooltip);
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.add(egui::Label::new(egui::RichText::new(&region.label).size(12.0).weak()).truncate())
+                                .on_hover_text(&region.label);
+                        });
+                    } else {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "memory-editor-region-unmapped"))
+                                    .size(12.0)
+                                    .weak(),
+                            )
+                            .truncate(),
+                        );
                     }
                 });
             });
         });
+    close
+}
+
+pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
+    let pid_t = app.state.pid as process_memory::Pid;
+    if editor_header(&mut app.memory_editor, pid_t, ui) {
+        app.close_memory_editor();
+        return;
+    }
 
     // Establish the process handle for this frame at the outer level so
     // both the inspector bottom panel and the hex grid central panel can
@@ -1061,7 +1102,6 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) -> Option<Search
         active_kind: editor.data.current_result_type.and_then(InspectorKind::from_search_type),
     };
     let hex = format_hex(&bytes, available, endian);
-    let pointer = format_pointer(&editor.data.regions, &bytes, available, endian);
 
     ui.add_space(2.0);
     ui.columns(3, |cols| {
@@ -1097,12 +1137,43 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) -> Option<Search
         );
         inspector_column(&mut cols[2], &mut editor.data, &context, &[InspectorKind::F32, InspectorKind::F64]);
         inspector_readonly_row(&mut cols[2], "hex", hex);
-        inspector_readonly_row(&mut cols[2], "ptr", pointer);
     });
+    ui.add_space(3.0);
+    ui.separator();
+    inspector_pointer_row(editor, ui, &bytes, available, endian);
     if let Some(error) = &editor.data.inspector_error {
         ui.colored_label(ui.visuals().error_fg_color, error);
     }
     requested_type
+}
+
+/// The pointer gets the full inspector width: its region name need not fight
+/// with the numeric columns, and following it never writes to the process.
+fn inspector_pointer_row(editor: &mut MemoryEditor, ui: &mut egui::Ui, bytes: &[u8; 8], available: usize, endian: Endianness) {
+    let target = pointer_address(bytes, available, endian);
+    let readable = target.and_then(|address| editor.region_of(address)).is_some_and(|region| region.readable);
+    let text = format_pointer(&editor.data.regions, bytes, available, endian).unwrap_or_else(|| "--".to_owned());
+    let mut follow = false;
+    ui.horizontal(|ui| {
+        ui.add_sized(egui::vec2(30.0, 18.0), egui::Label::new(egui::RichText::new("ptr").monospace().weak()));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            follow = ui
+                .add_enabled(readable, egui::Button::new(fl!(crate::LANGUAGE_LOADER, "memory-editor-follow-pointer")))
+                .on_hover_text(if readable {
+                    fl!(crate::LANGUAGE_LOADER, "memory-editor-follow-pointer-tooltip")
+                } else {
+                    fl!(crate::LANGUAGE_LOADER, "memory-editor-pointer-unavailable")
+                })
+                .clicked();
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(&text).monospace()).truncate().selectable(true))
+                    .on_hover_text(&text);
+            });
+        });
+    });
+    if follow && let Some(address) = target {
+        editor.navigate_to(address);
+    }
 }
 
 /// Derived value that has no meaningful write path, shown in the same grid

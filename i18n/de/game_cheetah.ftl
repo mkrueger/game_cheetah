@@ -182,6 +182,14 @@ open-config-directory-button = Öffnen
 copy-config-directory-button = Pfad kopieren
 
 # Speichereditor
+memory-editor-nav-back = Zur vorherigen Adresse
+memory-editor-nav-forward = Zur nächsten Adresse
+memory-editor-origin-button = Ausgangsadresse
+memory-editor-origin-tooltip = Zur Adresse zurückkehren, an der der Editor geöffnet wurde
+memory-editor-redo-button = Wiederholen
+memory-editor-follow-pointer = Adresse öffnen
+memory-editor-follow-pointer-tooltip = Zum lesbaren Zeigerziel springen. Mit Zurück gelangst du wieder zur vorherigen Adresse.
+memory-editor-pointer-unavailable = Kein lesbares Zeigerziel im bekannten Speicherbereich
 memory-editor-inspector-title = Inspektor
 memory-editor-inspector-select-hint = Rechtsklick auf ein Byte zum Untersuchen
 memory-editor-inspector-edit-hint = Enter schreibt, Esc bricht ab

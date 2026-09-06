@@ -197,3 +197,164 @@ fn inspector_enter_respects_numeric_kind_and_byte_order() {
         }
     }
 }
+
+fn pointer_editor() -> MemoryEditor {
+    let mut editor = MemoryEditor::default();
+    for (address, target, writable, name) in [(0x1000, 0x2000_u64, true, "source"), (0x2000, 0x1000_u64, false, "target")] {
+        let name = format!("{name}-{}", "long-region-name-".repeat(12));
+        editor.raw.set_address_range(name.clone(), address..address + 8);
+        editor.data.regions.push(RegionInfo {
+            range: address..address + 8,
+            label: name.clone(),
+            name,
+            readable: true,
+            writable,
+        });
+        for (offset, byte) in target.to_le_bytes().into_iter().enumerate() {
+            editor.data.cache.insert(address + offset, Some(byte));
+        }
+    }
+    editor.data.origin_address = 0x1000;
+    editor.data.current_result_type = Some(SearchType::Int);
+    editor.raw.goto_address(0x1000);
+    editor
+}
+
+fn navigation_frame(editor: &mut MemoryEditor, ctx: &egui::Context, size: egui::Vec2, events: Vec<egui::Event>) -> egui::FullOutput {
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+            events,
+            ..Default::default()
+        },
+        |ui| {
+            editor_header(editor, 42, ui);
+            egui::CentralPanel::default().show(ui, |ui| {
+                inspector_body(editor, ui);
+            });
+        },
+    );
+    output.textures_delta.clear();
+    output
+}
+
+fn click_navigation(editor: &mut MemoryEditor, ctx: &egui::Context, size: egui::Vec2, label: &str) {
+    navigation_frame(editor, ctx, size, vec![]);
+    let output = navigation_frame(editor, ctx, size, vec![]);
+    let pos = text_rect(&output, label).center();
+    navigation_frame(editor, ctx, size, vec![egui::Event::PointerMoved(pos)]);
+    for pressed in [true, false] {
+        navigation_frame(
+            editor,
+            ctx,
+            size,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+    }
+}
+
+#[test]
+fn header_and_pointer_actions_fit_with_long_region_names() {
+    for size in [egui::vec2(640.0, 420.0), egui::vec2(1100.0, 720.0)] {
+        let mut editor = pointer_editor();
+        let ctx = egui::Context::default();
+        crate::ui::theme::apply(&ctx);
+        navigation_frame(&mut editor, &ctx, size, vec![]);
+        let output = navigation_frame(&mut editor, &ctx, size, vec![]);
+        for label in [
+            fl!(crate::LANGUAGE_LOADER, "close-button"),
+            fl!(crate::LANGUAGE_LOADER, "memory-editor-origin-button"),
+            fl!(crate::LANGUAGE_LOADER, "undo-button"),
+            fl!(crate::LANGUAGE_LOADER, "memory-editor-redo-button"),
+            fl!(crate::LANGUAGE_LOADER, "memory-editor-follow-pointer"),
+            "0x1000".to_owned(),
+            "[rw]".to_owned(),
+            "⏴".to_owned(),
+            "⏵".to_owned(),
+        ] {
+            let rect = text_rect(&output, &label);
+            assert!(
+                egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains_rect(rect),
+                "Offscreen {label}: {rect:?} at {size:?}"
+            );
+        }
+        let pointer = format_pointer(&editor.data.regions, &0x2000_u64.to_le_bytes(), 8, Endianness::Little).unwrap();
+        let pointer_rect = text_rect(&output, &pointer);
+        assert!(
+            pointer_rect.left() < size.x / 3.0,
+            "Pointer row should span the inspector, not only its last column"
+        );
+    }
+}
+
+#[test]
+fn pointer_button_and_header_navigation_round_trip_without_writes() {
+    let size = egui::vec2(1100.0, 720.0);
+    let mut editor = pointer_editor();
+    let cache_before = editor.data.cache.clone();
+    let ctx = egui::Context::default();
+    crate::ui::theme::apply(&ctx);
+    editor.raw.set_caret(Some((0x1000, true)));
+    click_navigation(&mut editor, &ctx, size, &fl!(crate::LANGUAGE_LOADER, "memory-editor-follow-pointer"));
+    assert_eq!(editor.current_address(), 0x2000);
+    assert!(editor.raw.caret().is_none());
+    let output = navigation_frame(&mut editor, &ctx, size, vec![]);
+    text_rect(&output, "0x2000");
+    text_rect(&output, "[r-]");
+    text_rect(&output, &editor.data.regions[1].label);
+    click_navigation(&mut editor, &ctx, size, "⏴");
+    assert_eq!(editor.current_address(), 0x1000);
+    click_navigation(&mut editor, &ctx, size, "⏵");
+    assert_eq!(editor.current_address(), 0x2000);
+    click_navigation(&mut editor, &ctx, size, &fl!(crate::LANGUAGE_LOADER, "memory-editor-origin-button"));
+    assert_eq!(editor.current_address(), 0x1000);
+    assert_eq!(editor.data.cache, cache_before);
+    assert!(editor.data.undo_stack.is_empty());
+    assert!(editor.data.redo_stack.is_empty());
+}
+
+#[test]
+fn pointer_open_is_disabled_for_unmapped_unreadable_and_incomplete_values() {
+    for case in 0..3 {
+        let mut editor = pointer_editor();
+        match case {
+            0 => editor.data.regions[1].range = 0x3000..0x3008,
+            1 => editor.data.regions[1].readable = false,
+            _ => {
+                editor.data.cache.insert(0x1007, None);
+            }
+        }
+        let ctx = egui::Context::default();
+        click_navigation(
+            &mut editor,
+            &ctx,
+            egui::vec2(1100.0, 720.0),
+            &fl!(crate::LANGUAGE_LOADER, "memory-editor-follow-pointer"),
+        );
+        assert_eq!(editor.current_address(), 0x1000, "Invalid pointer case {case} must not navigate");
+        assert!(!editor.can_go_back());
+        assert!(!editor.can_go_forward());
+    }
+}
+
+#[test]
+fn pointer_navigation_honors_big_endian_interpretation() {
+    let mut editor = pointer_editor();
+    editor.raw.set_endianness(Endianness::Big);
+    for (offset, byte) in 0x2000_u64.to_be_bytes().into_iter().enumerate() {
+        editor.data.cache.insert(0x1000 + offset, Some(byte));
+    }
+    let ctx = egui::Context::default();
+    click_navigation(
+        &mut editor,
+        &ctx,
+        egui::vec2(1100.0, 720.0),
+        &fl!(crate::LANGUAGE_LOADER, "memory-editor-follow-pointer"),
+    );
+    assert_eq!(editor.current_address(), 0x2000);
+}
