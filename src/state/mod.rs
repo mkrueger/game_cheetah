@@ -33,6 +33,20 @@ pub use unknown::compare_values;
 
 type UnknownPrevMap = HashMap<(usize, SearchType), [u8; 8]>;
 
+/// Root may select other users' processes. Use the effective Unix UID, not
+/// USER/SUDO_USER or the real UID (which can differ after privilege changes).
+/// Other platforms retain the existing same-owner policy.
+fn process_owner_is_visible(owner: Option<&Uid>, current_owner: Option<&Uid>, effective_owner: Option<&Uid>) -> bool {
+    #[cfg(unix)]
+    if effective_owner.is_some_and(|uid| **uid == 0) {
+        return true;
+    }
+    #[cfg(not(unix))]
+    let _ = effective_owner;
+
+    owner == current_owner
+}
+
 /// Initial-scan chunk size chosen from local profiling:
 /// - whole-region scheduling left large mappings as long-running Rayon tasks;
 ///   chunking was consistently faster in flamegraph-driven measurements.
@@ -578,8 +592,9 @@ impl GameCheetahEngine {
         let mut process_groups: HashMap<String, Vec<(&Pid, &Process)>> = HashMap::new();
 
         for (pid, process) in sys.processes() {
-            // Skip processes with no memory or different user
-            if process.memory() == 0 || process.user_id() != cur_process.user_id() {
+            // Root can inspect all owners; ordinary users retain the owner
+            // filter. Kernel/no-memory exclusions are independent of privileges.
+            if process.memory() == 0 || !process_owner_is_visible(process.user_id(), cur_process.user_id(), cur_process.effective_user_id()) {
                 continue;
             }
 
@@ -1634,6 +1649,44 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn root_process_picker_includes_all_owners() {
+        let root: Uid = "0".parse().unwrap();
+        let user: Uid = "1000".parse().unwrap();
+        let other: Uid = "1001".parse().unwrap();
+        for owner in [Some(&root), Some(&user), Some(&other), None] {
+            assert!(process_owner_is_visible(owner, Some(&root), Some(&root)));
+            // Effective root also applies when the real UID is a normal user.
+            assert!(process_owner_is_visible(owner, Some(&user), Some(&root)));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ordinary_process_picker_remains_same_owner_only() {
+        let root: Uid = "0".parse().unwrap();
+        let user: Uid = "1000".parse().unwrap();
+        let other: Uid = "1001".parse().unwrap();
+        assert!(process_owner_is_visible(Some(&user), Some(&user), Some(&user)));
+        for owner in [Some(&root), Some(&other), None] {
+            assert!(!process_owner_is_visible(owner, Some(&user), Some(&user)));
+        }
+        // A root real UID must not grant the exception after dropping privileges.
+        assert!(!process_owner_is_visible(Some(&other), Some(&root), Some(&user)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_effective_uid_does_not_grant_root_visibility() {
+        let root: Uid = "0".parse().unwrap();
+        let user: Uid = "1000".parse().unwrap();
+        assert!(!process_owner_is_visible(Some(&user), Some(&root), None));
+        assert!(!process_owner_is_visible(Some(&user), None, None));
+        assert!(process_owner_is_visible(Some(&user), Some(&user), None));
+        assert!(process_owner_is_visible(None, None, None)); // Existing unknown-owner behavior.
+    }
 
     #[test]
     fn collect_next_previous_values_takes_unique_map() {

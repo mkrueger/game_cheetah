@@ -26,7 +26,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: refs/tags/${{ github.event.inputs.tag || github.ref_name }}
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Verify tag matches package version
+        run: bash tools/check_release_version.sh "$TAG"
       - name: Open the release unless it is already there
         env:
           GH_TOKEN: ${{ github.token }}
@@ -35,7 +39,7 @@ jobs:
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             echo "$TAG already has a release, attaching to it"
           else
-            gh release create "$TAG" --repo "$REPO" --draft --title "$TAG" --generate-notes
+            gh release create "$TAG" --repo "$REPO" --verify-tag --draft --title "$TAG" --generate-notes
             echo "opened a draft release for $TAG - review it and press publish"
           fi
 
@@ -45,7 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: refs/tags/${{ github.event.inputs.tag || github.ref_name }}
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
@@ -61,7 +65,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install build-essential libgtk-3-dev libasound2-dev libxcb-shape0-dev libxcb-xfixes0-dev
       - name: Install cargo deb
-        run: cargo install cargo-deb --version 2.7.0
+        run: cargo install cargo-deb --version 2.7.0 --locked
       - name: Prepare package metadata
         id: package-metadata
         run: |
@@ -70,7 +74,7 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
       - name: Build deb
         run: |
-          DEB=$(cargo deb)
+          DEB=$(cargo deb --locked)
           echo "Copy $DEB to ${{ env.APP_NAME }}_${VERSION}_amd64.deb"
           mv "$DEB" "${{ env.APP_NAME }}_${VERSION}_amd64.deb"
       - name: Build AppImage
@@ -107,7 +111,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: refs/tags/${{ github.event.inputs.tag || github.ref_name }}
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
@@ -147,7 +151,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: refs/tags/${{ github.event.inputs.tag || github.ref_name }}
       - name: Setup Python
         uses: actions/setup-python@v6
         with:

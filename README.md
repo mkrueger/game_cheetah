@@ -80,7 +80,7 @@ Game Cheetah is also published on crates.io:
 cargo install game-cheetah
 ```
 
-This requires a recent Rust toolchain. The current minimum supported Rust version is listed in `Cargo.toml`.
+This requires Rust **1.95 or newer**. The minimum supported Rust version is also listed in `Cargo.toml` and tested in CI.
 
 ## Linux permissions
 
@@ -134,7 +134,17 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo test --all-features --locked
 ```
 
-The GitHub Actions workflow runs formatting, linting, tests, dependency audit, and multi-platform release builds.
+GitHub Actions runs Linux formatting/lint checks and tests on stable Rust, plus
+native Windows/macOS builds and tests. A separate Linux matrix entry builds all
+targets and runs the tests with the pinned minimum Rust version. Linux release
+guard tests also require Bash and `jq` (available on GitHub's Ubuntu runners).
+Dependency auditing runs in its own workflow.
+
+Release packaging runs for version tags, or manually for an existing tag. Before
+opening a release draft or building packages, the workflow verifies that the tag
+is exactly `v` followed by the Cargo package version. All package builds use
+`--locked`; Debian packaging uses a pinned, lockfile-resolved `cargo-deb` install.
+The published application version is not changed automatically when tagging.
 
 ## Similar tools
 

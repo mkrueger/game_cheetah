@@ -1,7 +1,7 @@
 name: Run Tests
 
-# Every commit gets the cheap checks. Packaging for the three platforms only
-# happens when a tag is pushed - see release.yml.
+# Every commit gets Linux lint checks, an MSRV build/test run and native
+# Windows/macOS builds and tests. Packaging remains in release.yml.
 permissions:
   contents: read
 on:
@@ -33,5 +33,39 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Check clippy
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - name: Run tests
+        run: cargo test --all-features --locked
+
+  platform_tests:
+    name: Build/test (${{ matrix.os }}, Rust ${{ matrix.toolchain }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Keep this pinned toolchain in sync with package.rust-version.
+          - os: ubuntu-latest
+            toolchain: "1.95.0"
+          - os: windows-latest
+            toolchain: stable
+          - os: macos-latest
+            toolchain: stable
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libgtk-3-dev libasound2-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
+      - name: Build all targets
+        run: cargo build --all-targets --all-features --locked
       - name: Run tests
         run: cargo test --all-features --locked

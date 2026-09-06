@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The minimum supported Rust version is now correctly declared as 1.95 and
+  tested in CI. Windows and macOS builds/tests run before release tagging.
+- Release packaging validates the tag against the Cargo package version before
+  creating a release draft. Debian builds and the pinned cargo-deb installation
+  now use locked dependencies.
 - Narrowing prepares numeric comparisons once per pass and reads nearby hits
   together through bounded, reusable buffers. Failed grouped reads fall back
   to individual values, preserving readable hits around inaccessible memory.
@@ -54,6 +59,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Running as root (including sudo on Linux/macOS) shows selectable processes
+  from all users instead of filtering out non-root-owned games. Normal users
+  retain the same-owner filter; operating-system access restrictions still apply.
 - Linux narrowing rejects partial process-memory reads instead of comparing
   unread bytes, including reads that cross into a protected memory page.
 - Enter now commits memory-inspector edits even when the text field loses
