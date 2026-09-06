@@ -182,6 +182,18 @@ open-config-directory-button = Öffnen
 copy-config-directory-button = Pfad kopieren
 
 # Speichereditor
+memory-editor-inspector-title = Inspektor
+memory-editor-inspector-select-hint = Rechtsklick auf ein Byte zum Untersuchen
+memory-editor-inspector-edit-hint = Enter schreibt, Esc bricht ab
+memory-editor-inspector-type-label = Typ:
+memory-editor-inspector-type-tooltip = Den aktuellen Treffer als anderen numerischen Datentyp interpretieren
+memory-editor-inspector-variable-type-tooltip = Treffer mit variabler Länge können im Editor nicht umgedeutet werden
+memory-editor-inspector-endian-tooltip = Byte-Reihenfolge wechseln
+memory-editor-inspector-unsigned = Ohne Vorzeichen
+memory-editor-inspector-signed = Mit Vorzeichen
+memory-editor-inspector-float-raw = Gleitkomma / Rohdaten
+memory-editor-inspector-readable-hint = Benötigt { $count } lesbare Bytes
+memory-editor-inspector-write-failed = Schreiben nach 0x{ $address } fehlgeschlagen. Prüfe Prozess und Schreibrechte. Die Eingabe bleibt für einen erneuten Versuch erhalten.
 memory-editor-title = Speichereditor
 memory-editor-pid = PID { $pid }
 memory-editor-address-label = Adresse

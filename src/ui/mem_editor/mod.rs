@@ -103,6 +103,8 @@ struct EditorData {
     /// into and the partial text. Cleared on submit, on Escape, or
     /// whenever the highlighted address moves away.
     inspector_edit: Option<InspectorEdit>,
+    /// Failed inspector submission, retained alongside the edit for retry.
+    inspector_error: Option<String>,
     /// Collapsed state of the bottom inspector panel, so the hex grid can
     /// reclaim its height.
     inspector_collapsed: bool,
@@ -129,7 +131,7 @@ struct EditorData {
 /// The numeric interpretations exposed by the bottom data-inspector
 /// panel. Each kind is editable: typing a value and pressing Enter
 /// writes the equivalent bytes back to the target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum InspectorKind {
     U8,
     I8,
@@ -209,6 +211,7 @@ impl Default for MemoryEditor {
                 regions: Vec::new(),
                 origin_address: 0,
                 inspector_edit: None,
+                inspector_error: None,
                 inspector_collapsed: false,
                 current_result_type: None,
                 current_result_byte_length: 1,
@@ -276,6 +279,8 @@ impl MemoryEditor {
         }
 
         self.data.origin_address = address;
+        self.data.inspector_edit = None;
+        self.data.inspector_error = None;
         self.data.cache.clear();
         self.data.change_tracker.clear();
         self.data.undo_stack.clear();
@@ -315,6 +320,7 @@ impl MemoryEditor {
         self.data.cache.clear();
         self.data.handle = None;
         self.data.inspector_edit = None;
+        self.data.inspector_error = None;
         self.data.current_result_type = None;
         self.raw.set_result_highlight_range(None);
     }
@@ -942,7 +948,13 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) -> Option<Search
         if collapse_arrow(ui, collapsed, accent).clicked() {
             toggle_collapsed = true;
         }
-        let title = egui::Button::new(egui::RichText::new("Inspector").size(14.0).strong().color(accent)).frame(false);
+        let title = egui::Button::new(
+            egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "memory-editor-inspector-title"))
+                .size(14.0)
+                .strong()
+                .color(accent),
+        )
+        .frame(false);
         if ui.add(title).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
             toggle_collapsed = true;
         }
@@ -952,11 +964,20 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) -> Option<Search
                 ui.label(egui::RichText::new(format!("@ 0x{addr:X}")).size(13.0).monospace().weak());
             }
             None => {
-                ui.label(egui::RichText::new("right-click a byte in the grid to inspect it").size(13.0).weak().italics());
+                ui.label(
+                    egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "memory-editor-inspector-select-hint"))
+                        .size(13.0)
+                        .weak()
+                        .italics(),
+                );
             }
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new("Enter writes, Esc cancels").size(12.0).weak());
+            ui.label(
+                egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "memory-editor-inspector-edit-hint"))
+                    .size(12.0)
+                    .weak(),
+            );
             ui.add_space(10.0);
             if let Some(current_type) = editor.current_result_type() {
                 let mut selected = current_type;
@@ -969,7 +990,9 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) -> Option<Search
                             ui.selectable_value(&mut selected, ty, ty.get_short_description_text());
                         }
                     });
-                    response.response.on_hover_text("Reinterpret the current result as a different numeric type");
+                    response
+                        .response
+                        .on_hover_text(fl!(crate::LANGUAGE_LOADER, "memory-editor-inspector-type-tooltip"));
                     if selected != current_type {
                         requested_type = Some(selected);
                     }
@@ -978,9 +1001,13 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) -> Option<Search
                         let _ = combo.show_ui(ui, |_| {});
                     })
                     .response
-                    .on_hover_text("Variable-length results cannot be reinterpreted from the editor");
+                    .on_hover_text(fl!(crate::LANGUAGE_LOADER, "memory-editor-inspector-variable-type-tooltip"));
                 }
-                ui.label(egui::RichText::new("Type:").size(12.0).weak());
+                ui.label(
+                    egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "memory-editor-inspector-type-label"))
+                        .size(12.0)
+                        .weak(),
+                );
                 ui.add_space(10.0);
             }
             let label = match endian {
@@ -990,7 +1017,7 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) -> Option<Search
             let toggle = egui::Button::new(egui::RichText::new(label).size(12.0).color(accent)).frame(false);
             if ui
                 .add(toggle)
-                .on_hover_text("Switch byte order")
+                .on_hover_text(fl!(crate::LANGUAGE_LOADER, "memory-editor-inspector-endian-tooltip"))
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .clicked()
             {
@@ -1008,6 +1035,7 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) -> Option<Search
             Endianness::Big => Endianness::Little,
         });
         editor.data.inspector_edit = None;
+        editor.data.inspector_error = None;
     }
 
     let Some(addr) = highlight.filter(|_| !editor.data.inspector_collapsed) else {
@@ -1021,6 +1049,7 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) -> Option<Search
         && edit.address != addr
     {
         editor.data.inspector_edit = None;
+        editor.data.inspector_error = None;
     }
 
     let endian = editor.raw.endianness();
@@ -1036,9 +1065,21 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) -> Option<Search
 
     ui.add_space(2.0);
     ui.columns(3, |cols| {
-        cols[0].label(egui::RichText::new("Unsigned").size(12.0).weak());
-        cols[1].label(egui::RichText::new("Signed").size(12.0).weak());
-        cols[2].label(egui::RichText::new("Float / raw").size(12.0).weak());
+        cols[0].label(
+            egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "memory-editor-inspector-unsigned"))
+                .size(12.0)
+                .weak(),
+        );
+        cols[1].label(
+            egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "memory-editor-inspector-signed"))
+                .size(12.0)
+                .weak(),
+        );
+        cols[2].label(
+            egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "memory-editor-inspector-float-raw"))
+                .size(12.0)
+                .weak(),
+        );
         for col in &mut cols[..] {
             col.separator();
         }
@@ -1058,6 +1099,9 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) -> Option<Search
         inspector_readonly_row(&mut cols[2], "hex", hex);
         inspector_readonly_row(&mut cols[2], "ptr", pointer);
     });
+    if let Some(error) = &editor.data.inspector_error {
+        ui.colored_label(ui.visuals().error_fg_color, error);
+    }
     requested_type
 }
 
@@ -1116,6 +1160,8 @@ fn inspector_column(ui: &mut egui::Ui, data: &mut EditorData, ctx: &InspectorCon
 
             let response = ui.add(
                 egui::TextEdit::singleline(&mut buf)
+                    .id_salt(("inspector-value", ctx.addr, kind))
+                    .interactive(displayed_value.is_some())
                     .desired_width((ui.available_width() - 4.0).max(60.0))
                     .margin(egui::Margin::symmetric(4, 1))
                     .font(egui::TextStyle::Monospace)
@@ -1123,10 +1169,13 @@ fn inspector_column(ui: &mut egui::Ui, data: &mut EditorData, ctx: &InspectorCon
             );
 
             if displayed_value.is_none() {
-                response.clone().on_hover_text(format!("needs {} readable bytes", kind.byte_count()));
+                response
+                    .clone()
+                    .on_hover_text(fl!(crate::LANGUAGE_LOADER, "memory-editor-inspector-readable-hint", count = kind.byte_count()));
             }
 
             if response.changed() {
+                data.inspector_error = None;
                 data.inspector_edit = Some(InspectorEdit {
                     address: ctx.addr,
                     kind,
@@ -1134,24 +1183,48 @@ fn inspector_column(ui: &mut egui::Ui, data: &mut EditorData, ctx: &InspectorCon
                 });
             }
 
-            let enter_pressed = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let escape_pressed = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape));
+            // A single-line TextEdit surrenders focus on Enter before it
+            // returns its Response. Include lost_focus or the commit is lost.
+            let owns_edit = matches!(&data.inspector_edit, Some(edit) if edit.kind == kind && edit.address == ctx.addr);
+            let had_focus = response.has_focus() || response.lost_focus();
+            let enter_pressed = owns_edit && had_focus && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let escape_pressed = owns_edit && had_focus && ui.input(|i| i.key_pressed(egui::Key::Escape));
 
             // Commit only on Enter. Live-writing while typing is too easy
             // to trigger accidentally and can produce surprising transient
             // values in the target process.
             if enter_pressed {
-                if let Ok(write_bytes) = parse_kind(kind, &buf, ctx.endian) {
-                    // Inspector writes don't move the hex-grid caret;
-                    // record the inspector's address as both the before
-                    // and after caret so undo/redo restore the user's
-                    // focus point.
-                    apply_write(data, ctx.addr, &write_bytes, Some((ctx.addr, false)));
-                    data.inspector_edit = None;
-                    response.surrender_focus();
+                match parse_kind(kind, &buf, ctx.endian) {
+                    Ok(write_bytes) => {
+                        // Only discard the edit after a successful write.
+                        // A failure must remain visible and retryable.
+                        if apply_write(data, ctx.addr, &write_bytes, Some((ctx.addr, false))) {
+                            data.inspector_edit = None;
+                            data.inspector_error = None;
+                            response.surrender_focus();
+                        } else {
+                            data.inspector_error = Some(fl!(
+                                crate::LANGUAGE_LOADER,
+                                "memory-editor-inspector-write-failed",
+                                address = format!("{:X}", ctx.addr)
+                            ));
+                            response.request_focus();
+                        }
+                    }
+                    Err(error) => {
+                        data.inspector_error = Some(fl!(
+                            crate::LANGUAGE_LOADER,
+                            "memory-editor-error-invalid-value",
+                            kind = kind.label(),
+                            input = buf.clone(),
+                            error = error
+                        ));
+                        response.request_focus();
+                    }
                 }
-            } else if escape_pressed || response.lost_focus() {
+            } else if owns_edit && (escape_pressed || response.lost_focus()) {
                 data.inspector_edit = None;
+                data.inspector_error = None;
             }
         });
     }
@@ -1256,6 +1329,9 @@ fn change_intensity(data: &EditorData, addr: Address) -> f32 {
     }
     1.0 - (elapsed.as_secs_f32() / CHANGE_FADE.as_secs_f32())
 }
+
+#[cfg(test)]
+mod interaction_tests;
 
 #[cfg(test)]
 mod tests {

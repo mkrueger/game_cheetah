@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Enter now commits memory-inspector edits even when the text field loses
+  focus on submission. Invalid input and failed writes retain the edit with
+  a visible error instead of silently discarding it. Inspector labels and
+  keyboard/tooltips now use the selected language.
 - Native application windows now use the Cheetah icon instead of the
   windowing backend's fallback icon.
 - Loading a cheat table stops the previous table's freezes instead of leaving

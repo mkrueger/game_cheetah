@@ -179,6 +179,18 @@ open-config-directory-button = Open
 copy-config-directory-button = Copy path
 
 # Memory editor
+memory-editor-inspector-title = Inspector
+memory-editor-inspector-select-hint = Right-click a byte in the grid to inspect it
+memory-editor-inspector-edit-hint = Enter writes, Esc cancels
+memory-editor-inspector-type-label = Type:
+memory-editor-inspector-type-tooltip = Reinterpret the current result as a different numeric type
+memory-editor-inspector-variable-type-tooltip = Variable-length results cannot be reinterpreted from the editor
+memory-editor-inspector-endian-tooltip = Switch byte order
+memory-editor-inspector-unsigned = Unsigned
+memory-editor-inspector-signed = Signed
+memory-editor-inspector-float-raw = Float / raw
+memory-editor-inspector-readable-hint = Needs { $count } readable bytes
+memory-editor-inspector-write-failed = Writing to 0x{ $address } failed. Check the process and write permissions. Your input is kept for another attempt.
 memory-editor-title = Memory editor
 memory-editor-pid = PID { $pid }
 memory-editor-address-label = Address
