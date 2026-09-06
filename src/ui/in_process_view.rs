@@ -4,7 +4,7 @@ use i18n_embed_fl::fl;
 use process_memory::{TryIntoProcessHandle, copy_address};
 
 use crate::{
-    SearchMode, SearchType, SearchValue, UnknownComparison,
+    SearchMode, SearchResult, SearchType, SearchValue, UnknownComparison,
     ui::app::{App, AppState, CHANGE_HIGHLIGHT},
 };
 
@@ -20,7 +20,7 @@ const BROWSE_RESULT_LIMIT: usize = 1000;
 const SEARCH_FIELD_WIDTH: f32 = 220.0;
 
 const FREEZE_ICON: &str = "\u{2744}";
-const EDIT_ICON: &str = "\u{270F}";
+const MEMORY_ICON: &str = "…";
 /// The ✕/✗/✘ dingbats are not in the bundled fonts and render as tofu; the
 /// multiplication sign is, so it stands in for the close glyph.
 const REMOVE_ICON: &str = "\u{00D7}";
@@ -199,7 +199,11 @@ fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
             // F2 starts renaming the active tab when nothing else has
             // focus (so the user can't trigger it while typing in the
             // value-input or any other text field).
-            if app.renaming_search_index.is_none() && !ui.memory(|m| m.focused().is_some()) && ui.input(|i| i.key_pressed(egui::Key::F2)) {
+            if app.renaming_search_index.is_none()
+                && app.selected_result.is_none()
+                && !ui.memory(|m| m.focused().is_some())
+                && ui.input(|i| i.key_pressed(egui::Key::F2))
+            {
                 rename = Some(app.state.current_search);
             }
 
@@ -400,7 +404,8 @@ fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn search_area(app: &mut App, ui: &mut egui::Ui) {
-    let undo_shortcut = !ui.memory(|memory| memory.focused().is_some())
+    let undo_shortcut = ui.memory(|memory| memory.focused().is_none() || memory.has_focus(result_table_focus_id()))
+        && !egui::Popup::is_any_open(ui.ctx())
         && ui.input(|input| input.modifiers.command && !input.modifiers.shift && input.key_pressed(egui::Key::Z));
     if undo_shortcut
         && app
@@ -416,8 +421,8 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
     let Some(search_context) = app.state.searches.get(search_index) else {
         return;
     };
-    let selected_type = search_context.search_type;
-    let value_text = search_context.search_value_text.clone();
+    let mut selected_type = search_context.search_type;
+    let mut value_text = search_context.search_value_text.clone();
     let search_results = search_context.get_result_count();
     let is_search_complete = search_context.search_complete.load(Ordering::SeqCst);
     let can_undo = !search_context.old_results.is_empty();
@@ -426,131 +431,132 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
     let searching = search_context.searching;
     let current_bytes = search_context.current_bytes.load(Ordering::Acquire);
     let total_bytes = search_context.total_bytes;
+    if search_results == 0 && app.selected_result.is_some() {
+        app.clear_result_interaction();
+    }
 
-    let parse_error: Option<String> = if !value_text.is_empty() && selected_type != SearchType::Unknown {
-        selected_type.from_string(&value_text).err()
-    } else {
-        None
-    };
-    let show_type_picker = matches!(searching, SearchMode::None) && search_results == 0;
+    let idle = matches!(searching, SearchMode::None);
+    let show_type_picker = idle && search_results == 0 && !has_snapshot;
+    let mut enter_search = false;
+    let mut parse_error = None;
 
     let accent = ui.visuals().selection.bg_fill;
     let surface = egui::Color32::from_rgb(22, 25, 30);
     let card_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(55, 62, 72));
+    let secondary_btn = |label: String| egui::Button::new(egui::RichText::new(label).size(14.0)).min_size(egui::vec2(0.0, 30.0));
+
+    // Wrap whole input/action groups, never individual words in a count.
+    // Keep secondary actions on a separate, predictable status row.
+    let card_width = ui.available_width();
+    let selected_text_color = ui.visuals().selection.stroke.color;
     let primary_btn = |label: String| {
-        egui::Button::new(egui::RichText::new(label).size(14.0).strong().color(egui::Color32::WHITE))
+        egui::Button::new(egui::RichText::new(label).size(14.0).strong().color(selected_text_color))
             .fill(accent)
             .stroke(egui::Stroke::new(1.0, accent))
             .min_size(egui::vec2(110.0, 30.0))
     };
-    let secondary_btn = |label: String| egui::Button::new(egui::RichText::new(label).size(14.0)).min_size(egui::vec2(0.0, 30.0));
-
-    // Input and its actions form one workflow, so they share one compact,
-    // wrapping toolbar instead of occupying two unrelated rows.
     egui::Frame::new()
         .fill(surface)
         .stroke(card_stroke)
         .corner_radius(egui::CornerRadius::same(8))
         .inner_margin(egui::Margin::symmetric(12, 10))
         .show(ui, |ui| {
+            ui.set_width((card_width - 26.0).max(0.0));
             ui.horizontal_wrapped(|ui| {
-                if selected_type == SearchType::Unknown {
-                    ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "search-type-label")).size(14.0));
-                    type_picker(app, ui, show_type_picker, selected_type);
-                    ui.add_space(8.0);
-                    ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "unknown-search-description")).size(13.0).weak());
-                } else {
-                    ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "value-label")).size(14.0));
-                    let mut buf = value_text.clone();
-                    let response = ui.add(
-                        egui::TextEdit::singleline(&mut buf)
-                            .hint_text(fl!(
-                                crate::LANGUAGE_LOADER,
-                                "search-value-label",
-                                valuetype = selected_type.get_description_text()
-                            ))
-                            .desired_width(SEARCH_FIELD_WIDTH)
-                            .margin(egui::Margin::symmetric(10, 8))
-                            .text_color_opt(if parse_error.is_some() {
-                                Some(egui::Color32::from_rgb(220, 120, 120))
-                            } else {
-                                None
-                            }),
-                    );
-                    if app.search_value_request_focus {
-                        response.request_focus();
-                        app.search_value_request_focus = false;
-                    }
-                    if response.changed()
-                        && let Some(ctx) = app.state.searches.get_mut(search_index)
-                    {
-                        ctx.search_value_text = buf;
-                    }
-                    if (response.has_focus() || response.lost_focus())
-                        && matches!(searching, SearchMode::None)
-                        && ui.input(|input| input.key_pressed(egui::Key::Enter))
-                    {
-                        app.start_search();
-                    }
-                    type_picker(app, ui, show_type_picker, selected_type);
-                }
-
-                if matches!(searching, SearchMode::None) {
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.add_space(6.0);
-
-                    if !is_search_complete {
-                        let enabled = parse_error.is_none() || selected_type == SearchType::Unknown;
-                        if ui
-                            .add_enabled(enabled, primary_btn(fl!(crate::LANGUAGE_LOADER, "initial-search-button")))
-                            .clicked()
-                        {
-                            app.start_search();
-                        }
-                    } else if selected_type == SearchType::Unknown {
-                        for (label, comparison) in [
-                            (fl!(crate::LANGUAGE_LOADER, "decreased-button"), UnknownComparison::Decreased),
-                            (fl!(crate::LANGUAGE_LOADER, "increased-button"), UnknownComparison::Increased),
-                            (fl!(crate::LANGUAGE_LOADER, "changed-button"), UnknownComparison::Changed),
-                        ] {
-                            if ui.add(secondary_btn(label)).clicked() {
-                                app.unknown_search(comparison);
+                ui.add_enabled_ui(idle, |ui| {
+                    ui.horizontal(|ui| {
+                        if selected_type == SearchType::Unknown {
+                            ui.label(fl!(crate::LANGUAGE_LOADER, "search-type-label"));
+                        } else {
+                            ui.label(fl!(crate::LANGUAGE_LOADER, "value-label"));
+                            let response = ui.add(
+                                egui::TextEdit::singleline(&mut value_text)
+                                    .id_salt("search_value_input")
+                                    .hint_text(fl!(
+                                        crate::LANGUAGE_LOADER,
+                                        "search-value-label",
+                                        valuetype = selected_type.get_short_description_text()
+                                    ))
+                                    .desired_width(SEARCH_FIELD_WIDTH.min((card_width - 360.0).max(120.0)))
+                                    .margin(egui::Margin::symmetric(10, 8)),
+                            );
+                            if app.search_value_request_focus {
+                                response.request_focus();
+                                app.search_value_request_focus = false;
                             }
+                            if response.changed() {
+                                app.state.searches[search_index].search_value_text = value_text.clone();
+                            }
+                            enter_search = (response.has_focus() || response.lost_focus()) && ui.input(|input| input.key_pressed(egui::Key::Enter));
                         }
-                        let unchanged_enabled = search_results > 0 || has_snapshot;
-                        if ui
-                            .add_enabled(unchanged_enabled, secondary_btn(fl!(crate::LANGUAGE_LOADER, "unchanged-button")))
-                            .clicked()
-                        {
-                            app.unknown_search(UnknownComparison::Unchanged);
-                        }
-                        if ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "clear-button"))).clicked() {
-                            app.clear_results();
-                        }
-                        if ui.add_enabled(can_undo, secondary_btn(fl!(crate::LANGUAGE_LOADER, "undo-button"))).clicked() {
-                            app.undo_search();
-                        }
-                        result_count_label(ui, search_results);
+                        type_picker(app, ui, show_type_picker, selected_type);
+                    });
+                });
+                // Read the edited values in this frame, so validation and the
+                // primary button never lag a keystroke/type selection behind.
+                selected_type = app.state.searches[search_index].search_type;
+                if !value_text.is_empty() && selected_type != SearchType::Unknown {
+                    parse_error = selected_type.from_string(&value_text).err();
+                }
+                if idle && (selected_type != SearchType::Unknown || !is_search_complete) {
+                    let label = if selected_type == SearchType::Unknown {
+                        fl!(crate::LANGUAGE_LOADER, "capture-snapshot-button")
+                    } else if search_results > 0 && selected_type != SearchType::String {
+                        fl!(crate::LANGUAGE_LOADER, "update-button")
                     } else {
-                        let enabled = parse_error.is_none();
-                        if ui.add_enabled(enabled, primary_btn(fl!(crate::LANGUAGE_LOADER, "update-button"))).clicked() {
-                            app.start_search();
-                        }
-                        if ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "clear-button"))).clicked() {
-                            app.clear_results();
-                        }
-                        if ui.add_enabled(can_undo, secondary_btn(fl!(crate::LANGUAGE_LOADER, "undo-button"))).clicked() {
-                            app.undo_search();
-                        }
-                        result_count_label(ui, search_results);
+                        fl!(crate::LANGUAGE_LOADER, "initial-search-button")
+                    };
+                    let enabled = selected_type == SearchType::Unknown || (!value_text.is_empty() && parse_error.is_none());
+                    if ui.add_enabled(enabled, primary_btn(label)).clicked() || (enabled && enter_search) {
+                        app.start_search();
                     }
                 }
             });
 
+            if selected_type == SearchType::Unknown {
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "unknown-search-description")).size(13.0).weak());
+                if idle && is_search_complete {
+                    ui.add_space(6.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(fl!(crate::LANGUAGE_LOADER, "compare-label"));
+                        for (label, comparison) in [
+                            (fl!(crate::LANGUAGE_LOADER, "decreased-button"), UnknownComparison::Decreased),
+                            (fl!(crate::LANGUAGE_LOADER, "increased-button"), UnknownComparison::Increased),
+                            (fl!(crate::LANGUAGE_LOADER, "changed-button"), UnknownComparison::Changed),
+                            (fl!(crate::LANGUAGE_LOADER, "unchanged-button"), UnknownComparison::Unchanged),
+                        ] {
+                            if ui.add_enabled(search_results > 0 || has_snapshot, secondary_btn(label)).clicked() {
+                                app.unknown_search(comparison);
+                            }
+                        }
+                    });
+                }
+            }
             if let Some(err) = &parse_error {
                 ui.add_space(4.0);
                 ui.colored_label(egui::Color32::from_rgb(220, 120, 120), format!("\u{26A0}  {err}"));
+            }
+            if idle && is_search_complete {
+                ui.add_space(8.0);
+                ui.separator();
+                ui.horizontal_wrapped(|ui| {
+                    if selected_type == SearchType::Unknown && unknown_comparison.is_none() && has_snapshot {
+                        ui.add(egui::Label::new(fl!(crate::LANGUAGE_LOADER, "snapshot-ready-label")).wrap_mode(egui::TextWrapMode::Extend));
+                    } else {
+                        result_count_label(ui, search_results);
+                    }
+                    if ui.add_enabled(can_undo, secondary_btn(fl!(crate::LANGUAGE_LOADER, "undo-button"))).clicked() {
+                        app.undo_search();
+                    }
+                    if ui
+                        .add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "clear-button")))
+                        .on_hover_text(fl!(crate::LANGUAGE_LOADER, "reset-search-tooltip"))
+                        .clicked()
+                    {
+                        app.clear_results();
+                    }
+                });
             }
         });
 
@@ -572,10 +578,8 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
         .chars()
         .filter(|c| c.is_ascii())
         .collect::<String>();
-        ui.horizontal(|ui| {
-            ui.add(egui::ProgressBar::new(progress).desired_width(ui.available_width() - 240.0).show_percentage());
-            ui.label(egui::RichText::new(label).size(13.0).weak());
-        });
+        ui.add(egui::ProgressBar::new(progress).desired_width(ui.available_width()).show_percentage());
+        ui.label(egui::RichText::new(label).size(13.0).weak());
     }
 
     if matches!(searching, SearchMode::None) && search_results > 0 {
@@ -632,8 +636,13 @@ fn result_count_label(ui: &mut egui::Ui, count: usize) {
     if count > BROWSE_RESULT_LIMIT {
         text = text.color(ui.visuals().warn_fg_color);
     }
-    ui.add_space(8.0);
-    ui.label(text);
+    egui::Frame::new()
+        .fill(ui.visuals().selection.bg_fill.gamma_multiply(0.18))
+        .corner_radius(egui::CornerRadius::same(6))
+        .inner_margin(egui::Margin::symmetric(10, 5))
+        .show(ui, |ui| {
+            ui.add(egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend));
+        });
 }
 
 /// Replaces the table while the result list is too large to read, so the next
@@ -666,32 +675,65 @@ fn too_many_results_panel(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn type_picker(app: &mut App, ui: &mut egui::Ui, editable: bool, current: SearchType) {
+    // A String scan discovers both UTF-8 and UTF-16 results. Only individual
+    // result rows should label the concrete encoding.
+    let label = if current == SearchType::String {
+        current.get_short_description_text()
+    } else {
+        compact_type_label(current)
+    };
     if editable {
         let mut selected = current;
-        egui::ComboBox::from_id_salt("search_type_picker")
-            .selected_text(current.get_description_text())
-            .show_ui(ui, |ui| {
-                for st in [
-                    SearchType::Guess,
-                    SearchType::Unknown,
-                    SearchType::Short,
-                    SearchType::Int,
-                    SearchType::Int64,
-                    SearchType::Float,
-                    SearchType::Double,
-                    SearchType::String,
-                ] {
-                    ui.selectable_value(&mut selected, st, st.get_description_text());
-                }
-            });
+        egui::ComboBox::from_id_salt("search_type_picker").selected_text(label).show_ui(ui, |ui| {
+            for st in [
+                SearchType::Guess,
+                SearchType::Unknown,
+                SearchType::Byte,
+                SearchType::Short,
+                SearchType::Int,
+                SearchType::Int64,
+                SearchType::Float,
+                SearchType::Double,
+                SearchType::String,
+            ] {
+                ui.selectable_value(&mut selected, st, st.get_description_text());
+            }
+        });
         if selected != current
             && let Some(ctx) = app.state.searches.get_mut(app.state.current_search)
         {
             ctx.search_type = selected;
         }
     } else {
-        ui.label(current.get_description_text());
+        ui.label(label).on_hover_text(current.get_description_text());
     }
+}
+
+fn compact_type_label(search_type: SearchType) -> String {
+    match search_type {
+        SearchType::Byte => "UInt8".to_owned(),
+        SearchType::Short => "Int16".to_owned(),
+        SearchType::Int => "Int32".to_owned(),
+        SearchType::Int64 => "Int64".to_owned(),
+        SearchType::Float => "Float32".to_owned(),
+        SearchType::Double => "Float64".to_owned(),
+        SearchType::String => "UTF-8".to_owned(),
+        SearchType::StringUtf16 => "UTF-16".to_owned(),
+        _ => search_type.get_short_description_text(),
+    }
+}
+
+fn result_table_focus_id() -> egui::Id {
+    egui::Id::new("result_table_focus")
+}
+
+// Result caches are sorted by (address, type). Resolve identity, not a stale
+// row index, without scanning a potentially million-row result set per frame.
+fn selected_result_index(results: &[SearchResult], selected: Option<SearchResult>) -> Option<usize> {
+    let selected = selected?;
+    results
+        .binary_search_by_key(&(selected.addr, selected.search_type as u8), |r| (r.addr, r.search_type as u8))
+        .ok()
 }
 
 fn result_table(app: &mut App, ui: &mut egui::Ui) {
@@ -728,6 +770,64 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     // Cell hover is decided geometrically. A parent `Response::hovered()` goes
     // false when the pointer reaches an icon inside it, causing flicker.
     let pointer_pos = ui.ctx().pointer_hover_pos();
+    let ctx = ui.ctx().clone();
+
+    let mut selected_index = selected_result_index(&results, app.selected_result);
+    if app.selected_result.is_some() && selected_index.is_none() {
+        app.clear_result_interaction();
+    }
+    let keyboard_allowed = app.editing_result.is_none()
+        && !egui::Popup::is_any_open(ui.ctx())
+        && ui.memory(|memory| memory.focused().is_none() || memory.has_focus(result_table_focus_id()));
+    if keyboard_allowed && !results.is_empty() {
+        for key in [egui::Key::ArrowDown, egui::Key::ArrowUp, egui::Key::Home, egui::Key::End] {
+            if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, key)) {
+                let index = match key {
+                    egui::Key::ArrowDown => selected_index.map_or(0, |i| (i + 1).min(total_results - 1)),
+                    egui::Key::ArrowUp => selected_index.map_or(total_results - 1, |i| i.saturating_sub(1)),
+                    egui::Key::Home => 0,
+                    _ => total_results - 1,
+                };
+                selected_index = Some(index);
+                app.selected_result = Some(results[index]);
+                app.result_selection_request_scroll = true;
+                ui.memory_mut(|memory| memory.request_focus(result_table_focus_id()));
+            }
+        }
+        if let Some(index) = selected_index {
+            if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Delete)) {
+                remove_result = Some(index);
+            }
+            if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::F2)) {
+                app.result_edit_request_focus = true;
+                app.result_selection_request_scroll = true;
+            }
+            if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                app.clear_result_interaction();
+                selected_index = None;
+            }
+        }
+    }
+
+    ui.horizontal_wrapped(|ui| {
+        if !is_string {
+            let text = format!("{frozen_count} {}", fl!(crate::LANGUAGE_LOADER, "result-frozen-count"));
+            ui.add(egui::Label::new(egui::RichText::new(text).size(13.0)).wrap_mode(egui::TextWrapMode::Extend));
+            ui.separator();
+        }
+        ui.add(egui::Label::new(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "result-live-edit-label")).size(13.0)).wrap_mode(egui::TextWrapMode::Extend))
+            .on_hover_text(fl!(crate::LANGUAGE_LOADER, "result-live-edit-tooltip"));
+        ui.add(
+            egui::Label::new(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "result-keyboard-hint")).size(12.0).weak()).wrap_mode(egui::TextWrapMode::Extend),
+        );
+    });
+    ui.add_space(6.0);
+    // A stable focus target shared by all rows, independent of virtualization.
+    ui.interact(
+        ui.available_rect_before_wrap(),
+        result_table_focus_id(),
+        egui::Sense::focusable_noninteractive(),
+    );
 
     use egui_extras::{Column, TableBuilder};
 
@@ -748,6 +848,12 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
         builder = builder.column(Column::initial(56.0).at_least(48.0));
     }
     builder = builder.column(Column::remainder().resizable(false));
+    if app.result_selection_request_scroll {
+        if let Some(index) = selected_index {
+            builder = builder.scroll_to_row(index, None);
+        }
+        app.result_selection_request_scroll = false;
+    }
 
     builder
         .header(36.0, |mut header| {
@@ -802,6 +908,8 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     return;
                 };
                 let is_frozen = freezed.contains(&result.addr);
+                let is_selected = selected_index == Some(i);
+                row.set_selected(is_selected);
 
                 // Always read fresh raw bytes from the target so the display
                 // and the change diff reflect the process's current state.
@@ -834,8 +942,9 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
 
                 // Format for display. Done after the diff so unchanged rows
                 // skip the alloc-and-decode entirely when bytes are empty.
-                let value_text = if raw_bytes.is_empty() {
-                    String::new()
+                let readable = !raw_bytes.is_empty();
+                let value_text = if !readable {
+                    fl!(crate::LANGUAGE_LOADER, "result-unreadable")
                 } else if matches!(result.search_type, SearchType::String | SearchType::StringUtf16) {
                     decode_string_bytes(&raw_bytes, result.search_type == SearchType::StringUtf16)
                 } else {
@@ -863,7 +972,14 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                 let address_text = format!("0x{:X}", result.addr);
                 let (_, address_response) = row.col(|ui| {
                     let cell_hovered = pointer_pos.is_some_and(|pos| ui.max_rect().contains(pos));
-                    ui.monospace(&address_text);
+                    if is_selected {
+                        ui.visuals_mut().override_text_color = Some(ui.visuals().selection.stroke.color);
+                    }
+                    ui.add_sized(
+                        [(ui.available_width() - ICON_SLOT_WIDTH).max(24.0), 24.0],
+                        egui::Label::new(egui::RichText::new(&address_text).monospace()).selectable(false).truncate(),
+                    )
+                    .on_hover_text(&address_text);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if icon_button(ui, cell_hovered, REMOVE_ICON, fl!(crate::LANGUAGE_LOADER, "remove-button")).clicked() {
                             remove_result = Some(i);
@@ -874,28 +990,40 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     open_editor = Some(i);
                 }
 
-                // Value column - always rendered as an editable text box.
+                // Borderless live value; only hover/focus exposes the editor.
                 // When the user focuses or types into the cell we capture
                 // the row into `app.editing_result`; otherwise the box
                 // displays the live value freshly read this frame.
                 row.col(|ui| {
                     let cell_hovered = pointer_pos.is_some_and(|pos| ui.max_rect().contains(pos));
+                    if is_selected {
+                        ui.visuals_mut().override_text_color = Some(ui.visuals().selection.stroke.color);
+                    }
                     // Stable per-result id: keeps focus across the
                     // display/edit swap and stops one row's editor state
                     // from bleeding into another when results are re-sorted
                     // or scrolled.
                     let value_id = egui::Id::new(("result-value", result.addr, result.search_type));
                     let has_focus = ui.memory(|mem| mem.has_focus(value_id));
+                    let request_focus = is_selected && app.result_edit_request_focus;
+                    if request_focus {
+                        app.result_edit_request_focus = false;
+                        if readable {
+                            app.editing_result = Some((i, value_text.clone()));
+                        }
+                    }
                     // Only the focused cell may render from the edit buffer.
                     // Every other row shows what was read from the process
                     // this frame, so a buffer left behind by a failed commit
                     // or a row that scrolled away can't freeze the display.
                     let is_edit_row = matches!(app.editing_result, Some((idx, _)) if idx == i);
-                    let editing = is_edit_row && has_focus;
-                    if is_edit_row && !has_focus {
+                    let editing = is_edit_row && (has_focus || request_focus);
+                    if is_edit_row && !has_focus && !request_focus {
                         cancel_edit = true;
                     }
-                    let text_color = if recently_changed {
+                    let text_color = if is_selected {
+                        Some(ui.visuals().selection.stroke.color)
+                    } else if recently_changed {
                         Some(egui::Color32::from_rgb(255, 180, 130))
                     } else if is_frozen {
                         Some(ui.visuals().selection.bg_fill)
@@ -904,7 +1032,17 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     };
                     let cell_width = (ui.available_width() - ICON_SLOT_WIDTH).clamp(60.0, 150.0);
 
-                    let response = if editing {
+                    let response = if !readable {
+                        if is_edit_row {
+                            cancel_edit = true;
+                        }
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(&value_text).color(text_color.unwrap_or(ui.visuals().weak_text_color())))
+                                .selectable(false)
+                                .truncate(),
+                        )
+                        .on_hover_text(fl!(crate::LANGUAGE_LOADER, "result-unreadable-tooltip"))
+                    } else if editing {
                         // Bind the TextEdit straight to the live editing
                         // buffer so keystrokes mutate it in place.
                         let buf = &mut app.editing_result.as_mut().unwrap().1;
@@ -914,6 +1052,9 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                                 .desired_width(cell_width)
                                 .text_color_opt(text_color),
                         );
+                        if request_focus {
+                            r.request_focus();
+                        }
                         if r.changed() {
                             // Live write: try to push every keystroke into
                             // the target process. Invalid intermediate input
@@ -938,30 +1079,35 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                         // value every frame; the user transitions to
                         // edit mode the moment they focus or type.
                         let mut buf = value_text.clone();
-                        let r = ui.add(
-                            egui::TextEdit::singleline(&mut buf)
-                                .id(value_id)
-                                .desired_width(cell_width)
-                                .text_color_opt(text_color),
-                        );
+                        let mut editor = egui::TextEdit::singleline(&mut buf)
+                            .id(value_id)
+                            .desired_width(cell_width)
+                            .text_color_opt(text_color);
+                        if !cell_hovered && !has_focus {
+                            editor = editor.frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(4, 2)));
+                        }
+                        let r = ui.add(editor).on_hover_text(fl!(crate::LANGUAGE_LOADER, "result-edit-tooltip"));
                         if r.gained_focus() || r.changed() {
+                            app.selected_result = Some(result);
                             begin_edit = Some((i, buf));
                         }
                         r
                     };
 
                     if change_intensity > 0.0 {
-                        // Translucent orange tint that fades out — same colour
-                        // and alpha curve as the memory editor's per-byte
-                        // change overlay. Painted on top of the value editor
-                        // so the cell flashes orange and decays to default.
-                        let alpha = (change_intensity * 180.0) as u8;
+                        // A slim marker outside the editor never covers text,
+                        // selection or cursor, even at maximum intensity.
+                        let alpha = (change_intensity * 255.0) as u8;
+                        let marker = egui::Rect::from_min_max(
+                            egui::pos2(response.rect.left() - 4.0, response.rect.top()),
+                            egui::pos2(response.rect.left() - 2.0, response.rect.bottom()),
+                        );
                         ui.painter()
-                            .rect_filled(response.rect.expand(2.0), 3.0, egui::Color32::from_rgba_unmultiplied(255, 150, 60, alpha));
+                            .rect_filled(marker, 1.0, egui::Color32::from_rgba_unmultiplied(255, 150, 60, alpha));
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if icon_button(ui, cell_hovered, EDIT_ICON, fl!(crate::LANGUAGE_LOADER, "edit-button")).clicked() {
+                        if icon_button(ui, cell_hovered, MEMORY_ICON, fl!(crate::LANGUAGE_LOADER, "open-memory-editor-menu")).clicked() {
                             open_editor = Some(i);
                         }
                     });
@@ -969,7 +1115,11 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
 
                 if show_search_types {
                     row.col(|ui| {
-                        ui.label(result.search_type.get_description_text());
+                        if is_selected {
+                            ui.visuals_mut().override_text_color = Some(ui.visuals().selection.stroke.color);
+                        }
+                        ui.add(egui::Label::new(compact_type_label(result.search_type)).selectable(false))
+                            .on_hover_text(result.search_type.get_description_text());
                     });
                 }
 
@@ -980,33 +1130,46 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                         } else {
                             fl!(crate::LANGUAGE_LOADER, "freeze-result-tooltip")
                         };
-                        let color = if is_frozen {
+                        let color = if is_selected {
+                            ui.visuals().selection.stroke.color
+                        } else if is_frozen {
                             ui.visuals().selection.bg_fill
                         } else {
                             ui.visuals().weak_text_color()
                         };
-                        ui.with_layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
-                            if ui
-                                .add(egui::Button::new(egui::RichText::new(FREEZE_ICON).size(15.0).color(color)).frame(false))
-                                .on_hover_text(tooltip)
-                                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                .clicked()
-                            {
-                                toggle_freeze = Some(i);
-                            }
-                        });
+                        // Keep the control compact and consistently frameless;
+                        // the icon color communicates the freeze state.
+                        ui.spacing_mut().button_padding = egui::vec2(3.0, 3.0);
+                        ui.spacing_mut().interact_size = egui::vec2(24.0, 24.0);
+                        let rect = egui::Rect::from_center_size(ui.max_rect().center(), egui::vec2(24.0, 24.0));
+                        let button = egui::Button::new(egui::RichText::new(FREEZE_ICON).size(14.0).color(color)).frame(false);
+                        if ui
+                            .put(rect, button)
+                            .on_hover_text(tooltip)
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .clicked()
+                        {
+                            toggle_freeze = Some(i);
+                        }
                     });
                 }
 
                 row.col(|_| {});
 
                 let row_response = row.response();
+                if row_response.clicked() || row_response.secondary_clicked() || address_response.double_clicked() {
+                    app.selected_result = Some(result);
+                    ctx.memory_mut(|memory| memory.request_focus(result_table_focus_id()));
+                }
                 row_response.context_menu(|ui| {
                     if ui.button(fl!(crate::LANGUAGE_LOADER, "copy-address-menu")).clicked() {
                         ui.ctx().copy_text(address_text.clone());
                         ui.close();
                     }
-                    if ui.button(fl!(crate::LANGUAGE_LOADER, "copy-value-menu")).clicked() {
+                    if ui
+                        .add_enabled(readable, egui::Button::new(fl!(crate::LANGUAGE_LOADER, "copy-value-menu")))
+                        .clicked()
+                    {
                         ui.ctx().copy_text(value_text.clone());
                         ui.close();
                     }
@@ -1016,12 +1179,20 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     } else {
                         fl!(crate::LANGUAGE_LOADER, "freeze-result-tooltip")
                     };
-                    if ui.button(freeze_label).clicked() {
+                    if ui
+                        .add_enabled(result.search_type.fixed_byte_length().is_some(), egui::Button::new(freeze_label))
+                        .clicked()
+                    {
                         toggle_freeze = Some(i);
                         ui.close();
                     }
                     if ui.button(fl!(crate::LANGUAGE_LOADER, "open-memory-editor-menu")).clicked() {
                         open_editor = Some(i);
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button(fl!(crate::LANGUAGE_LOADER, "remove-button")).clicked() {
+                        remove_result = Some(i);
                         ui.close();
                     }
                 });
@@ -1038,14 +1209,6 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
 
     app.hovered_result_row = new_hovered_row;
 
-    if remove_result.is_none()
-        && app.editing_result.is_none()
-        && !ui.memory(|memory| memory.focused().is_some())
-        && ui.input(|input| input.key_pressed(egui::Key::Delete))
-    {
-        remove_result = new_hovered_row;
-    }
-
     if toggle_freeze_all {
         app.toggle_freeze_all();
     }
@@ -1054,6 +1217,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     }
     if let Some(i) = remove_result {
         app.remove_result(i);
+        return;
     }
     if let Some(i) = open_editor {
         app.open_memory_editor(i);

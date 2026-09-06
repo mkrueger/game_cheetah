@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Search results support stable address/type selection, arrow keys and
+  Home/End navigation, F2 to edit, and Delete to remove the selected result.
+- The search type picker includes Byte. Result rows use compact type labels,
+  explicit unreadable-value hints, and a visible frozen-result count.
 - Process selection now supports highlighted single-click selection, an explicit
   Connect button, double-click/Enter to attach, arrow-key navigation, and
   Ctrl/Cmd+F to focus the search. Launch with `--processes` to open it directly.
@@ -18,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Search controls separate input and primary actions from result count, Undo,
+  and Reset search. Counts stay together at narrow window sizes; button labels
+  distinguish a fresh scan, narrowing results, and capturing an initial state.
+- Result values are borderless until hovered or focused. A slim change marker
+  no longer covers text or cursors. Live editing remains immediate and its
+  tooltip explains that Escape ends editing without undoing previous writes.
+- Selected results retain full foreground contrast. Row actions appear only
+  on cell hover; the memory editor uses an ellipsis action with an explicit tooltip.
 - The process table puts names first, keeps its header visible while scrolling,
   and reports actual instance counts and explicitly labelled group RSS sums.
   Commands use readable argument formatting instead of Rust debug output.

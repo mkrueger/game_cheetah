@@ -9,6 +9,305 @@ fn create_test_app() -> App {
     App::default()
 }
 
+fn result_identity(result: Option<SearchResult>) -> Option<(usize, SearchType)> {
+    result.map(|result| (result.addr, result.search_type))
+}
+
+fn seed_result_interaction(app: &mut App) {
+    let result = SearchResult::new(0x2000, SearchType::Int);
+    app.state.searches[app.state.current_search].set_cached_results(vec![result]);
+    app.selected_result = Some(result);
+    app.editing_result = Some((0, "42".to_owned()));
+    app.result_selection_request_scroll = true;
+    app.result_edit_request_focus = true;
+    app.hovered_result_row = Some(0);
+}
+
+fn assert_result_interaction_cleared(app: &App) {
+    assert!(app.selected_result.is_none());
+    assert!(app.editing_result.is_none());
+    assert!(!app.result_selection_request_scroll);
+    assert!(!app.result_edit_request_focus);
+    assert!(app.hovered_result_row.is_none());
+}
+
+fn assert_seeded_result_interaction(app: &App) {
+    assert_eq!(result_identity(app.selected_result), Some((0x2000, SearchType::Int)));
+    assert_eq!(app.editing_result, Some((0, "42".to_owned())));
+    assert!(app.result_selection_request_scroll);
+    assert!(app.result_edit_request_focus);
+    assert_eq!(app.hovered_result_row, Some(0));
+}
+
+#[test]
+fn test_result_interaction_defaults_and_explicit_reset() {
+    let mut app = create_test_app();
+    assert_result_interaction_cleared(&app);
+    seed_result_interaction(&mut app);
+
+    app.clear_result_interaction();
+
+    assert_result_interaction_cleared(&app);
+    assert_eq!(app.state.searches[0].get_result_count(), 1);
+}
+
+#[test]
+fn test_tab_and_reset_actions_clear_result_interaction() {
+    for action in [
+        "switch",
+        "switch_same",
+        "new",
+        "close_current",
+        "close_other",
+        "close_others",
+        "clear",
+        "undo",
+        "main_menu",
+    ] {
+        let mut app = create_test_app();
+        app.new_search();
+        app.new_search();
+        seed_result_interaction(&mut app);
+
+        match action {
+            "switch" => app.switch_search(0),
+            "switch_same" => app.switch_search(2),
+            "new" => app.new_search(),
+            "close_current" => app.close_search(2),
+            "close_other" => app.close_search(0),
+            "close_others" => app.close_other_searches(1),
+            "clear" => app.clear_results(),
+            "undo" => app.undo_search(),
+            "main_menu" => app.back_to_main_menu(),
+            _ => unreachable!(),
+        }
+
+        assert_result_interaction_cleared(&app);
+    }
+}
+
+#[test]
+fn test_closing_last_tab_clears_result_interaction() {
+    let mut app = create_test_app();
+    seed_result_interaction(&mut app);
+
+    app.close_search(0);
+
+    assert_result_interaction_cleared(&app);
+    assert_eq!(app.state.searches.len(), 1);
+    assert_eq!(app.state.current_search, 0);
+    assert_eq!(app.state.searches[0].get_result_count(), 0);
+}
+
+#[test]
+fn test_invalid_tab_actions_preserve_result_interaction() {
+    let mut app = create_test_app();
+    seed_result_interaction(&mut app);
+
+    app.switch_search(1);
+    assert_seeded_result_interaction(&app);
+    app.close_search(1);
+    assert_seeded_result_interaction(&app);
+    app.close_other_searches(1);
+    assert_seeded_result_interaction(&app);
+    assert_eq!(app.state.searches.len(), 1);
+    assert_eq!(app.state.current_search, 0);
+}
+
+#[test]
+fn test_clear_change_tracker_preserves_result_interaction() {
+    let mut app = create_test_app();
+    seed_result_interaction(&mut app);
+    app.value_change_tracker.put(0x2000, vec![42]);
+    app.changed_addresses.insert(0x2000, std::time::Instant::now());
+
+    app.clear_change_tracker();
+
+    assert_seeded_result_interaction(&app);
+    assert!(app.value_change_tracker.is_empty());
+    assert!(app.changed_addresses.is_empty());
+}
+
+#[test]
+fn test_rejected_search_preserves_result_interaction() {
+    // These calls return before dispatch: no process access or worker threads.
+    for text in ["", "not-an-integer", "999999999999999999999999999999"] {
+        let mut app = create_test_app();
+        seed_result_interaction(&mut app);
+        app.state.searches[0].search_type = SearchType::Int;
+        app.state.searches[0].search_value_text = text.to_owned();
+
+        app.start_search();
+
+        assert_seeded_result_interaction(&app);
+        assert_eq!(app.state.searches[0].searching, SearchMode::None);
+        assert_eq!(app.state.searches[0].get_result_count(), 1);
+    }
+}
+
+#[test]
+fn test_start_search_with_invalid_tab_preserves_result_interaction() {
+    let mut app = create_test_app();
+    seed_result_interaction(&mut app);
+    app.state.current_search = app.state.searches.len();
+
+    app.start_search();
+
+    assert_seeded_result_interaction(&app);
+}
+
+#[test]
+fn test_already_running_search_preserves_result_interaction() {
+    for search_type in [SearchType::Int, SearchType::String, SearchType::Unknown] {
+        for mode in [SearchMode::Memory, SearchMode::Percent] {
+            let mut app = create_test_app();
+            seed_result_interaction(&mut app);
+            app.state.searches[0].search_type = search_type;
+            app.state.searches[0].search_value_text = "42".to_owned();
+            app.state.searches[0].searching = mode;
+
+            app.start_search();
+
+            assert_seeded_result_interaction(&app);
+            assert_eq!(app.state.searches[0].searching, mode);
+        }
+    }
+}
+
+#[test]
+fn test_removing_other_result_preserves_selected_identity_after_sorting() {
+    let mut app = create_test_app();
+    seed_result_interaction(&mut app);
+    app.result_selection_request_scroll = false;
+    // A streamed batch inserts rows before the selected identity, including
+    // a different type at the same address. The old selected row index is stale.
+    app.state.searches[0]
+        .results_sender
+        .send(vec![SearchResult::new(0x3000, SearchType::Int), SearchResult::new(0x2000, SearchType::Byte)])
+        .unwrap();
+
+    app.remove_result(0);
+
+    assert_eq!(result_identity(app.selected_result), Some((0x2000, SearchType::Int)));
+    assert!(!app.result_selection_request_scroll);
+    assert!(app.editing_result.is_none());
+    assert!(!app.result_edit_request_focus);
+    let results = app.state.searches[0].collect_results();
+    assert_eq!(results.len(), 2);
+    assert_eq!(result_identity(results.first().copied()), result_identity(app.selected_result));
+}
+
+#[test]
+fn test_removing_selected_result_selects_successor_or_last_result() {
+    for (index, expected) in [(0, 0x2000), (1, 0x3000), (2, 0x2000)] {
+        let mut app = create_test_app();
+        seed_result_interaction(&mut app);
+        app.state.searches[0].set_cached_results(vec![
+            SearchResult::new(0x3000, SearchType::Int),
+            SearchResult::new(0x1000, SearchType::Int),
+            SearchResult::new(0x2000, SearchType::Int),
+        ]);
+        app.selected_result = Some(app.state.searches[0].collect_results()[index]);
+        app.editing_result = Some((index, "42".to_owned()));
+        app.result_selection_request_scroll = false;
+
+        app.remove_result(index);
+
+        assert_eq!(result_identity(app.selected_result), Some((expected, SearchType::Int)));
+        assert!(app.result_selection_request_scroll);
+        assert!(app.editing_result.is_none());
+        assert!(!app.result_edit_request_focus);
+        assert!(!app.search_value_request_focus);
+    }
+}
+
+#[test]
+fn test_removing_last_selected_result_clears_selection() {
+    let mut app = create_test_app();
+    seed_result_interaction(&mut app);
+    app.result_selection_request_scroll = false;
+
+    app.remove_result(0);
+
+    assert!(app.selected_result.is_none());
+    assert!(app.editing_result.is_none());
+    assert!(!app.result_edit_request_focus);
+    assert!(app.result_selection_request_scroll);
+    assert!(app.search_value_request_focus);
+    assert_eq!(app.state.searches[0].get_result_count(), 0);
+}
+
+#[test]
+fn test_removing_result_without_selection_does_not_select_a_row() {
+    let mut app = create_test_app();
+    app.state.searches[0].set_cached_results(vec![SearchResult::new(0x1000, SearchType::Int), SearchResult::new(0x2000, SearchType::Int)]);
+
+    app.remove_result(0);
+
+    assert_result_interaction_cleared(&app);
+    assert_eq!(app.state.searches[0].get_result_count(), 1);
+}
+
+#[test]
+fn test_undo_restores_results_but_clears_result_interaction() {
+    let mut app = create_test_app();
+    seed_result_interaction(&mut app);
+    app.state.searches[0].set_cached_results(vec![SearchResult::new(0x1000, SearchType::Int), SearchResult::new(0x2000, SearchType::Int)]);
+    app.remove_result(1);
+    assert_eq!(result_identity(app.selected_result), Some((0x1000, SearchType::Int)));
+    app.editing_result = Some((0, "99".to_owned()));
+    app.result_edit_request_focus = true;
+
+    app.undo_search();
+
+    assert_result_interaction_cleared(&app);
+    assert_eq!(app.state.searches[0].get_result_count(), 2);
+    assert_eq!(
+        result_identity(app.state.searches[0].collect_results().get(1).copied()),
+        Some((0x2000, SearchType::Int))
+    );
+}
+
+#[test]
+fn test_change_result_type_transfers_selection_after_sorting_and_deduplication() {
+    // Double moves the row after Float; Float merges it with an existing hit.
+    for new_type in [SearchType::Double, SearchType::Float] {
+        let mut app = create_test_app();
+        seed_result_interaction(&mut app);
+        app.state.searches[0].set_cached_results(vec![SearchResult::new(0x2000, SearchType::Float), SearchResult::new(0x2000, SearchType::Int)]);
+        // Set the index directly: opening the memory editor would read a process.
+        app.memory_editor_result_index = Some(0);
+
+        app.change_result_type(new_type);
+
+        assert_eq!(result_identity(app.selected_result), Some((0x2000, new_type)));
+        assert!(app.editing_result.is_none());
+        assert!(!app.result_edit_request_focus);
+        let results = app.state.searches[0].collect_results();
+        let new_index = app.memory_editor_result_index.unwrap();
+        assert_eq!(result_identity(results.get(new_index).copied()), result_identity(app.selected_result));
+        assert_eq!(new_index, usize::from(new_type == SearchType::Double));
+        assert_eq!(results.len(), if new_type == SearchType::Double { 2 } else { 1 });
+    }
+}
+
+#[test]
+fn test_change_other_result_type_preserves_selected_identity() {
+    let mut app = create_test_app();
+    seed_result_interaction(&mut app);
+    app.state.searches[0].set_cached_results(vec![SearchResult::new(0x2000, SearchType::Byte), SearchResult::new(0x2000, SearchType::Int)]);
+    app.memory_editor_result_index = Some(0);
+    app.result_selection_request_scroll = false;
+
+    app.change_result_type(SearchType::Double);
+
+    assert_eq!(result_identity(app.selected_result), Some((0x2000, SearchType::Int)));
+    assert!(!app.result_selection_request_scroll);
+    assert!(app.editing_result.is_none());
+    assert!(!app.result_edit_request_focus);
+    assert_eq!(app.memory_editor_result_index, Some(1));
+}
+
 #[test]
 fn test_new_search_tab() {
     let mut app = create_test_app();

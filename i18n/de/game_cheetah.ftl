@@ -60,12 +60,22 @@ empty-search-title = Noch keine Suche
 empty-search-hint = Wert eingeben und die erste Suche starten.
 empty-results-title = Keine Treffer
 empty-results-hint = Wert ändern oder Datentyp wechseln und erneut suchen.
-too-many-results-hint = Zu viele Treffer zum Durchsehen. Ändere den Wert im Spiel und klicke auf Aktualisieren, um sie einzugrenzen.
+too-many-results-hint = Zu viele Treffer zum Durchsehen. Ändere den Wert im Spiel und grenze die Suche oben weiter ein.
 
 undo-button = Rückgängig
-initial-search-button = Erste Suche
-update-button = Aktualisieren
-clear-button = Löschen
+initial-search-button = Suchen
+update-button = Eingrenzen
+clear-button = Suche zurücksetzen
+capture-snapshot-button = Ausgangszustand erfassen
+snapshot-ready-label = Ausgangszustand erfasst
+reset-search-tooltip = Treffer und Suchverlauf zurücksetzen und die von dieser Suche eingefrorenen Werte freigeben.
+result-live-edit-label = Live-Bearbeitung
+result-live-edit-tooltip = Gültige Eingaben werden sofort in den Prozess geschrieben. Enter beendet die Bearbeitung. Escape beendet sie ebenfalls, macht bereits geschriebene Werte aber nicht rückgängig.
+result-keyboard-hint = ⏶ ⏷ Auswahl · F2 Bearbeiten · Entf Entfernen
+result-edit-tooltip = Wert direkt bearbeiten (F2). Gültige Eingaben werden sofort geschrieben.
+result-unreadable = Nicht lesbar
+result-unreadable-tooltip = Dieser Speicherbereich konnte nicht gelesen werden. Möglicherweise wurde er freigegeben oder der Prozess beendet.
+result-frozen-count = eingefroren
 close-button = Schließen
 
 hide-results-button = Ergebnisse verstecken
@@ -105,7 +115,7 @@ float-descr = Float
 double-descr = Double
 string-descr = String
 
-address-heading = Addresse
+address-heading = Adresse
 value-heading = Wert
 freezed-heading = Eingefroren
 freeze-all-tooltip = Klicken, um alle Ergebnisse einzufrieren oder freizugeben

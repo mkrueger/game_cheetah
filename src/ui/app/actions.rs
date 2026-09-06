@@ -22,6 +22,7 @@ impl App {
     }
 
     pub fn select_process(&mut self, process: &crate::ProcessInfo) {
+        self.clear_result_interaction();
         self.state.select_process(process);
         self.app_state = AppState::InProcess;
         self.state.process_filter.clear();
@@ -32,7 +33,7 @@ impl App {
         self.state = GameCheetahEngine::default();
         self.clear_change_tracker();
         self.cached_process_handle = None;
-        self.editing_result = None;
+        self.clear_result_interaction();
         self.cheat_table_status.clear();
         self.cheat_table_status_at = None;
     }
@@ -40,6 +41,7 @@ impl App {
     // ---- Search tabs ---------------------------------------------------
 
     pub fn new_search(&mut self) {
+        self.clear_result_interaction();
         self.state.new_search();
         self.search_value_request_focus = true;
         self.clear_change_tracker();
@@ -49,6 +51,7 @@ impl App {
         if index >= self.state.searches.len() {
             return;
         }
+        self.clear_result_interaction();
         self.state.remove_freezes(index);
         self.state.searches.remove(index);
         if self.state.searches.is_empty() {
@@ -76,14 +79,14 @@ impl App {
             }
         }
         self.state.current_search = 0;
-        self.editing_result = None;
+        self.clear_result_interaction();
         self.clear_change_tracker();
     }
 
     pub fn switch_search(&mut self, index: usize) {
         if index < self.state.searches.len() {
             self.state.current_search = index;
-            self.editing_result = None;
+            self.clear_result_interaction();
             self.search_value_request_focus = self.state.searches[index].get_result_count() == 0;
             self.clear_change_tracker();
         }
@@ -121,8 +124,12 @@ impl App {
         let Some(current_search) = self.state.searches.get_mut(search_index) else {
             return;
         };
+        if current_search.searching != crate::SearchMode::None {
+            return;
+        }
         let search_type = current_search.search_type;
         if search_type == SearchType::Unknown {
+            self.clear_result_interaction();
             self.state.take_memory_snapshot(search_index);
             return;
         }
@@ -132,6 +139,7 @@ impl App {
         match search_type.from_string(&current_search.search_value_text) {
             Ok(_) => {
                 let has_results = current_search.get_result_count() > 0;
+                self.clear_result_interaction();
                 if !has_results || search_type == SearchType::String {
                     self.state.initial_search(search_index);
                 } else {
@@ -145,10 +153,12 @@ impl App {
     }
 
     pub fn unknown_search(&mut self, comparison: crate::UnknownComparison) {
+        self.clear_result_interaction();
         self.state.unknown_search_compare(self.state.current_search, comparison);
     }
 
     pub fn undo_search(&mut self) {
+        self.clear_result_interaction();
         if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
             search_context.undo_last_search();
         }
@@ -160,7 +170,7 @@ impl App {
         if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
             search_context.clear_results();
         }
-        self.editing_result = None;
+        self.clear_result_interaction();
         self.search_value_request_focus = true;
         self.state.show_results = false;
         self.clear_change_tracker();
@@ -241,6 +251,9 @@ impl App {
     // ---- Result row mutations ------------------------------------------
 
     pub fn remove_result(&mut self, index: usize) {
+        // Row indices may shift, but selection follows the result identity.
+        self.editing_result = None;
+        self.result_edit_request_focus = false;
         let mut removed_address = None;
         if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {
             let results = search_context.collect_results();
@@ -251,6 +264,13 @@ impl App {
                 new_results.remove(index);
                 if !new_results.iter().any(|other| other.addr == result.addr) {
                     removed_address = Some(result.addr);
+                }
+                if self
+                    .selected_result
+                    .is_some_and(|selected| selected.addr == result.addr && selected.search_type == result.search_type)
+                {
+                    self.selected_result = new_results.get(index).or_else(|| new_results.last()).copied();
+                    self.result_selection_request_scroll = true;
                 }
                 self.search_value_request_focus = new_results.is_empty();
                 search_context.set_cached_results(new_results);
@@ -367,8 +387,17 @@ impl App {
         // Build a new Vec with the entry replaced. set_cached_results
         // sorts and dedupes, so we need to re-locate the entry afterwards.
         let mut new_results: Vec<SearchResult> = (*results).clone();
-        new_results[index] = SearchResult::new(old.addr, new_type);
+        let replacement = SearchResult::new(old.addr, new_type);
+        new_results[index] = replacement;
         search_context.set_cached_results(new_results);
+        if self
+            .selected_result
+            .is_some_and(|selected| selected.addr == old.addr && selected.search_type == old.search_type)
+        {
+            self.selected_result = Some(replacement);
+        }
+        self.editing_result = None;
+        self.result_edit_request_focus = false;
 
         // Look up the new index (address is preserved; type may have
         // shifted the sort position).
@@ -406,7 +435,7 @@ impl App {
                 }
                 self.state.searches = searches;
                 self.state.current_search = 0;
-                self.editing_result = None;
+                self.clear_result_interaction();
                 self.clear_change_tracker();
                 self.cheat_table_status = format!("Loaded: {}", path.display());
             }

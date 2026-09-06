@@ -62,6 +62,13 @@ pub struct App {
     /// One-shot request to return keyboard focus to the search value field.
     pub search_value_request_focus: bool,
 
+    /// Selected result identity (address and type), independent of row order.
+    pub selected_result: Option<crate::SearchResult>,
+    /// One-shot request to scroll the selected result into view.
+    pub result_selection_request_scroll: bool,
+    /// One-shot request to focus the result value editor.
+    pub result_edit_request_focus: bool,
+
     /// `(row_index, typed_buffer)` while a result row's value is being
     /// edited. We don't read the live value into this buffer per frame —
     /// once the user clicks/focuses the field, it owns the keystrokes
@@ -142,6 +149,9 @@ impl Default for App {
             rename_search_text: String::new(),
             rename_request_focus: false,
             search_value_request_focus: false,
+            selected_result: None,
+            result_selection_request_scroll: false,
+            result_edit_request_focus: false,
             editing_result: None,
             process_sort_column: ProcessSortColumn::default(),
             process_sort_direction: SortDirection::default(),
@@ -191,6 +201,15 @@ impl App {
         if let Err(e) = settings.save() {
             self.state.push_error(AppError::Generic { message: e });
         }
+    }
+
+    /// Discard result interaction when the active result set is replaced.
+    pub fn clear_result_interaction(&mut self) {
+        self.selected_result = None;
+        self.editing_result = None;
+        self.result_selection_request_scroll = false;
+        self.result_edit_request_focus = false;
+        self.hovered_result_row = None;
     }
 
     pub fn clear_change_tracker(&mut self) {
