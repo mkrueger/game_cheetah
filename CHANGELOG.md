@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Criterion benchmarks cover narrowing through real reads from the benchmark's
+  own process and incremental result collection, including dense/sparse hits,
+  mixed numeric types, duplicates and retained result snapshots.
 - The memory inspector can follow readable mapped pointer targets. A separate,
   bounded Back/Forward history returns to previous addresses without changing
   memory-write undo/redo history.
@@ -25,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Narrowing prepares numeric comparisons once per pass and reads nearby hits
+  together through bounded, reusable buffers. Failed grouped reads fall back
+  to individual values, preserving readable hits around inaccessible memory.
+- Incoming result batches are sorted separately and merged into the existing
+  sorted cache. Unshared allocations are reused; UI and Undo snapshots retain
+  their original contents through copy-on-write.
 - The memory-editor header separates actions from current-address, region and
   access details. Long region names truncate with tooltips, and the pointer
   row spans the inspector width with an explicit Open address action.
@@ -45,6 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Linux narrowing rejects partial process-memory reads instead of comparing
+  unread bytes, including reads that cross into a protected memory page.
 - Enter now commits memory-inspector edits even when the text field loses
   focus on submission. Invalid input and failed writes retain the edit with
   a visible error instead of silently discarding it. Inspector labels and

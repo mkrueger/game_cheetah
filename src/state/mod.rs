@@ -19,6 +19,7 @@ use sysinfo::*;
 
 mod diagnostics;
 mod memory_reader;
+mod narrowing;
 mod simd;
 mod string_search;
 mod unknown;
@@ -691,6 +692,7 @@ impl GameCheetahEngine {
         search_complete.store(false, Ordering::SeqCst);
 
         std::thread::spawn(move || {
+            let prepared = narrowing::PreparedSearch::new(&old_results, &value_text);
             chunks.par_iter().for_each(|(from, to)| {
                 let handle = match pid.try_into_process_handle() {
                     Ok(h) => h,
@@ -702,7 +704,7 @@ impl GameCheetahEngine {
                 };
 
                 let chunk = &old_results[*from..*to];
-                let updated = update_results(chunk, &value_text, &handle);
+                let updated = prepared.update_results(chunk, &memory_reader::ExactProcessReader(&handle));
 
                 if !updated.is_empty() {
                     let _ = results_sender.send(updated);
@@ -1559,78 +1561,10 @@ fn pack_bytes(src: &[u8]) -> [u8; 8] {
     out
 }
 
-fn update_results<T>(old_results: &[SearchResult], value_text: &str, handle: &T) -> Vec<SearchResult>
-where
-    T: process_memory::CopyAddress,
-{
-    let mut results = Vec::new();
-    for result in old_results {
-        match result.search_type.from_string(value_text) {
-            Ok(search_value) => {
-                let Some(byte_len) = result.search_type.fixed_byte_length() else {
-                    continue;
-                };
-                if let Ok(buf) = copy_address(result.addr, byte_len, handle) {
-                    let matches = match result.search_type {
-                        SearchType::Float => {
-                            if buf.len() == 4 && search_value.1.len() == 4 {
-                                let current = f32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
-                                let target = f32::from_le_bytes([search_value.1[0], search_value.1[1], search_value.1[2], search_value.1[3]]);
-
-                                let epsilon = get_epsilon_f32(target);
-
-                                if current.is_finite() && target.is_finite() {
-                                    (current - target).abs() <= epsilon
-                                } else {
-                                    current == target || (current.is_nan() && target.is_nan())
-                                }
-                            } else {
-                                false
-                            }
-                        }
-                        SearchType::Double => {
-                            if buf.len() == 8 && search_value.1.len() == 8 {
-                                let current = f64::from_le_bytes([buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]]);
-                                let target = f64::from_le_bytes([
-                                    search_value.1[0],
-                                    search_value.1[1],
-                                    search_value.1[2],
-                                    search_value.1[3],
-                                    search_value.1[4],
-                                    search_value.1[5],
-                                    search_value.1[6],
-                                    search_value.1[7],
-                                ]);
-
-                                let epsilon = get_epsilon_f64(target);
-
-                                if current.is_finite() && target.is_finite() {
-                                    (current - target).abs() <= epsilon
-                                } else {
-                                    current == target || (current.is_nan() && target.is_nan())
-                                }
-                            } else {
-                                false
-                            }
-                        }
-                        _ => {
-                            // For integer types, use exact comparison
-                            let val = SearchValue(result.search_type, buf);
-                            val.1 == search_value.1
-                        }
-                    };
-
-                    if matches {
-                        results.push(*result);
-                    }
-                }
-            }
-            Err(err) => {
-                eprintln!("Error converting {:?}: {}", result.search_type, err);
-            }
-        }
-    }
-    results
+/// Internal narrowing entry point, exposed for benchmarks and regression tests.
+#[doc(hidden)]
+pub fn update_results(old_results: &[SearchResult], value_text: &str, handle: &process_memory::ProcessHandle) -> Vec<SearchResult> {
+    narrowing::PreparedSearch::new(old_results, value_text).update_results(old_results, &memory_reader::ExactProcessReader(handle))
 }
 
 pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: SearchType, start: usize) -> Vec<SearchResult> {

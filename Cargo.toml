@@ -67,6 +67,10 @@ harness = false
 name = "search_regions"
 harness = false
 
+[[bench]]
+name = "search_pipeline"
+harness = false
+
 # Linux: libc for process_vm_readv
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

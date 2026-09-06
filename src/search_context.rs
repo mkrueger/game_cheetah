@@ -203,47 +203,31 @@ impl SearchContext {
             new_results.extend(results);
         }
 
-        // Check if cache is valid - return Arc clone (cheap!) when there is no new data.
+        // Completion can invalidate the flag without changing any results.
+        // No incoming batch means the sorted cache can still be reused.
         if new_results.is_empty()
-            && self.cache_valid.load(Ordering::Acquire)
             && let Ok(cache) = self.cached_results.read()
             && let Some(ref results) = *cache
         {
+            self.cache_valid.store(true, Ordering::Release);
             return Arc::clone(results); // Only clones the Arc, not the Vec!
         }
 
-        let mut all_results = Vec::new();
+        new_results.sort_unstable_by_key(result_key);
+        new_results.dedup_by_key(|r| result_key(r));
 
-        // Get existing cached results in a separate scope to ensure lock is dropped
-        {
-            if let Ok(cache) = self.cached_results.read()
-                && let Some(ref cached) = *cache
-            {
-                all_results.extend_from_slice(cached);
-            }
-        } // Read lock definitely dropped here
-
-        all_results.extend(new_results);
-
-        // Keep results sorted by address so the displayed list is stable as
-        // parallel workers stream more hits in. Without this, the order
-        // depends on worker completion order and rows visibly shuffle when
-        // a refresh tick or filter pass merges fresh batches in. Sort by
-        // (addr, search_type as u8) so Guess hits that produce multiple
-        // typed entries at the same address keep a deterministic order.
-        all_results.sort_by_key(|r| (r.addr, r.search_type as u8));
-        all_results.dedup_by_key(|r| (r.addr, r.search_type as u8));
-
-        // Wrap in Arc for cheap future clones
-        let arc_results = Arc::new(all_results);
-
-        // Update cache with the Arc
-        if let Ok(mut cache) = self.cached_results.write() {
-            *cache = Some(Arc::clone(&arc_results)); // Store an Arc clone
-            self.cache_valid.store(true, Ordering::Release);
+        let Ok(mut cache) = self.cached_results.write() else {
+            return Arc::new(new_results);
+        };
+        let cached = cache.get_or_insert_with(|| Arc::new(Vec::new()));
+        if !new_results.is_empty() {
+            // Copy-on-write preserves snapshots held by the UI or Undo. When
+            // nobody else owns the cache, reuse its allocation directly.
+            let results = Arc::make_mut(cached);
+            merge_results(results, &new_results);
         }
-
-        arc_results
+        self.cache_valid.store(true, Ordering::Release);
+        Arc::clone(cached)
     }
 
     pub fn invalidate_cache(&self) {
@@ -260,9 +244,110 @@ impl SearchContext {
     }
 }
 
+fn result_key(result: &SearchResult) -> (usize, u8) {
+    (result.addr, result.search_type as u8)
+}
+
+/// Merge sorted, deduplicated batches backwards into the existing allocation.
+/// Appending non-overlapping batches requires neither a full scan nor sorting.
+fn merge_results(results: &mut Vec<SearchResult>, incoming: &[SearchResult]) {
+    let old_len = results.len();
+    let append_only = results.last().is_none_or(|last| result_key(last) < result_key(&incoming[0]));
+    results.extend_from_slice(incoming);
+    if append_only {
+        return;
+    }
+    let (mut left, mut right) = (old_len, incoming.len());
+    while right > 0 {
+        let dest = left + right - 1;
+        if left > 0 && result_key(&results[left - 1]) > result_key(&incoming[right - 1]) {
+            left -= 1;
+            results[dest] = results[left];
+        } else {
+            right -= 1;
+            results[dest] = incoming[right];
+        }
+    }
+    results.dedup_by_key(|r| result_key(r));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn keys(results: &[SearchResult]) -> Vec<(usize, u8)> {
+        results.iter().map(result_key).collect()
+    }
+
+    #[test]
+    fn streamed_merge_matches_full_sort_and_dedup() {
+        let search = SearchContext::new("merge".into());
+        let mut expected = Vec::new();
+        let mut seed = 0x1234_5678u64;
+        for _ in 0..80 {
+            let mut batch = Vec::new();
+            for _ in 0..250 {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                let ty = [SearchType::Int, SearchType::Float, SearchType::Double][seed as usize % 3];
+                batch.push(SearchResult::new((seed as usize % 1024) * 8, ty));
+            }
+            expected.extend_from_slice(&batch);
+            expected.sort_by_key(result_key);
+            expected.dedup_by_key(|r| result_key(r));
+            search.results_sender.send(batch).unwrap();
+            assert_eq!(keys(&search.collect_results()), keys(&expected));
+        }
+    }
+
+    #[test]
+    fn merge_preserves_shared_snapshots_and_types() {
+        let mut search = SearchContext::new("snapshots".into());
+        search.set_cached_results(vec![SearchResult::new(20, SearchType::Int)]);
+        let snapshot = search.collect_results();
+        search.push_undo_state(snapshot.clone());
+        search
+            .results_sender
+            .send(vec![
+                SearchResult::new(20, SearchType::Float),
+                SearchResult::new(10, SearchType::Int),
+                SearchResult::new(20, SearchType::Int),
+                SearchResult::new(30, SearchType::Int),
+            ])
+            .unwrap();
+        assert_eq!(keys(&search.collect_results()), vec![(10, 3), (20, 3), (20, 5), (30, 3)]);
+        assert_eq!(keys(&snapshot), vec![(20, 3)]);
+        search.undo_last_search();
+        assert_eq!(keys(&search.collect_results()), keys(&snapshot));
+    }
+
+    #[test]
+    fn no_new_results_reuses_cache_even_after_completion() {
+        let search = SearchContext::new("cache".into());
+        search.set_cached_results(vec![SearchResult::new(20, SearchType::Int)]);
+        let snapshot = search.collect_results();
+        search.cache_valid.store(false, Ordering::Release);
+        search.results_sender.send(Vec::new()).unwrap();
+        assert!(Arc::ptr_eq(&snapshot, &search.collect_results()));
+        search.invalidate_cache();
+        assert!(search.collect_results().is_empty());
+    }
+
+    #[test]
+    fn exclusive_cache_reuses_vector_allocation() {
+        let search = SearchContext::new("reuse".into());
+        let mut initial = Vec::with_capacity(64);
+        initial.push(SearchResult::new(20, SearchType::Int));
+        let pointer = initial.as_ptr();
+        search.set_cached_results(initial);
+        for address in [30, 10, 20, 40] {
+            search.results_sender.send(vec![SearchResult::new(address, SearchType::Int)]).unwrap();
+            let result = search.collect_results();
+            assert_eq!(result.as_ptr(), pointer);
+        }
+        assert_eq!(keys(&search.collect_results()), vec![(10, 3), (20, 3), (30, 3), (40, 3)]);
+    }
 
     #[test]
     fn undo_restores_complete_state_and_discards_pending_results() {

@@ -1,5 +1,47 @@
 use process_memory::{TryIntoProcessHandle, copy_address};
 
+/// Unlike process-memory 0.5's Linux implementation, require a complete read.
+/// Its CopyAddress adapter discards process_vm_readv's positive byte count,
+/// so a short read otherwise leaves stale bytes in a reused narrowing buffer.
+pub(super) struct ExactProcessReader<'a>(pub &'a process_memory::ProcessHandle);
+
+impl process_memory::CopyAddress for ExactProcessReader<'_> {
+    fn get_pointer_width(&self) -> process_memory::Architecture {
+        self.0.get_pointer_width()
+    }
+
+    fn copy_address(&self, address: usize, buffer: &mut [u8]) -> std::io::Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            let local = libc::iovec {
+                iov_base: buffer.as_mut_ptr().cast(),
+                iov_len: buffer.len(),
+            };
+            let remote = libc::iovec {
+                iov_base: address as *mut libc::c_void,
+                iov_len: buffer.len(),
+            };
+            // SAFETY: `buffer` is exclusively borrowed and valid for its full
+            // length. The kernel validates remote addresses; neither iovec is
+            // retained beyond this call. The PID comes from the process handle.
+            let read = unsafe { libc::process_vm_readv(self.0.0, &local, 1, &remote, 1, 0) };
+            if read < 0 {
+                Err(std::io::Error::last_os_error())
+            } else if read as usize != buffer.len() {
+                Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "partial process memory read"))
+            } else {
+                Ok(())
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            // macOS checks mach_vm_read_overwrite's byte count; Windows reports
+            // inaccessible portions through ReadProcessMemory's failure status.
+            self.0.copy_address(address, buffer)
+        }
+    }
+}
+
 /// Process memory reader using `/proc/[pid]/mem` + `pread` on Linux.
 /// Profiling on the scan hot path showed the persistent fd + `pread` approach
 /// was faster after warm-up than repeated `process_vm_readv` calls for this
