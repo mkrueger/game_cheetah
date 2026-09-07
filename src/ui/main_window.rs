@@ -157,6 +157,14 @@ pub fn view_settings(app: &mut App, ui: &mut egui::Ui) {
                     app.persist_settings();
                 }
 
+                if toggle_section(
+                    ui,
+                    &mut app.confirm_value_writes,
+                    fl!(crate::LANGUAGE_LOADER, "confirm-value-writes-label"),
+                    fl!(crate::LANGUAGE_LOADER, "confirm-value-writes-description"),
+                ) {
+                    app.persist_settings();
+                }
                 config_directory_section(ui);
             });
         });

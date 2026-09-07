@@ -94,6 +94,9 @@ pub struct App {
     /// Check the GitHub releases API once per launch.
     pub check_for_updates: bool,
 
+    /// Opt-in: result edits are buffered until Enter instead of written live.
+    pub confirm_value_writes: bool,
+
     update_check_rx: Option<UpdateCheckRx>,
     /// Tag of the latest release if it is newer than [`crate::VERSION`].
     pub latest_version: Option<String>,
@@ -161,6 +164,7 @@ impl Default for App {
             cheat_table_status_at: None,
             auto_reconnect: false,
             check_for_updates: false,
+            confirm_value_writes: false,
             update_check_rx: None,
             latest_version: None,
             value_change_tracker: ValueCache::new(VALUE_CACHE_CAPACITY),
@@ -183,6 +187,7 @@ impl App {
         Self {
             auto_reconnect: settings.auto_reconnect,
             check_for_updates: settings.check_for_updates,
+            confirm_value_writes: settings.confirm_value_writes,
             ..Self::default()
         }
     }
@@ -197,6 +202,7 @@ impl App {
         let settings = crate::UserSettings {
             auto_reconnect: self.auto_reconnect,
             check_for_updates: self.check_for_updates,
+            confirm_value_writes: self.confirm_value_writes,
         };
         if let Err(e) = settings.save() {
             self.state.push_error(AppError::Generic { message: e });

@@ -37,6 +37,11 @@ Use it to search values in a running process, narrow down result sets, edit memo
 
 ## Numeric limits and result filters
 
+Result values are written live by default. Enable **Write values only on Enter**
+in **Settings** to buffer result-table edits until Enter; Escape or leaving the
+field discards unconfirmed input. This option is off for new and existing users.
+The memory inspector's existing Enter-to-write behavior is unchanged.
+
 `Int` is a signed 32-bit integer, limited to −2,147,483,648 through 2,147,483,647.
 This is a storage limit, not an artificial digit limit. For example, if a game
 stores resources scaled by 100,000, a displayed 18,000 is stored as 1,800,000,000.

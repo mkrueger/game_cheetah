@@ -19,6 +19,7 @@ const SETTINGS_FILE: &str = "settings.toml";
 pub struct UserSettings {
     pub auto_reconnect: bool,
     pub check_for_updates: bool,
+    pub confirm_value_writes: bool,
 }
 
 impl Default for UserSettings {
@@ -26,6 +27,7 @@ impl Default for UserSettings {
         Self {
             auto_reconnect: false,
             check_for_updates: true,
+            confirm_value_writes: false,
         }
     }
 }
@@ -65,11 +67,13 @@ mod tests {
         let original = UserSettings {
             auto_reconnect: true,
             check_for_updates: false,
+            confirm_value_writes: true,
         };
         let text = toml::to_string_pretty(&original).unwrap();
         let parsed: UserSettings = toml::from_str(&text).unwrap();
         assert!(parsed.auto_reconnect);
         assert!(!parsed.check_for_updates);
+        assert!(parsed.confirm_value_writes);
     }
 
     #[test]
@@ -77,5 +81,7 @@ mod tests {
         let parsed: UserSettings = toml::from_str("auto_reconnect = true\nfuture_field = 42\n").unwrap();
         assert!(parsed.auto_reconnect);
         assert!(parsed.check_for_updates);
+        assert!(!parsed.confirm_value_writes);
+        assert!(!UserSettings::default().confirm_value_writes);
     }
 }

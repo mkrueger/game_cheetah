@@ -201,6 +201,10 @@ back-to-main-button = Zurück zum Hauptmenü
 
 # Einstellungen
 settings-title = Einstellungen
+confirm-value-writes-label = Werte erst mit Enter schreiben
+confirm-value-writes-description = In der Trefferliste schreibt Enter den bearbeiteten Wert; Escape oder Verlassen des Feldes verwirft die Eingabe. Standardmäßig aus: Gültige Eingaben werden sofort geschrieben. Der Speicherinspektor behält sein bisheriges Schreiben mit Enter bei.
+result-confirm-edit-label = Mit Enter bestätigen
+result-confirm-edit-tooltip = Wert bearbeiten (F2). Enter schreibt; Escape oder Verlassen des Feldes verwirft die Eingabe. Fehlgeschlagene Schreibversuche behalten die Eingabe zur Korrektur.
 automatic-reconnect-label = Automatische Wiederverbindung
 automatic-reconnect-description = Wenn der Zielprozess beendet wird, weiter nach einem Prozess mit demselben Namen suchen und automatisch erneut verbinden. Standardmäßig deaktiviert.
 check-for-updates-label = Auf Updates prüfen

@@ -672,6 +672,101 @@ fn own_value_app(value: &mut i32) -> App {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn opt_in_confirmation_buffers_edits_until_enter_for_click_and_f2() {
+    for via_f2 in [false, true] {
+        let mut value = Box::new(24680_i32);
+        let mut app = own_value_app(&mut value);
+        assert!(!app.confirm_value_writes);
+        app.confirm_value_writes = true;
+        let ctx = context();
+        let output = settle(&mut app, &ctx, LARGE);
+        text_rect(&output, &fl!(LANGUAGE_LOADER, "result-confirm-edit-label"));
+        if via_f2 {
+            click_address(&mut app, &ctx, &*value as *const i32 as usize);
+            press_key(&mut app, &ctx, Key::F2);
+        } else {
+            click(&mut app, &ctx, LARGE, text_rect(&output, "24680").center());
+        }
+        press_key(&mut app, &ctx, Key::Home);
+        press_key(&mut app, &ctx, Key::Delete);
+        frame(&mut app, &ctx, LARGE, vec![Event::Text("3".to_owned())]);
+        assert_eq!(app.editing_result.as_ref().unwrap().1, "34680");
+        assert_eq!(*value, 24680);
+        press_key(&mut app, &ctx, Key::Enter);
+        assert_eq!(*value, 34680);
+        assert!(app.editing_result.is_none());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn opt_in_confirmation_escape_and_focus_loss_discard_without_writing() {
+    for escape in [true, false] {
+        let mut value = Box::new(24680_i32);
+        let mut app = own_value_app(&mut value);
+        app.confirm_value_writes = true;
+        let ctx = context();
+        click_address(&mut app, &ctx, &*value as *const i32 as usize);
+        press_key(&mut app, &ctx, Key::F2);
+        press_key(&mut app, &ctx, Key::Home);
+        press_key(&mut app, &ctx, Key::Delete);
+        assert_eq!(*value, 24680);
+        if escape {
+            press_key(&mut app, &ctx, Key::Escape);
+        } else {
+            ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("search_value_input")));
+            settle(&mut app, &ctx, LARGE);
+        }
+        assert!(app.editing_result.is_none());
+        assert_eq!(*value, 24680);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn opt_in_invalid_enter_preserves_input_and_focus_for_correction() {
+    let mut value = Box::new(24680_i32);
+    let mut app = own_value_app(&mut value);
+    app.confirm_value_writes = true;
+    let ctx = context();
+    let address = &*value as *const i32 as usize;
+    click_address(&mut app, &ctx, address);
+    press_key(&mut app, &ctx, Key::F2);
+    press_key(&mut app, &ctx, Key::End);
+    frame(&mut app, &ctx, LARGE, vec![Event::Text("x".to_owned())]);
+    press_key(&mut app, &ctx, Key::Enter);
+    settle(&mut app, &ctx, LARGE);
+    assert_eq!(*value, 24680);
+    assert_eq!(app.editing_result.as_ref().unwrap().1, "24680x");
+    assert!(ctx.memory(|memory| memory.has_focus(egui::Id::new(("result-value", address, SearchType::Int)))));
+    assert!(app.state.current_error().is_some());
+    press_key(&mut app, &ctx, Key::Backspace);
+    press_key(&mut app, &ctx, Key::Backspace);
+    assert_eq!(*value, 24680);
+    press_key(&mut app, &ctx, Key::Enter);
+    assert_eq!(*value, 2468);
+    assert!(app.editing_result.is_none());
+}
+
+#[test]
+fn settings_show_the_opt_in_confirmation_option() {
+    let mut app = App::default();
+    assert!(!app.confirm_value_writes);
+    let ctx = context();
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, LARGE)),
+            ..Default::default()
+        },
+        |ui| game_cheetah::ui::main_window::view_settings(&mut app, ui),
+    );
+    output.textures_delta.clear();
+    text_rect(&output, &fl!(LANGUAGE_LOADER, "confirm-value-writes-label"));
+    assert!(!app.confirm_value_writes);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn f2_edits_only_the_selected_value_and_escape_keeps_documented_live_writes() {
     let mut value = Box::new(24680_i32);
     let mut app = own_value_app(&mut value);

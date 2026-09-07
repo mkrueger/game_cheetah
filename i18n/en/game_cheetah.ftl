@@ -197,6 +197,10 @@ automatic-reconnect-waiting-message = Automatic reconnect is enabled in Settings
 back-to-main-button = Back to main menu
 
 # Settings
+confirm-value-writes-label = Write values only on Enter
+confirm-value-writes-description = In the result table, Enter writes the edited value; Escape or leaving the field discards the input. Off by default: valid input is written immediately. The memory inspector keeps its existing Enter-to-write behavior.
+result-confirm-edit-label = Confirm with Enter
+result-confirm-edit-tooltip = Edit value (F2). Enter writes; Escape or leaving the field discards the input. Failed writes keep the input for correction.
 settings-title = Settings
 automatic-reconnect-label = Automatic reconnect
 automatic-reconnect-description = When the target process exits, keep watching for a process with the same name and attach again automatically. Disabled by default.

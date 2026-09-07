@@ -938,8 +938,19 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
             ui.add(egui::Label::new(egui::RichText::new(text).size(13.0)).wrap_mode(egui::TextWrapMode::Extend));
             ui.separator();
         }
-        ui.add(egui::Label::new(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "result-live-edit-label")).size(13.0)).wrap_mode(egui::TextWrapMode::Extend))
-            .on_hover_text(fl!(crate::LANGUAGE_LOADER, "result-live-edit-tooltip"));
+        let (edit_label, edit_hint) = if app.confirm_value_writes {
+            (
+                fl!(crate::LANGUAGE_LOADER, "result-confirm-edit-label"),
+                fl!(crate::LANGUAGE_LOADER, "result-confirm-edit-tooltip"),
+            )
+        } else {
+            (
+                fl!(crate::LANGUAGE_LOADER, "result-live-edit-label"),
+                fl!(crate::LANGUAGE_LOADER, "result-live-edit-tooltip"),
+            )
+        };
+        ui.add(egui::Label::new(egui::RichText::new(edit_label).size(13.0)).wrap_mode(egui::TextWrapMode::Extend))
+            .on_hover_text(edit_hint);
         ui.add(
             egui::Label::new(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "result-keyboard-hint")).size(12.0).weak()).wrap_mode(egui::TextWrapMode::Extend),
         );
@@ -1178,7 +1189,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                         if request_focus {
                             r.request_focus();
                         }
-                        if r.changed() {
+                        if r.changed() && !app.confirm_value_writes {
                             // Live write: try to push every keystroke into
                             // the target process. Invalid intermediate input
                             // is silently ignored so half-typed numbers
@@ -1209,7 +1220,12 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                         if !cell_hovered && !has_focus {
                             editor = editor.frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(4, 2)));
                         }
-                        let r = ui.add(editor).on_hover_text(fl!(crate::LANGUAGE_LOADER, "result-edit-tooltip"));
+                        let hint = if app.confirm_value_writes {
+                            fl!(crate::LANGUAGE_LOADER, "result-confirm-edit-tooltip")
+                        } else {
+                            fl!(crate::LANGUAGE_LOADER, "result-edit-tooltip")
+                        };
+                        let r = ui.add(editor).on_hover_text(hint);
                         if r.gained_focus() || r.changed() {
                             app.selected_result = Some(result);
                             begin_edit = Some((i, buf));
@@ -1368,6 +1384,13 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
         let ok = app.commit_result_value(i, &text);
         if ok {
             app.editing_result = None;
+        } else if app.confirm_value_writes {
+            // Enter surrenders TextEdit focus. Keep failed input available for
+            // correction rather than discarding it on the next frame.
+            if let Some(result) = app.state.searches[search_index].collect_results().get(i) {
+                ctx.memory_mut(|memory| memory.request_focus(egui::Id::new(("result-value", result.addr, result.search_type))));
+            }
+            cancel_edit = false;
         }
     }
     if cancel_edit && !started_edit {
