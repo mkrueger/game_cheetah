@@ -665,7 +665,11 @@ fn numeric_filter_controls(app: &mut App, ui: &mut egui::Ui, remaining_height: f
                 numeric_filter_criteria(search, ui);
                 validation = search.result_filter().map(|_| ());
                 if let Err(err) = &validation {
-                    ui.colored_label(ui.visuals().error_fg_color, err);
+                    if search.has_result_filter_criteria() {
+                        ui.colored_label(ui.visuals().error_fg_color, err);
+                    } else {
+                        ui.label(egui::RichText::new(err).weak());
+                    }
                 }
             });
         apply = ui

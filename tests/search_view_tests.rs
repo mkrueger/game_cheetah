@@ -991,6 +991,59 @@ fn hidden_numeric_defaults_cannot_enable_apply_without_independent_criteria() {
 }
 
 #[test]
+fn inactive_filter_hint_is_neutral_but_invalid_criteria_remain_errors() {
+    for ty in SearchType::NUMERIC_TYPES.into_iter().chain([SearchType::Guess, SearchType::Unknown]) {
+        let mut app = app_with_results(23);
+        let search = &mut app.state.searches[0];
+        search.search_type = ty;
+        search.show_numeric_filter = true;
+        search.numeric_filter_enabled = false;
+        let ctx = context();
+        let assert_color = |output: &FullOutput, label: &str, expected: egui::Color32| {
+            text_rect(output, label);
+            for (_, shape) in shapes(output) {
+                if let Shape::Text(text) = shape
+                    && text.galley.job.text == label
+                {
+                    assert!(text.galley.job.sections.iter().all(|section| section.format.color == expected));
+                }
+            }
+        };
+        let output = settle(&mut app, &ctx, LARGE);
+        assert_color(
+            &output,
+            &fl!(LANGUAGE_LOADER, "result-filter-no-criteria"),
+            ctx.global_style().visuals.weak_text_color(),
+        );
+        click(
+            &mut app,
+            &ctx,
+            LARGE,
+            text_rect(&output, &fl!(LANGUAGE_LOADER, "numeric-filter-apply")).center(),
+        );
+        assert!(app.state.searches[0].old_results.is_empty());
+        assert!(app.state.current_error().is_none());
+
+        let search = &mut app.state.searches[0];
+        match ty {
+            SearchType::Unknown => {
+                search.numeric_filter_enabled = true;
+                search.numeric_filter_lower = "invalid".into();
+            }
+            SearchType::Guess => {
+                search.type_filter_enabled = true;
+                search.filter_types.fill(false);
+            }
+            _ => continue,
+        }
+        let output = settle(&mut app, &ctx, LARGE);
+        assert_text_absent(&output, &fl!(LANGUAGE_LOADER, "result-filter-no-criteria"));
+        let error = app.state.searches[0].result_filter().unwrap_err();
+        assert_color(&output, &error, ctx.global_style().visuals.error_fg_color);
+    }
+}
+
+#[test]
 fn type_chips_and_filter_toggles_are_independent_and_empty_selection_cannot_apply() {
     let mut app = app_with_results(20_000);
     app.state.searches[0].search_type = SearchType::Guess;

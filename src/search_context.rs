@@ -144,10 +144,16 @@ impl SearchContext {
         bounded(RESULTS_CHANNEL_CAPACITY)
     }
 
+    pub(crate) fn has_result_filter_criteria(&self) -> bool {
+        (self.search_type == SearchType::Unknown && self.numeric_filter_enabled)
+            || (matches!(self.search_type, SearchType::Guess | SearchType::Unknown) && self.type_filter_enabled)
+            || self.stable_filter_enabled
+    }
+
     pub fn result_filter(&self) -> Result<crate::ResultFilter, String> {
         let numeric_enabled = self.search_type == SearchType::Unknown && self.numeric_filter_enabled;
         let types_enabled = matches!(self.search_type, SearchType::Guess | SearchType::Unknown) && self.type_filter_enabled;
-        if !numeric_enabled && !types_enabled && !self.stable_filter_enabled {
+        if !self.has_result_filter_criteria() {
             return Err(i18n_embed_fl::fl!(crate::LANGUAGE_LOADER, "result-filter-no-criteria"));
         }
         let numeric = numeric_enabled

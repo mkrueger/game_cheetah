@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-09-07
+
+### Added
+
+- Result filters can narrow unknown-value searches with exact numeric comparisons
+  (`=`, `≠`, `<`, `≤`, `>`, `≥`, and inclusive ranges). Number / Guess and Unknown
+  searches also offer data-type filtering. All numeric search modes can observe
+  stable values for 1–30 seconds. Filters check all hits, including hidden rows,
+  without writing memory; Undo restores results, not released freezes.
+- All search modes can be cancelled, restoring the previous search state instead
+  of keeping partial results. Stability observation can be cancelled as well.
+- Optional **Write values only on Enter** buffers result-table edits until
+  confirmation. Escape, focus loss or switching tabs discards unconfirmed edits;
+  live writes remain the default and already-written values are not undone.
+- Experimental module-relative addresses, manual pointer chains, bounded pointer
+  scanning and candidate rescanning are available through **Settings → Persistence
+  (UNSAFE)**. Saving can automatically search for pointer chains. These heuristics
+  do not guarantee correct addresses after a restart, even when a chain remains
+  readable.
+
+### Changed
+
+- Persistence is now explicitly opt-in and disabled by default. Save/Load,
+  address editing and pointer scanning stay hidden until enabled. Disabling it
+  stops related work and clears persistence-dependent search state and freezes
+  without deleting saved files.
+- Only relevant filters are shown: concrete numeric types offer stability only;
+  Number / Guess adds data types; Unknown also adds value comparisons. Hidden
+  criteria are ignored. Filter controls scroll when needed in small windows,
+  while Apply remains accessible. With no active filter, a neutral hint replaces
+  an error message and Apply stays disabled; invalid criteria still show errors.
+- Narrowing in the active tab returns focus to the search field and selects its
+  previous value for replacement, without opening a result editor. Background
+  completion does not steal focus from another tab or active input.
+- Search tabs retain their selection and result scroll position, including when
+  preceding tabs are closed. Narrowing preserves a selection by address and
+  concrete type rather than row index; Reset clears it and resets scrolling.
+- Number / Guess tries Int32, Float32 and Float64. Int64 replaces Int32 only for
+  integer input outside the signed 32-bit range, avoiding duplicate integer-width
+  hits for small values. Int64 remains available explicitly.
+- Save/load notices and errors show compact summaries with expandable details.
+  Recovery actions offer process selection, input correction or a new search as
+  appropriate; zero-match searches offer Undo or a new search instead of an error.
+  Integer overflow messages explain storage limits and offer manual type inspection.
+
+### Fixed
+
+- Cancelled or replaced search workers can no longer publish stale completion or
+  progress into a newer search. Failed reads are distinguished from zero matches;
+  an entirely unreadable narrowing pass restores the previous state.
+- Unreadable loaded addresses remain visible as unresolved entries, with Reset
+  and recovery actions available rather than leaving the search stuck.
+- Cheat-table saves replace files atomically, preserving the previous file if
+  writing fails. Older table formats remain loadable.
+- Hovering notice buttons no longer shifts the surrounding layout.
+
 ## [0.7.2] - 2026-09-06
 
 ### Added
