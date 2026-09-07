@@ -29,8 +29,18 @@ pub enum UnknownComparison {
 impl SearchType {
     pub const NUMERIC_TYPES: [Self; 6] = [Self::Byte, Self::Short, Self::Int, Self::Int64, Self::Float, Self::Double];
 
-    /// Guess finds possible interpretations, not the target's variable type.
-    pub const GUESS_TYPES: [Self; 4] = [Self::Int, Self::Int64, Self::Float, Self::Double];
+    /// Prefer Int32 whenever the input fits; trying Int64 as well would
+    /// duplicate hits when the adjacent four bytes happen to be zero.
+    /// This is a heuristic, not detection of the game's variable width.
+    pub fn guess_types(text: &str) -> &'static [Self] {
+        if text.parse::<i32>().is_ok() {
+            &[Self::Int, Self::Float, Self::Double]
+        } else if text.parse::<i64>().is_ok() {
+            &[Self::Int64, Self::Float, Self::Double]
+        } else {
+            &[Self::Float, Self::Double]
+        }
+    }
 
     pub fn integer_range(&self) -> Option<(&'static str, &'static str, &'static str)> {
         match self {
@@ -129,8 +139,8 @@ impl SearchType {
             }
             SearchType::Guess => {
                 // For Guess, we don't decide the concrete numeric type here —
-                // the parallel search uses every type that successfully parses
-                // the text. Reject input that doesn't look like a number for
+                // the parallel search selects candidates via guess_types.
+                // Reject input that doesn't look like a number for
                 // any of the supported numeric types so the UI can flag it.
                 let parses_as_number = txt.parse::<i64>().is_ok() || txt.parse::<u64>().is_ok() || txt.parse::<f64>().is_ok();
                 if !parses_as_number {

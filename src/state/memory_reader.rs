@@ -3,7 +3,7 @@ use process_memory::{TryIntoProcessHandle, copy_address};
 /// Unlike process-memory 0.5's Linux implementation, require a complete read.
 /// Its CopyAddress adapter discards process_vm_readv's positive byte count,
 /// so a short read otherwise leaves stale bytes in a reused narrowing buffer.
-pub(super) struct ExactProcessReader<'a>(pub &'a process_memory::ProcessHandle);
+pub(crate) struct ExactProcessReader<'a>(pub &'a process_memory::ProcessHandle);
 
 impl process_memory::CopyAddress for ExactProcessReader<'_> {
     fn get_pointer_width(&self) -> process_memory::Architecture {

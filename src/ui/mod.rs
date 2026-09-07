@@ -1,4 +1,7 @@
+pub mod address_editor;
 pub mod app;
+pub(crate) mod auto_save;
+pub mod pointer_scanner;
 
 pub mod in_process_view;
 pub mod main_window;

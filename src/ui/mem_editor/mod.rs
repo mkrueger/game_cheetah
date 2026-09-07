@@ -843,6 +843,14 @@ fn editor_header(editor: &mut MemoryEditor, pid: process_memory::Pid, ui: &mut e
 }
 
 pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
+    if let Some(index) = app.memory_editor_result_index
+        && let Some(result) = app.state.searches[app.state.current_search].collect_results().get(index)
+        && let Err(error) = app.state.validate_result_address(app.state.current_search, result)
+    {
+        app.state.push_error(error);
+        app.close_memory_editor();
+        return;
+    }
     let pid_t = app.state.pid as process_memory::Pid;
     if editor_header(&mut app.memory_editor, pid_t, ui) {
         app.close_memory_editor();

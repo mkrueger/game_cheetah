@@ -50,6 +50,11 @@ const VALUE_CACHE_CAPACITY: usize = 8192;
 type UpdateCheckRx = crossbeam_channel::Receiver<Option<String>>;
 
 pub struct App {
+    pub address_editor: Option<crate::ui::address_editor::AddressEditor>,
+    pub pointer_scanner: crate::ui::pointer_scanner::PointerScanner,
+    pub(crate) automatic_save: Option<crate::ui::auto_save::AutomaticSave>,
+    pub(crate) automatic_save_notice: Option<String>,
+    last_address_refresh: Instant,
     pub app_state: AppState,
     pub state: GameCheetahEngine,
 
@@ -96,6 +101,9 @@ pub struct App {
 
     /// Opt-in: result edits are buffered until Enter instead of written live.
     pub confirm_value_writes: bool,
+
+    /// Experimental address persistence; hidden unless explicitly enabled.
+    pub enable_persistence: bool,
 
     update_check_rx: Option<UpdateCheckRx>,
     /// Tag of the latest release if it is newer than [`crate::VERSION`].
@@ -146,6 +154,11 @@ impl Default for App {
     /// config dir.
     fn default() -> Self {
         Self {
+            address_editor: None,
+            pointer_scanner: Default::default(),
+            automatic_save: None,
+            automatic_save_notice: None,
+            last_address_refresh: Instant::now(),
             app_state: AppState::default(),
             state: GameCheetahEngine::default(),
             renaming_search_index: None,
@@ -165,6 +178,7 @@ impl Default for App {
             auto_reconnect: false,
             check_for_updates: false,
             confirm_value_writes: false,
+            enable_persistence: false,
             update_check_rx: None,
             latest_version: None,
             value_change_tracker: ValueCache::new(VALUE_CACHE_CAPACITY),
@@ -188,6 +202,7 @@ impl App {
             auto_reconnect: settings.auto_reconnect,
             check_for_updates: settings.check_for_updates,
             confirm_value_writes: settings.confirm_value_writes,
+            enable_persistence: settings.enable_persistence,
             ..Self::default()
         }
     }
@@ -203,14 +218,44 @@ impl App {
             auto_reconnect: self.auto_reconnect,
             check_for_updates: self.check_for_updates,
             confirm_value_writes: self.confirm_value_writes,
+            enable_persistence: self.enable_persistence,
         };
         if let Err(e) = settings.save() {
             self.state.push_error(AppError::Generic { message: e });
         }
     }
 
+    /// Disable experimental tools without leaving hidden pointer-backed rows.
+    pub fn set_persistence_enabled(&mut self, enabled: bool) {
+        self.enable_persistence = enabled;
+        if enabled {
+            return;
+        }
+        self.cancel_cheat_table_save();
+        self.automatic_save_notice = None;
+        self.cheat_table_status.clear();
+        self.cheat_table_status_at = None;
+        self.pointer_scanner = Default::default();
+        self.address_editor = None;
+        // Do not turn previously loaded pointers into unguarded absolute rows.
+        // Clear only contexts with persistence metadata, including their Undo.
+        for index in 0..self.state.searches.len() {
+            let search = &self.state.searches[index];
+            if search.has_persistent_address_state() {
+                self.state.remove_freezes(index);
+                self.state.searches[index].clear_results();
+            }
+        }
+        self.clear_result_interaction();
+        self.clear_change_tracker();
+        if self.app_state == AppState::MemoryEditor {
+            self.close_memory_editor();
+        }
+    }
+
     /// Discard result interaction when the active result set is replaced.
     pub fn clear_result_interaction(&mut self) {
+        self.address_editor = None;
         self.selected_result = None;
         self.editing_result = None;
         self.result_selection_request_scroll = false;

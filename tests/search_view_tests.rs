@@ -81,6 +81,15 @@ fn text_rect(output: &FullOutput, label: &str) -> Rect {
         .unwrap_or_else(|| panic!("Missing visible text: {label:?}"))
 }
 
+fn assert_text_absent(output: &FullOutput, label: &str) {
+    assert!(
+        !shapes(output)
+            .into_iter()
+            .any(|(_, shape)| matches!(shape, Shape::Text(text) if text.galley.job.text == label)),
+        "Unexpected painted text: {label:?}"
+    );
+}
+
 fn assert_single_line_visible(output: &FullOutput, label: &str, size: Vec2) {
     let matches: Vec<_> = shapes(output)
         .into_iter()
@@ -160,6 +169,23 @@ fn press_key(app: &mut App, ctx: &Context, key: Key) {
     }
 }
 
+fn right_click(app: &mut App, ctx: &Context, size: Vec2, pos: Pos2) {
+    frame(app, ctx, size, vec![Event::PointerMoved(pos)]);
+    for pressed in [true, false] {
+        frame(
+            app,
+            ctx,
+            size,
+            vec![Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+    }
+}
+
 fn identity(result: Option<SearchResult>) -> Option<(usize, SearchType)> {
     result.map(|result| (result.addr, result.search_type))
 }
@@ -195,6 +221,341 @@ fn result_count_is_one_unwrapped_galley_and_actions_fit_both_viewports() {
             assert_button_visible(&output, &label, size);
         }
     }
+}
+
+#[test]
+fn loaded_unreadable_or_pending_addresses_can_be_reset_without_a_completed_scan() {
+    for size in SIZES {
+        for pending_only in [false, true] {
+            let mut app = app_with_results(0);
+            let address = if pending_only {
+                game_cheetah::AddressSpec::Module {
+                    module: "__missing_game__.so".into(),
+                    offset: "0x20".into(),
+                }
+            } else {
+                game_cheetah::AddressSpec::absolute(1)
+            };
+            app.state.searches[0].unresolved_addresses.push(game_cheetah::PendingAddress {
+                address,
+                search_type: SearchType::Int,
+                reason: "Not loaded".into(),
+            });
+            let path = std::env::temp_dir().join(format!("game-cheetah-reset-view-{}.toml", std::process::id()));
+            game_cheetah::save_cheat_table(&app.state, &path).unwrap();
+            app.state.searches = game_cheetah::load_cheat_table(&path, "Headless test").unwrap();
+            std::fs::remove_file(path).unwrap();
+            assert!(!app.state.searches[0].search_complete.load(Ordering::Acquire));
+            assert_eq!(app.state.searches[0].get_result_count(), usize::from(!pending_only));
+            // Narrowing unreadable loaded results restores this same incomplete
+            // context. The error must not make recovery controls disappear.
+            app.state.push_error(game_cheetah::AppError::SearchReadFailed);
+            app.state.new_search();
+            app.state.searches[1].set_cached_results(vec![SearchResult::new(0x9000, SearchType::Int)]);
+            app.state.current_search = 0;
+            let ctx = context();
+            let output = settle(&mut app, &ctx, size);
+            assert_button_visible(&output, &fl!(LANGUAGE_LOADER, "clear-button"), size);
+            click(&mut app, &ctx, size, text_rect(&output, &fl!(LANGUAGE_LOADER, "clear-button")).center());
+            let search = &app.state.searches[0];
+            assert_eq!(search.get_result_count(), 0);
+            assert!(search.address_overrides.is_empty());
+            assert!(search.unresolved_addresses.is_empty());
+            assert!(search.old_results.is_empty());
+            assert_eq!(search.searching, SearchMode::None);
+            assert!(app.state.current_error().is_none());
+            assert_eq!(app.state.searches[1].get_result_count(), 1);
+            let output = settle(&mut app, &ctx, size);
+            text_rect(&output, &fl!(LANGUAGE_LOADER, "initial-search-button"));
+            click(
+                &mut app,
+                &ctx,
+                size,
+                text_rect(&output, &SearchType::Guess.get_short_description_text()).center(),
+            );
+            let output = settle(&mut app, &ctx, size);
+            text_rect(&output, &SearchType::Int.get_description_text());
+        }
+    }
+}
+
+#[test]
+fn long_search_error_wraps_and_can_be_dismissed() {
+    for size in SIZES {
+        let mut app = app_with_results(2);
+        app.state.push_error(game_cheetah::AppError::SearchReadFailed);
+        let message = app.state.current_error().unwrap().to_string();
+        let ctx = context();
+        let output = settle(&mut app, &ctx, size);
+        let bounds = Rect::from_min_size(Pos2::ZERO, size);
+        assert!(bounds.contains_rect(text_rect(&output, &message)));
+        let dismiss = text_rect(&output, "×");
+        assert!(bounds.contains_rect(dismiss));
+        click(&mut app, &ctx, size, dismiss.center());
+        assert!(app.state.current_error().is_none());
+        assert_eq!(app.state.searches[0].get_result_count(), 2);
+    }
+}
+
+#[test]
+fn persistence_controls_require_opt_in_and_disappear_again_in_both_viewports() {
+    for size in SIZES {
+        let mut app = app_with_results(1);
+        assert!(!app.enable_persistence);
+        let before = result_identities(&app);
+        let ctx = context();
+        // Use the public in-memory setter, not Settings UI (which saves user settings).
+        for (phase, enabled) in [false, true, false].into_iter().enumerate() {
+            if phase > 0 {
+                app.set_persistence_enabled(enabled);
+            }
+            let output = settle(&mut app, &ctx, size);
+            for label in [fl!(LANGUAGE_LOADER, "save-cheat-table-button"), fl!(LANGUAGE_LOADER, "load-cheat-table-button")] {
+                if enabled {
+                    // Toolbar buttons are shorter than the search-action helper's 28px minimum.
+                    assert_single_line_visible(&output, &label, size);
+                } else {
+                    assert_text_absent(&output, &label);
+                }
+            }
+            for label in [fl!(LANGUAGE_LOADER, "update-button"), fl!(LANGUAGE_LOADER, "clear-button")] {
+                assert_button_visible(&output, &label, size);
+            }
+
+            right_click(&mut app, &ctx, size, text_rect(&output, "0x1000").center());
+            let output = settle(&mut app, &ctx, size);
+            for label in [fl!(LANGUAGE_LOADER, "address-edit"), fl!(LANGUAGE_LOADER, "pointer-scan-menu")] {
+                if enabled {
+                    assert_single_line_visible(&output, &label, size);
+                } else {
+                    assert_text_absent(&output, &label);
+                }
+            }
+            for label in [
+                fl!(LANGUAGE_LOADER, "copy-address-menu"),
+                fl!(LANGUAGE_LOADER, "copy-value-menu"),
+                fl!(LANGUAGE_LOADER, "freeze-result-tooltip"),
+                fl!(LANGUAGE_LOADER, "open-memory-editor-menu"),
+                fl!(LANGUAGE_LOADER, "remove-button"),
+            ] {
+                assert_single_line_visible(&output, &label, size);
+            }
+            // Exercise a normal menu action and dismiss before the next phase.
+            click(&mut app, &ctx, size, text_rect(&output, &fl!(LANGUAGE_LOADER, "copy-address-menu")).center());
+            let output = settle(&mut app, &ctx, size);
+            assert_text_absent(&output, &fl!(LANGUAGE_LOADER, "copy-address-menu"));
+            assert_eq!(result_identities(&app), before);
+            assert!(app.address_editor.is_none());
+            assert!(!app.pointer_scanner.open);
+        }
+    }
+}
+
+#[test]
+fn pointer_scanner_opens_from_result_menu_and_close_preserves_results() {
+    for size in SIZES {
+        let mut app = app_with_results(1);
+        app.set_persistence_enabled(true);
+        let before = result_identities(&app);
+        let ctx = context();
+        let output = settle(&mut app, &ctx, size);
+        let pos = text_rect(&output, "0x1000").center();
+        frame(&mut app, &ctx, size, vec![Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                &ctx,
+                size,
+                vec![Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                }],
+            );
+        }
+        let output = settle(&mut app, &ctx, size);
+        click(&mut app, &ctx, size, text_rect(&output, &fl!(LANGUAGE_LOADER, "pointer-scan-menu")).center());
+        assert!(app.pointer_scanner.open);
+        let output = settle(&mut app, &ctx, size);
+        let close = text_rect(&output, &fl!(LANGUAGE_LOADER, "pointer-scan-close"));
+        assert!(Rect::from_min_size(Pos2::ZERO, size).contains_rect(close));
+        text_rect(&output, &fl!(LANGUAGE_LOADER, "pointer-scan-new"));
+        assert!(app.pointer_scanner.job.is_none());
+        click(&mut app, &ctx, size, close.center());
+        assert!(!app.pointer_scanner.open);
+        assert_eq!(result_identities(&app), before);
+        assert!(app.state.searches[0].old_results.is_empty());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn save_automatically_scans_without_dialog_and_can_be_cancelled_in_small_view() {
+    let value = Box::new(12345_i32);
+    for size in SIZES {
+        let mut app = app_with_results(1);
+        app.set_persistence_enabled(true);
+        app.state.pid = std::process::id() as _;
+        let target = SearchResult::new(&*value as *const i32 as usize, SearchType::Int);
+        app.state.searches[0].set_cached_results(vec![target]);
+        let ctx = context();
+        let output = settle(&mut app, &ctx, size);
+        click(
+            &mut app,
+            &ctx,
+            size,
+            text_rect(&output, &fl!(LANGUAGE_LOADER, "save-cheat-table-button")).center(),
+        );
+        // This harness renders only; it never polls completion or writes a file.
+        assert!(app.is_saving_cheat_table());
+        assert!(!app.pointer_scanner.open);
+        let output = settle(&mut app, &ctx, size);
+        let cancel = fl!(LANGUAGE_LOADER, "auto-save-cancel");
+        assert_single_line_visible(&output, &cancel, size);
+        click(&mut app, &ctx, size, text_rect(&output, &cancel).center());
+        assert!(!app.is_saving_cheat_table());
+        let output = settle(&mut app, &ctx, size);
+        text_rect(&output, &fl!(LANGUAGE_LOADER, "auto-save-cancelled"));
+        assert_eq!(result_identities(&app), vec![(target.addr, target.search_type)]);
+        assert_eq!(*value, 12345);
+    }
+}
+
+#[test]
+fn pointer_candidates_survive_tab_reset_and_can_be_reopened() {
+    let mut app = app_with_results(1);
+    app.set_persistence_enabled(true);
+    app.pointer_scanner.candidates = Some(game_cheetah::pointer_scan::CandidateSet {
+        version: 1,
+        executable: "/games/game".into(),
+        value_type: SearchType::Int,
+        options: Default::default(),
+        candidates: Vec::new(),
+        limited: true,
+    });
+    app.clear_results();
+    let ctx = context();
+    let output = settle(&mut app, &ctx, LARGE);
+    click(&mut app, &ctx, LARGE, text_rect(&output, &fl!(LANGUAGE_LOADER, "pointer-scan-title")).center());
+    assert!(app.pointer_scanner.open);
+    assert!(app.pointer_scanner.candidates.as_ref().unwrap().limited);
+    assert!(app.start_pointer_scan(true).is_err());
+    assert!(app.adopt_pointer_candidate(0).is_err());
+}
+
+#[test]
+fn address_editor_controls_fit_and_cancel_preserves_results() {
+    for size in SIZES {
+        let mut app = app_with_results(1);
+        app.set_persistence_enabled(true);
+        let before = result_identities(&app);
+        let ctx = context();
+        app.begin_address_edit(0);
+        let output = settle(&mut app, &ctx, size);
+        text_rect(&output, &fl!(LANGUAGE_LOADER, "address-editor-title"));
+        text_rect(&output, &fl!(LANGUAGE_LOADER, "address-absolute"));
+        text_rect(&output, &fl!(LANGUAGE_LOADER, "address-relative"));
+        let cancel = text_rect(&output, &fl!(LANGUAGE_LOADER, "address-cancel"));
+        assert!(Rect::from_min_size(Pos2::ZERO, size).contains_rect(cancel));
+        click(&mut app, &ctx, size, cancel.center());
+        assert!(app.address_editor.is_none());
+        assert_eq!(result_identities(&app), before);
+        assert!(app.state.searches[0].old_results.is_empty());
+    }
+}
+
+#[test]
+fn unresolved_module_can_be_edited_without_an_active_result() {
+    let mut app = app_with_results(0);
+    app.set_persistence_enabled(true);
+    app.state.searches[0].unresolved_addresses.push(game_cheetah::PendingAddress {
+        address: game_cheetah::AddressSpec::Module {
+            module: "missing.so".into(),
+            offset: "0x20".into(),
+        },
+        search_type: SearchType::Int,
+        reason: "Module unavailable".into(),
+    });
+    let ctx = context();
+    let output = settle(&mut app, &ctx, LARGE);
+    text_rect(&output, "Module unavailable");
+    click(&mut app, &ctx, LARGE, text_rect(&output, &fl!(LANGUAGE_LOADER, "address-edit")).center());
+    let output = settle(&mut app, &ctx, LARGE);
+    text_rect(&output, &fl!(LANGUAGE_LOADER, "address-offset"));
+    assert!(app.address_editor.as_ref().unwrap().relative);
+    assert_eq!(app.state.searches[0].get_result_count(), 0);
+}
+
+#[test]
+fn address_mode_switch_preserves_the_resolved_address() {
+    let mut app = app_with_results(1);
+    app.set_persistence_enabled(true);
+    app.begin_address_edit(0);
+    let editor = app.address_editor.as_mut().unwrap();
+    editor.relative = true;
+    editor.module = "game.exe".into();
+    editor.value = "0x20".into();
+    editor.modules = game_cheetah::ModuleCatalog {
+        modules: vec![game_cheetah::LoadedModule {
+            path: "game.exe".into(),
+            base: 0x1000,
+            ranges: std::iter::once(0x1000..0x2000).collect(),
+            ambiguous: false,
+        }],
+    };
+    let ctx = context();
+    let output = settle(&mut app, &ctx, LARGE);
+    click(&mut app, &ctx, LARGE, text_rect(&output, &fl!(LANGUAGE_LOADER, "address-absolute")).center());
+    assert_eq!(app.address_editor.as_ref().unwrap().value, "0x1020");
+    let output = settle(&mut app, &ctx, LARGE);
+    click(&mut app, &ctx, LARGE, text_rect(&output, &fl!(LANGUAGE_LOADER, "address-relative")).center());
+    assert_eq!(app.address_editor.as_ref().unwrap().value, "0x20");
+    assert_eq!(app.state.searches[0].collect_results()[0].addr, 0x1000);
+}
+
+#[test]
+fn pointer_editor_preserves_width_and_offsets_in_pending_entries() {
+    let mut app = app_with_results(1);
+    app.set_persistence_enabled(true);
+    app.begin_address_edit(0);
+    let ctx = context();
+    let output = settle(&mut app, &ctx, LARGE);
+    click(&mut app, &ctx, LARGE, text_rect(&output, &fl!(LANGUAGE_LOADER, "pointer-mode")).center());
+    let editor = app.address_editor.as_mut().unwrap();
+    assert!(editor.pointer);
+    editor.module = "missing-game.exe".into();
+    editor.value = "0x100".into();
+    editor.offsets = "80, -0x10".into();
+    let output = settle(&mut app, &ctx, LARGE);
+    text_rect(&output, &fl!(LANGUAGE_LOADER, "pointer-offsets"));
+    click(&mut app, &ctx, LARGE, text_rect(&output, "32 bit").center());
+    assert_eq!(app.address_editor.as_ref().unwrap().pointer_width, game_cheetah::PointerWidth::Bits32);
+    frame(
+        &mut app,
+        &ctx,
+        LARGE,
+        vec![Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -1200.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        }],
+    );
+    let output = settle(&mut app, &ctx, LARGE);
+    click(&mut app, &ctx, LARGE, text_rect(&output, &fl!(LANGUAGE_LOADER, "address-apply")).center());
+    assert!(app.address_editor.is_none());
+    assert_eq!(app.state.searches[0].get_result_count(), 0);
+    let pending = &app.state.searches[0].unresolved_addresses;
+    assert_eq!(pending.len(), 1);
+    let game_cheetah::AddressSpec::Pointer { offsets, pointer_width, .. } = &pending[0].address else {
+        panic!("pointer definition lost");
+    };
+    assert_eq!(offsets, &["80", "-0x10"]);
+    assert_eq!(*pointer_width, game_cheetah::PointerWidth::Bits32);
+    app.undo_search();
+    assert_eq!(app.state.searches[0].get_result_count(), 1);
+    assert!(!app.state.searches[0].has_pointer_addresses());
 }
 
 #[test]

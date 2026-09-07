@@ -40,6 +40,237 @@ fn assert_seeded_result_interaction(app: &App) {
 }
 
 #[test]
+fn test_persistence_defaults_off_and_ui_actions_are_noops() {
+    let mut app = create_test_app();
+    assert!(!app.enable_persistence);
+    seed_result_interaction(&mut app);
+    let spec = game_cheetah::AddressSpec::Module {
+        module: "__missing_test_game__.so".into(),
+        offset: "0x20".into(),
+    };
+    app.state.searches[0].address_overrides.insert((0x2000, SearchType::Int), spec.clone());
+    app.state.searches[0].unresolved_addresses.push(game_cheetah::PendingAddress {
+        address: spec.clone(),
+        search_type: SearchType::Int,
+        reason: "Unchanged pending entry".into(),
+    });
+    app.cheat_table_status = "Unchanged status".into();
+    let status_at = std::time::Instant::now();
+    app.cheat_table_status_at = Some(status_at);
+    app.value_change_tracker.put(0x2000, vec![42]);
+    let disabled = i18n_embed_fl::fl!(game_cheetah::LANGUAGE_LOADER, "persistence-disabled");
+
+    // Default-off guards must return before process access or any file/settings I/O.
+    app.save_cheat_table();
+    app.load_cheat_table();
+    app.begin_address_edit(0);
+    app.begin_pending_address_edit(0);
+    assert_eq!(app.apply_address_definition(game_cheetah::AddressSpec::absolute(0x3000)), Err(disabled.clone()));
+    app.retry_module_addresses();
+    app.begin_pointer_scan(0);
+    for filter in [false, true] {
+        assert_eq!(app.start_pointer_scan(filter), Err(disabled.clone()));
+    }
+    assert_eq!(app.adopt_pointer_candidate(0), Err(disabled));
+    app.poll_pointer_scan();
+    app.poll_automatic_save();
+
+    assert_seeded_result_interaction(&app);
+    assert!(app.address_editor.is_none());
+    assert!(!app.pointer_scanner.open);
+    assert!(app.pointer_scanner.target.is_none());
+    assert!(app.pointer_scanner.job.is_none());
+    assert!(app.pointer_scanner.candidates.is_none());
+    assert!(app.pointer_scanner.error.is_none());
+    assert!(!app.is_saving_cheat_table());
+    assert_eq!(app.cheat_table_status, "Unchanged status");
+    assert_eq!(app.cheat_table_status_at, Some(status_at));
+    assert_eq!(app.value_change_tracker.put(0x2000, vec![42]), Some(vec![42]));
+    assert!(app.state.current_error().is_none());
+    let search = &app.state.searches[0];
+    assert_eq!(search.get_result_count(), 1);
+    assert_eq!(search.address_overrides[&(0x2000, SearchType::Int)], spec);
+    assert_eq!(search.unresolved_addresses.len(), 1);
+    assert_eq!(search.unresolved_addresses[0].address, spec);
+    assert_eq!(search.unresolved_addresses[0].reason, "Unchanged pending entry");
+    assert!(search.old_results.is_empty());
+}
+
+#[test]
+fn test_disabling_persistence_clears_affected_tabs_and_dialogs_but_preserves_normal_tab_and_values() {
+    use std::sync::atomic::Ordering;
+
+    use game_cheetah::{
+        AddressSpec, PendingAddress, PointerWidth,
+        pointer_scan::{CandidateSet, ProcessIdentity},
+        ui::pointer_scanner::ScanTarget,
+    };
+
+    for screen in [AppState::InProcess, AppState::MemoryEditor] {
+        let values = Box::new([17_i32, 42, 99, 123]);
+        let results: Vec<_> = values
+            .iter()
+            .map(|value| SearchResult::new(value as *const i32 as usize, SearchType::Int))
+            .collect();
+        let mut app = create_test_app();
+        // This setter deliberately does not persist the user's Settings.
+        app.set_persistence_enabled(true);
+        assert!(app.enable_persistence);
+        // Intercept release messages; no freeze worker ever writes test memory.
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.state.freeze_sender = tx;
+        let normal = &mut app.state.searches[0];
+        normal.description = "Normal search".into();
+        normal.search_type = SearchType::Int;
+        normal.search_value_text = "17".into();
+        normal.numeric_filter_lower = "10".into();
+        normal.set_cached_results(vec![results[0]]);
+        normal.freezed_addresses.insert(results[0].addr);
+        normal.search_complete.store(true, Ordering::Release);
+        normal.store_memory_snapshot(results[0].addr, vec![17, 0, 0, 0]);
+        normal.push_undo_state(normal.collect_results());
+
+        let module = AddressSpec::Module {
+            module: "__missing_test_game__.so".into(),
+            offset: "0x20".into(),
+        };
+        let pointer = AddressSpec::Pointer {
+            module: "__missing_test_game__.so".into(),
+            offset: "0x40".into(),
+            offsets: vec!["0x10".into()],
+            pointer_width: PointerWidth::Bits64,
+        };
+        for (index, spec) in [module.clone(), pointer.clone(), module].into_iter().enumerate() {
+            app.state.new_search();
+            let result = results[index + 1];
+            let search = &mut app.state.searches[index + 1];
+            search.set_cached_results(vec![result]);
+            if index < 2 {
+                search.address_overrides.insert((result.addr, result.search_type), spec);
+            } else {
+                // A pending-only definition must also mark the entire tab affected.
+                search.unresolved_addresses.push(PendingAddress {
+                    address: spec,
+                    search_type: SearchType::Int,
+                    reason: "Missing module".into(),
+                });
+            }
+            search.freezed_addresses.insert(result.addr);
+            search.freezed_addresses.insert(results[0].addr);
+            search.search_complete.store(true, Ordering::Release);
+            search.store_memory_snapshot(result.addr, vec![42, 0, 0, 0]);
+            search.push_undo_state(search.collect_results());
+            search.results_sender.send(vec![SearchResult::new(0x9000 + index, SearchType::Int)]).unwrap();
+        }
+        app.state.current_search = 0;
+        app.begin_address_edit(0);
+        assert!(app.address_editor.is_some());
+        app.pointer_scanner.open = true;
+        app.pointer_scanner.target = Some(ScanTarget {
+            identity: ProcessIdentity {
+                pid: 0,
+                start_time: 0,
+                executable: "/test/game".into(),
+            },
+            result: results[0],
+        });
+        app.pointer_scanner.candidates = Some(CandidateSet {
+            version: 1,
+            executable: "/test/game".into(),
+            value_type: SearchType::Int,
+            options: Default::default(),
+            candidates: vec![pointer],
+            limited: true,
+        });
+        app.pointer_scanner.error = Some("Old scanner error".into());
+        app.pointer_scanner.status = "Old scanner status".into();
+        app.cheat_table_status = "Old save notice".into();
+        app.cheat_table_status_at = Some(std::time::Instant::now());
+        app.selected_result = Some(results[0]);
+        app.editing_result = Some((0, "999".into()));
+        app.value_change_tracker.put(results[0].addr, vec![17]);
+        app.changed_addresses.insert(results[0].addr, std::time::Instant::now());
+        app.app_state = screen;
+        if screen == AppState::MemoryEditor {
+            app.memory_editor_result_index = Some(0);
+        }
+
+        app.set_persistence_enabled(false);
+
+        assert!(!app.enable_persistence);
+        assert_eq!(app.state.searches.len(), 4);
+        assert_eq!(app.state.current_search, 0);
+        assert_eq!(app.app_state, AppState::InProcess);
+        assert!(app.memory_editor_result_index.is_none());
+        assert!(app.address_editor.is_none());
+        assert!(!app.pointer_scanner.open);
+        assert!(app.pointer_scanner.target.is_none());
+        assert!(app.pointer_scanner.candidates.is_none());
+        assert!(app.pointer_scanner.job.is_none());
+        assert!(app.pointer_scanner.error.is_none());
+        assert!(app.pointer_scanner.status.is_empty());
+        assert!(app.cheat_table_status.is_empty());
+        assert!(app.cheat_table_status_at.is_none());
+        assert_result_interaction_cleared(&app);
+        assert!(app.value_change_tracker.is_empty());
+        assert!(app.changed_addresses.is_empty());
+        // One release per exclusively owned address, none for the shared normal freeze.
+        assert_eq!(rx.try_iter().count(), 3);
+        for search in &mut app.state.searches[1..] {
+            assert!(search.address_overrides.is_empty());
+            assert!(search.unresolved_addresses.is_empty());
+            assert!(search.freezed_addresses.is_empty());
+            assert!(search.old_results.is_empty());
+            assert!(search.memory_snapshot.read().unwrap().is_empty());
+            assert!(!search.search_complete.load(Ordering::Acquire));
+            assert_eq!(search.searching, SearchMode::None);
+            assert_eq!(search.get_result_count(), 0);
+            search.undo_last_search();
+            assert_eq!(search.get_result_count(), 0, "Undo must not resurrect persisted addresses");
+        }
+        let normal = &app.state.searches[0];
+        assert_eq!(normal.description, "Normal search");
+        assert_eq!(normal.search_value_text, "17");
+        assert_eq!(normal.search_type, SearchType::Int);
+        assert_eq!(normal.numeric_filter_lower, "10");
+        assert_eq!(normal.get_result_count(), 1);
+        assert_eq!(
+            result_identity(normal.collect_results().first().copied()),
+            Some((results[0].addr, SearchType::Int))
+        );
+        assert_eq!(normal.old_results.len(), 1);
+        assert_eq!(normal.memory_snapshot.read().unwrap().len(), 1);
+        assert!(normal.search_complete.load(Ordering::Acquire));
+        assert_eq!(normal.freezed_addresses.len(), 1);
+        assert!(normal.freezed_addresses.contains(&results[0].addr));
+        assert_eq!(*values, [17, 42, 99, 123]);
+        app.set_persistence_enabled(true);
+        assert!(app.state.searches[1..].iter().all(|search| search.get_result_count() == 0));
+        assert!(!app.pointer_scanner.open);
+        assert!(app.address_editor.is_none());
+    }
+}
+
+#[test]
+fn disabling_persistence_also_clears_definitions_only_present_in_undo() {
+    let mut app = App::default();
+    app.set_persistence_enabled(true);
+    let search = &mut app.state.searches[0];
+    search.set_cached_results(vec![SearchResult::new(0x1000, SearchType::Int)]);
+    search
+        .address_overrides
+        .insert((0x1000, SearchType::Int), game_cheetah::AddressSpec::absolute(0x1000));
+    search.push_undo_state(search.collect_results());
+    search.address_overrides.clear();
+    assert!(search.has_persistent_address_state());
+    app.set_persistence_enabled(false);
+    let search = &mut app.state.searches[0];
+    search.undo_last_search();
+    assert!(!search.has_persistent_address_state());
+    assert_eq!(search.get_result_count(), 0);
+}
+
+#[test]
 fn test_result_interaction_defaults_and_explicit_reset() {
     let mut app = create_test_app();
     assert_result_interaction_cleared(&app);
@@ -418,17 +649,15 @@ fn test_search_workflow() {
 }
 
 #[test]
-fn test_freeze_functionality() {
+fn freezing_without_a_process_is_rejected() {
     let mut app = create_test_app();
 
     let result = SearchResult::new(0x1000, SearchType::Int);
     let _ = app.state.searches[0].results_sender.send(vec![result]);
 
     app.toggle_freeze(0);
-    assert!(app.state.searches[0].freezed_addresses.contains(&0x1000));
-
-    app.toggle_freeze(0);
     assert!(!app.state.searches[0].freezed_addresses.contains(&0x1000));
+    assert!(app.state.current_error().is_some());
 }
 
 #[test]

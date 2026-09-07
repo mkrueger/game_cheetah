@@ -50,6 +50,7 @@ fn icon_button(ui: &mut egui::Ui, visible: bool, glyph: &str, tooltip: String) -
 
 pub fn view_in_process(app: &mut App, ui: &mut egui::Ui) {
     top_bar(app, ui);
+    crate::ui::auto_save::show(app, ui);
     error_bar(app, ui);
     tab_bar(app, ui);
     egui::CentralPanel::default()
@@ -58,6 +59,8 @@ pub fn view_in_process(app: &mut App, ui: &mut egui::Ui) {
             search_area(app, ui);
         });
     cheat_table_toast(app, ui.ctx());
+    crate::ui::address_editor::show(app, ui.ctx());
+    crate::ui::pointer_scanner::show(app, ui.ctx());
 }
 
 fn top_bar(app: &mut App, ui: &mut egui::Ui) {
@@ -85,14 +88,20 @@ fn top_bar(app: &mut App, ui: &mut egui::Ui) {
                     if ui.add(close).clicked() {
                         app.back_to_main_menu();
                     }
-                    ui.add_space(6.0);
-                    ui.separator();
-                    ui.add_space(6.0);
-                    if ui.add(secondary(fl!(crate::LANGUAGE_LOADER, "load-cheat-table-button"))).clicked() {
-                        app.load_cheat_table();
-                    }
-                    if ui.add(secondary(fl!(crate::LANGUAGE_LOADER, "save-cheat-table-button"))).clicked() {
-                        app.save_cheat_table();
+                    if app.enable_persistence {
+                        ui.add_space(6.0);
+                        ui.separator();
+                        ui.add_space(6.0);
+                        if ui.add(secondary(fl!(crate::LANGUAGE_LOADER, "load-cheat-table-button"))).clicked() {
+                            app.load_cheat_table();
+                        }
+                        if ui
+                            .add_enabled(!app.is_saving_cheat_table(), secondary(fl!(crate::LANGUAGE_LOADER, "save-cheat-table-button")))
+                            .on_hover_text(fl!(crate::LANGUAGE_LOADER, "address-save-help"))
+                            .clicked()
+                        {
+                            app.save_cheat_table();
+                        }
                     }
                 });
             });
@@ -148,13 +157,13 @@ fn error_bar(app: &mut App, ui: &mut egui::Ui) {
                     .corner_radius(egui::CornerRadius::same(8))
                     .inner_margin(egui::Margin::symmetric(12, 8))
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.colored_label(egui::Color32::from_rgb(220, 120, 120), "\u{26A0}");
-                            ui.colored_label(egui::Color32::from_rgb(232, 180, 180), text);
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.small_button("\u{00D7}").clicked() {
-                                    dismiss = true;
-                                }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("\u{00D7}").clicked() {
+                                dismiss = true;
+                            }
+                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                ui.colored_label(egui::Color32::from_rgb(220, 120, 120), "\u{26A0}");
+                                ui.add(egui::Label::new(egui::RichText::new(text).color(egui::Color32::from_rgb(232, 180, 180))).wrap());
                             });
                         });
                     });
@@ -427,15 +436,22 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
     let is_search_complete = search_context.search_complete.load(Ordering::SeqCst);
     let can_undo = !search_context.old_results.is_empty();
     let has_snapshot = search_context.memory_snapshot.read().is_ok_and(|pages| !pages.is_empty());
+    // Loaded tables and failed-search rollbacks need recovery controls even
+    // when no scan has completed in this context.
+    let has_resettable_state = is_search_complete || search_results > 0 || !search_context.unresolved_addresses.is_empty() || can_undo || has_snapshot;
     let unknown_comparison = search_context.unknown_comparison;
     let searching = search_context.searching;
     let current_bytes = search_context.current_bytes.load(Ordering::Acquire);
     let total_bytes = search_context.total_bytes;
+    let has_pointers = search_context.has_pointer_addresses();
     if search_results == 0 && app.selected_result.is_some() {
         app.clear_result_interaction();
     }
 
     let idle = matches!(searching, SearchMode::None);
+    if has_pointers {
+        ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "pointer-scan-warning")).small().weak());
+    }
     let show_type_picker = idle && search_results == 0 && !has_snapshot;
     let mut enter_search = false;
     let mut parse_error = None;
@@ -548,7 +564,7 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
                     app.open_memory_editor(index);
                 }
             }
-            if idle && is_search_complete {
+            if idle && has_resettable_state {
                 ui.add_space(8.0);
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
@@ -588,6 +604,15 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
                 numeric_filter_controls(app, ui);
             }
         });
+
+    if app.enable_persistence && app.pointer_scanner.candidates.is_some() && ui.button(fl!(crate::LANGUAGE_LOADER, "pointer-scan-title")).clicked() {
+        app.pointer_scanner.open = true;
+    }
+
+    // Keep recovery actions above potentially tall unresolved-entry lists.
+    if app.enable_persistence {
+        crate::ui::address_editor::unresolved_panel(app, ui);
+    }
 
     if !matches!(searching, SearchMode::None) {
         ui.add_space(10.0);
@@ -885,6 +910,8 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     let mut toggle_freeze_all = false;
     let mut remove_result: Option<usize> = None;
     let mut open_editor: Option<usize> = None;
+    let mut edit_address: Option<usize> = None;
+    let mut scan_pointers: Option<usize> = None;
     let mut begin_edit: Option<(usize, String)> = None;
     let mut live_write: Option<(usize, String)> = None;
     let mut commit_edit: Option<(usize, String)> = None;
@@ -1050,9 +1077,26 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                 // Comparing raw bytes (not formatted strings) skips a String
                 // allocation per row per frame, and dovetails with the bulk
                 // tracker which works in raw bytes too.
-                let raw_bytes: Vec<u8> = if let Some(byte_len) = result.search_type.fixed_byte_length() {
+                let pointer_valid = !app.state.searches[search_index]
+                    .address_overrides
+                    .get(&(result.addr, result.search_type))
+                    .is_some_and(crate::AddressSpec::is_pointer)
+                    || app
+                        .state
+                        .validate_result_range(
+                            search_index,
+                            &result,
+                            result
+                                .search_type
+                                .byte_length_for_text(&app.state.searches[search_index].search_value_text)
+                                .unwrap_or(1),
+                        )
+                        .is_ok();
+                let raw_bytes: Vec<u8> = if !pointer_valid {
+                    Vec::new()
+                } else if let Some(byte_len) = result.search_type.fixed_byte_length() {
                     match pid.try_into_process_handle() {
-                        Ok(handle) => copy_address(result.addr, byte_len, &handle).unwrap_or_default(),
+                        Ok(handle) => copy_address(result.addr, byte_len, &crate::state::memory_reader::ExactProcessReader(&handle)).unwrap_or_default(),
                         Err(_) => Vec::new(),
                     }
                 } else if matches!(result.search_type, SearchType::String | SearchType::StringUtf16) {
@@ -1104,6 +1148,8 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
 
                 // Address column
                 let address_text = format!("0x{:X}", result.addr);
+                let address_spec = app.state.searches[search_index].address_overrides.get(&(result.addr, result.search_type));
+                let address_label = address_spec.map(|spec| spec.label()).unwrap_or_else(|| address_text.clone());
                 let (_, address_response) = row.col(|ui| {
                     let cell_hovered = pointer_pos.is_some_and(|pos| ui.max_rect().contains(pos));
                     if is_selected {
@@ -1111,9 +1157,9 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     }
                     ui.add_sized(
                         [(ui.available_width() - ICON_SLOT_WIDTH).max(24.0), 24.0],
-                        egui::Label::new(egui::RichText::new(&address_text).monospace()).selectable(false).truncate(),
+                        egui::Label::new(egui::RichText::new(&address_label).monospace()).selectable(false).truncate(),
                     )
-                    .on_hover_text(&address_text);
+                    .on_hover_text(format!("{address_label}\n{address_text}"));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if icon_button(ui, cell_hovered, REMOVE_ICON, fl!(crate::LANGUAGE_LOADER, "remove-button")).clicked() {
                             remove_result = Some(i);
@@ -1310,6 +1356,22 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     ctx.memory_mut(|memory| memory.request_focus(result_table_focus_id()));
                 }
                 row_response.context_menu(|ui| {
+                    if app.enable_persistence {
+                        if ui
+                            .add_enabled(
+                                result.search_type.fixed_byte_length().is_some(),
+                                egui::Button::new(fl!(crate::LANGUAGE_LOADER, "pointer-scan-menu")),
+                            )
+                            .clicked()
+                        {
+                            scan_pointers = Some(i);
+                            ui.close();
+                        }
+                        if ui.button(fl!(crate::LANGUAGE_LOADER, "address-edit")).clicked() {
+                            edit_address = Some(i);
+                            ui.close();
+                        }
+                    }
                     if ui.button(fl!(crate::LANGUAGE_LOADER, "copy-address-menu")).clicked() {
                         ui.ctx().copy_text(address_text.clone());
                         ui.close();
@@ -1356,6 +1418,12 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     drop(results);
 
     app.hovered_result_row = new_hovered_row;
+    if let Some(i) = scan_pointers {
+        app.begin_pointer_scan(i);
+    }
+    if let Some(i) = edit_address {
+        app.begin_address_edit(i);
+    }
 
     if toggle_freeze_all {
         app.toggle_freeze_all();

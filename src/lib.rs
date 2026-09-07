@@ -9,6 +9,11 @@ pub use numeric_filter::{NumericComparison, NumericFilter, ResultFilter};
 pub mod cheat_table;
 pub use cheat_table::*;
 
+pub mod address;
+pub use address::{AddressSpec, LoadedModule, ModuleCatalog, PendingAddress, PointerWidth};
+
+pub mod pointer_scan;
+
 pub mod user_settings;
 pub use user_settings::*;
 
@@ -31,6 +36,8 @@ pub use state::*;
 pub enum MessageCommand {
     // Quit,
     Freeze,
+    FreezeRelative(AddressSpec),
+    GuardRelative(AddressSpec),
     Unfreeze,
     Pid,
 }

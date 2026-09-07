@@ -165,6 +165,16 @@ pub fn view_settings(app: &mut App, ui: &mut egui::Ui) {
                 ) {
                     app.persist_settings();
                 }
+                let mut persistence = app.enable_persistence;
+                if toggle_section(
+                    ui,
+                    &mut persistence,
+                    fl!(crate::LANGUAGE_LOADER, "persistence-label"),
+                    fl!(crate::LANGUAGE_LOADER, "persistence-description"),
+                ) {
+                    app.set_persistence_enabled(persistence);
+                    app.persist_settings();
+                }
                 config_directory_section(ui);
             });
         });

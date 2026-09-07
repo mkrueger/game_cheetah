@@ -26,6 +26,8 @@ pub type UnknownPreviousValues = Arc<RwLock<HashMap<(usize, SearchType), [u8; 8]
 /// Snapshot pages and result lists share their immutable storage with the
 /// running pass; the mutable previous-value map needs its own copy.
 pub struct SearchHistoryEntry {
+    address_overrides: HashMap<(usize, SearchType), crate::AddressSpec>,
+    unresolved_addresses: Vec<crate::PendingAddress>,
     results: Arc<Vec<SearchResult>>,
     previous_unknown_values: HashMap<(usize, SearchType), [u8; 8]>,
     memory_snapshot: Vec<(usize, Arc<[u8]>)>,
@@ -44,6 +46,10 @@ pub enum SearchMode {
 }
 
 pub struct SearchContext {
+    /// Metadata stays out of the compact scan result. Only edited/loaded
+    /// entries need it; unresolved entries must never enter a memory scan.
+    pub address_overrides: HashMap<(usize, SearchType), crate::AddressSpec>,
+    pub unresolved_addresses: Vec<crate::PendingAddress>,
     pub description: String,
 
     pub search_value_text: String,
@@ -88,6 +94,8 @@ impl SearchContext {
     pub fn new(description: String) -> Self {
         let (tx, rx) = Self::result_channel();
         Self {
+            address_overrides: HashMap::new(),
+            unresolved_addresses: Vec::new(),
             description,
             search_value_text: "".to_owned(),
             show_numeric_filter: false,
@@ -146,6 +154,20 @@ impl SearchContext {
         };
         filter.validate()?;
         Ok(filter)
+    }
+
+    pub fn has_pointer_addresses(&self) -> bool {
+        self.address_overrides.values().any(crate::AddressSpec::is_pointer) || self.unresolved_addresses.iter().any(|entry| entry.address.is_pointer())
+    }
+
+    /// Include Undo so disabling persistence cannot resurrect hidden metadata.
+    pub fn has_persistent_address_state(&self) -> bool {
+        !self.address_overrides.is_empty()
+            || !self.unresolved_addresses.is_empty()
+            || self
+                .old_results
+                .iter()
+                .any(|entry| !entry.address_overrides.is_empty() || !entry.unresolved_addresses.is_empty())
     }
 
     /// Snapshot before mutation, then allocate private state for this generation.
@@ -214,6 +236,8 @@ impl SearchContext {
 
     /// Reset a search after the engine has released this tab's freezes.
     pub(crate) fn clear_results(&mut self) {
+        self.address_overrides.clear();
+        self.unresolved_addresses.clear();
         self.task.take();
         self.search_complete = Arc::new(AtomicBool::new(false));
         self.current_bytes = Arc::new(AtomicUsize::new(0));
@@ -247,6 +271,8 @@ impl SearchContext {
 
     pub fn push_undo_state(&mut self, results: Arc<Vec<SearchResult>>) {
         self.old_results.push(SearchHistoryEntry {
+            address_overrides: self.address_overrides.clone(),
+            unresolved_addresses: self.unresolved_addresses.clone(),
             results,
             previous_unknown_values: self.previous_unknown_values.read().map(|map| map.clone()).unwrap_or_default(),
             memory_snapshot: self.memory_snapshot.read().map(|pages| pages.clone()).unwrap_or_default(),
@@ -268,6 +294,8 @@ impl SearchContext {
         self.results_sender = tx;
         self.results_receiver = rx;
         self.cached_results = Arc::new(RwLock::new(Some(old.results)));
+        self.address_overrides = old.address_overrides;
+        self.unresolved_addresses = old.unresolved_addresses;
         self.cache_valid = Arc::new(AtomicBool::new(true));
         self.previous_unknown_values = Arc::new(RwLock::new(old.previous_unknown_values));
         self.memory_snapshot = Arc::new(RwLock::new(old.memory_snapshot));

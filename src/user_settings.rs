@@ -20,6 +20,7 @@ pub struct UserSettings {
     pub auto_reconnect: bool,
     pub check_for_updates: bool,
     pub confirm_value_writes: bool,
+    pub enable_persistence: bool,
 }
 
 impl Default for UserSettings {
@@ -28,6 +29,7 @@ impl Default for UserSettings {
             auto_reconnect: false,
             check_for_updates: true,
             confirm_value_writes: false,
+            enable_persistence: false,
         }
     }
 }
@@ -68,12 +70,14 @@ mod tests {
             auto_reconnect: true,
             check_for_updates: false,
             confirm_value_writes: true,
+            enable_persistence: true,
         };
         let text = toml::to_string_pretty(&original).unwrap();
         let parsed: UserSettings = toml::from_str(&text).unwrap();
         assert!(parsed.auto_reconnect);
         assert!(!parsed.check_for_updates);
         assert!(parsed.confirm_value_writes);
+        assert!(parsed.enable_persistence);
     }
 
     #[test]
@@ -83,5 +87,7 @@ mod tests {
         assert!(parsed.check_for_updates);
         assert!(!parsed.confirm_value_writes);
         assert!(!UserSettings::default().confirm_value_writes);
+        assert!(!parsed.enable_persistence);
+        assert!(!UserSettings::default().enable_persistence);
     }
 }

@@ -17,8 +17,9 @@ use std::{
 };
 use sysinfo::*;
 
+mod addresses;
 mod diagnostics;
-mod memory_reader;
+pub(crate) mod memory_reader;
 mod narrowing;
 mod simd;
 mod stability;
@@ -242,6 +243,7 @@ pub struct GameCheetahEngine {
     pub searches: Vec<Box<SearchContext>>,
     // Removed: pub search_threads: ThreadPool,
     pub freeze_sender: crossbeam_channel::Sender<FreezeMessage>,
+    freeze_stopped: crossbeam_channel::Receiver<(process_memory::Pid, usize)>,
     pub errors: VecDeque<AppError>,
     pub show_results: bool,
     pub set_focus: bool,
@@ -251,8 +253,10 @@ impl Default for GameCheetahEngine {
     fn default() -> Self {
         const MAX_FREEZE_FAILURES: u32 = 5;
         let (tx, rx) = crossbeam_channel::unbounded::<FreezeMessage>();
+        let (stopped_tx, stopped_rx) = crossbeam_channel::unbounded();
         thread::spawn(move || {
             let mut freezed_values: HashMap<usize, SearchValue> = HashMap::new();
+            let mut relative_freezes: HashMap<usize, crate::AddressSpec> = HashMap::new();
             let mut failure_counts: HashMap<usize, u32> = HashMap::new();
             let mut pid: i32 = 0;
             let ticker = tick(Duration::from_millis(125));
@@ -262,18 +266,28 @@ impl Default for GameCheetahEngine {
                     match msg.msg {
                         MessageCommand::Pid => {
                             pid = msg.addr as i32;
-                            if pid == 0 {
-                                freezed_values.clear();
-                                failure_counts.clear();
-                            }
+                            freezed_values.clear();
+                            relative_freezes.clear();
+                            failure_counts.clear();
                         }
-                        MessageCommand::Freeze => {
+                        MessageCommand::Freeze | MessageCommand::FreezeRelative(_) => {
+                            if let MessageCommand::FreezeRelative(spec) = msg.msg {
+                                relative_freezes.insert(msg.addr, spec);
+                            } else {
+                                relative_freezes.remove(&msg.addr);
+                            }
                             freezed_values.insert(msg.addr, msg.value);
                             failure_counts.remove(&msg.addr);
                         }
                         MessageCommand::Unfreeze => {
+                            relative_freezes.remove(&msg.addr);
                             freezed_values.remove(&msg.addr);
                             failure_counts.remove(&msg.addr);
+                        }
+                        MessageCommand::GuardRelative(spec) => {
+                            if freezed_values.contains_key(&msg.addr) {
+                                relative_freezes.insert(msg.addr, spec);
+                            }
                         }
                     }
                 }
@@ -283,7 +297,14 @@ impl Default for GameCheetahEngine {
                         if pid != 0
                             && let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle() {
                                 let mut to_drop: Vec<usize> = Vec::new();
+                                let modules = if relative_freezes.is_empty() { None } else { crate::ModuleCatalog::for_process(pid as process_memory::Pid).ok() };
                                 for (addr, value) in &freezed_values {
+                                    if let Some(spec) = relative_freezes.get(addr)
+                                        && modules.as_ref().and_then(|modules| modules.resolve_with_reader(spec, value.1.len(), &memory_reader::ExactProcessReader(&handle)).ok()).map(|resolved| resolved.address) != Some(*addr)
+                                    {
+                                        to_drop.push(*addr);
+                                        continue;
+                                    }
                                     if let Err(err) = handle.put_address(*addr, &value.1) {
                                         let counter = failure_counts.entry(*addr).or_insert(0);
                                         *counter += 1;
@@ -298,8 +319,10 @@ impl Default for GameCheetahEngine {
                                     }
                                 }
                                 for addr in to_drop {
+                                    relative_freezes.remove(&addr);
                                     freezed_values.remove(&addr);
                                     failure_counts.remove(&addr);
+                                    let _ = stopped_tx.send((pid as process_memory::Pid, addr));
                                 }
                             }
                     },
@@ -308,18 +331,28 @@ impl Default for GameCheetahEngine {
                             match msg.msg {
                                 MessageCommand::Pid => {
                                     pid = msg.addr as i32;
-                                    if pid == 0 {
-                                        freezed_values.clear();
-                                        failure_counts.clear();
-                                    }
+                                    freezed_values.clear();
+                                    relative_freezes.clear();
+                                    failure_counts.clear();
                                 }
-                                MessageCommand::Freeze => {
+                                MessageCommand::Freeze | MessageCommand::FreezeRelative(_) => {
+                                    if let MessageCommand::FreezeRelative(spec) = msg.msg {
+                                        relative_freezes.insert(msg.addr, spec);
+                                    } else {
+                                        relative_freezes.remove(&msg.addr);
+                                    }
                                     freezed_values.insert(msg.addr, msg.value);
                                     failure_counts.remove(&msg.addr);
                                 }
                                 MessageCommand::Unfreeze => {
+                                    relative_freezes.remove(&msg.addr);
                                     freezed_values.remove(&msg.addr);
                                     failure_counts.remove(&msg.addr);
+                                }
+                                MessageCommand::GuardRelative(spec) => {
+                                    if freezed_values.contains_key(&msg.addr) {
+                                        relative_freezes.insert(msg.addr, spec);
+                                    }
                                 }
                             }
                         } else {
@@ -344,6 +377,7 @@ impl Default for GameCheetahEngine {
             searches: vec![Box::new(SearchContext::new(fl!(crate::LANGUAGE_LOADER, "first-search-label")))],
             // Removed: search_threads: ThreadPool::new(16),
             freeze_sender: tx,
+            freeze_stopped: stopped_rx,
             show_results: false,
             show_about_dialog: false,
             set_focus: true,
@@ -374,6 +408,15 @@ impl GameCheetahEngine {
     /// Finalize every tab, not only the one currently visible. Failed searches
     /// roll back before their results can be presented as a successful pass.
     pub fn poll_searches(&mut self) {
+        while let Ok((pid, addr)) = self.freeze_stopped.try_recv() {
+            if pid != self.pid {
+                continue;
+            }
+            for search in &mut self.searches {
+                search.freezed_addresses.remove(&addr);
+            }
+            self.push_error(fl!(crate::LANGUAGE_LOADER, "address-freeze-stopped", address = format!("0x{addr:X}")));
+        }
         let mut errors = Vec::new();
         for search in &mut self.searches {
             // Drain inactive tabs as well, or bounded channels can stall them.
@@ -414,6 +457,9 @@ impl GameCheetahEngine {
     }
 
     pub fn initial_search(&mut self, search_index: usize) {
+        if self.reject_pointer_scan(search_index) {
+            return;
+        }
         let Some(search_context) = self.searches.get(search_index) else {
             self.push_error(AppError::InvalidSearchIndex { index: search_index });
             return;
@@ -498,6 +544,9 @@ impl GameCheetahEngine {
     }
 
     fn filter_prepared(&mut self, search_index: usize, prepared: narrowing::PreparedSearch, stable_for: Option<Duration>) {
+        if self.reject_pointer_scan(search_index) {
+            return;
+        }
         let Some(search) = self.searches.get(search_index) else {
             self.push_error(AppError::InvalidSearchIndex { index: search_index });
             return;
@@ -770,8 +819,8 @@ impl GameCheetahEngine {
         let results_sender = search_context.results_sender.clone();
         let cache_valid = search_context.cache_valid.clone();
 
-        // For Guess scans we try Int / Int64 / Float / Double per region. Parsing the
-        // user-typed value into those four byte representations is identical
+        // Guess tries Int32 OR Int64 (depending on range), plus Float / Double.
+        // Parsing the user-typed value into these representations is identical
         // for every region, so do it exactly once here instead of inside the
         // par_iter closure (where it would otherwise run 3*N times). Errors
         // are reported once, up front, rather than spamming stderr per region.
@@ -783,8 +832,9 @@ impl GameCheetahEngine {
             // the scan with an empty needle list silently.
             match std::str::from_utf8(&search_data.1) {
                 Ok(value_text) => {
-                    let mut needles: GuessNeedles = Vec::with_capacity(SearchType::GUESS_TYPES.len());
-                    for search_type in SearchType::GUESS_TYPES {
+                    let types = SearchType::guess_types(value_text);
+                    let mut needles: GuessNeedles = Vec::with_capacity(types.len());
+                    for &search_type in types {
                         match search_type.from_string(value_text) {
                             Ok(typed_value) => needles.push((search_type, typed_value.1)),
                             Err(e) => {
@@ -928,12 +978,25 @@ impl GameCheetahEngine {
     }
 
     pub(crate) fn select_process(&mut self, process: &ProcessInfo) {
+        let different_game = !self.process_name.is_empty() && self.process_name != process.name;
+        let switching = self.pid != process.pid || self.attached_start_time != process.start_time;
+        if switching {
+            self.detach();
+        }
+        if different_game {
+            self.searches.clear();
+            self.new_search();
+        }
         self.pid = process.pid;
         // Capture the process start time so we can detect PID recycling later.
         self.attached_start_time = lookup_start_time(process.pid).unwrap_or(0);
         self.send_freeze(FreezeMessage::from_addr(MessageCommand::Pid, process.pid as usize));
         self.process_name = process.name.clone();
         self.show_process_window = false;
+        if switching {
+            let modules = crate::ModuleCatalog::for_process(self.pid).unwrap_or_default();
+            self.resolve_table_addresses(&modules, true);
+        }
 
         // Probe read access up front so the user gets a precise error message
         // (with a platform-specific hint) instead of an empty result list when
@@ -985,6 +1048,9 @@ impl GameCheetahEngine {
     }
 
     pub fn take_memory_snapshot(&mut self, search_index: usize) {
+        if self.reject_pointer_scan(search_index) {
+            return;
+        }
         let Some(search_context) = self.searches.get_mut(search_index) else {
             return;
         };
@@ -1079,6 +1145,9 @@ impl GameCheetahEngine {
     }
 
     pub fn unknown_search_compare(&mut self, search_index: usize, comparison: UnknownComparison) {
+        if self.reject_pointer_scan(search_index) {
+            return;
+        }
         let Some(search_context) = self.searches.get_mut(search_index) else {
             return;
         };
@@ -1721,6 +1790,86 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn pointer_freeze_worker_stops_before_writing_a_moved_target() {
+        static ROOT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+        let old = Box::new(42_i32);
+        let new = Box::new(77_i32);
+        let old_address = &*old as *const i32 as usize;
+        ROOT.store(&*new as *const i32 as usize, Ordering::Release);
+        let modules = crate::ModuleCatalog::for_process(std::process::id() as _).unwrap();
+        let crate::AddressSpec::Module { module, offset } = modules.suggest(&SearchResult::new(&ROOT as *const _ as usize, SearchType::Int64)) else {
+            panic!("test root must be module-backed");
+        };
+        let spec = crate::AddressSpec::Pointer {
+            module,
+            offset,
+            offsets: vec!["0".into()],
+            pointer_width: if size_of::<usize>() == 8 {
+                crate::PointerWidth::Bits64
+            } else {
+                crate::PointerWidth::Bits32
+            },
+        };
+        let engine = GameCheetahEngine::default();
+        engine
+            .freeze_sender
+            .send(FreezeMessage::from_addr(MessageCommand::Pid, std::process::id() as usize))
+            .unwrap();
+        engine
+            .freeze_sender
+            .send(FreezeMessage {
+                msg: MessageCommand::FreezeRelative(spec),
+                addr: old_address,
+                value: SearchValue(SearchType::Int, 99_i32.to_ne_bytes().to_vec()),
+            })
+            .unwrap();
+        assert_eq!(engine.freeze_stopped.recv_timeout(Duration::from_secs(3)).unwrap().1, old_address);
+        assert_eq!((*old, *new), (42, 77));
+        ROOT.store(0, Ordering::Release);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn relative_freeze_worker_rejects_missing_module_and_reports_stop() {
+        let mut value = Box::new(42_i32);
+        let address = &mut *value as *mut i32 as usize;
+        let engine = GameCheetahEngine::default();
+        engine
+            .freeze_sender
+            .send(FreezeMessage::from_addr(MessageCommand::Pid, std::process::id() as usize))
+            .unwrap();
+        engine
+            .freeze_sender
+            .send(FreezeMessage {
+                msg: MessageCommand::FreezeRelative(crate::AddressSpec::Module {
+                    module: "__missing_game__.so".into(),
+                    offset: "0x20".into(),
+                }),
+                addr: address,
+                value: SearchValue(SearchType::Int, 99_i32.to_ne_bytes().to_vec()),
+            })
+            .unwrap();
+        assert_eq!(engine.freeze_stopped.recv_timeout(Duration::from_secs(3)).unwrap().1, address);
+        assert_eq!(*value, 42);
+    }
+
+    #[test]
+    fn stopped_freezes_are_cleared_from_all_tabs_and_reported() {
+        let mut engine = GameCheetahEngine::default();
+        engine.new_search();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        engine.freeze_stopped = rx;
+        for search in &mut engine.searches {
+            search.freezed_addresses.insert(0x1234);
+        }
+        tx.send((0, 0x1234)).unwrap();
+        engine.poll_searches();
+        assert!(engine.searches.iter().all(|search| search.freezed_addresses.is_empty()));
+        assert!(engine.current_error().is_some());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn every_search_worker_can_cancel_without_losing_the_previous_state() {
         let memory = vec![42_i32; 4096];
         let address = memory.as_ptr() as usize;
@@ -1828,8 +1977,16 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn guess_scan_finds_int64_and_preserves_ambiguous_int32_hit() {
-        for value in [1_800_000_000_i64, 5_000_000_000_i64] {
+    fn guess_scan_selects_one_integer_width_by_input_range() {
+        for value in [
+            5222_i64,
+            1_800_000_000,
+            i32::MAX as i64,
+            i32::MIN as i64,
+            i32::MAX as i64 + 1,
+            i32::MIN as i64 - 1,
+            5_000_000_000,
+        ] {
             let bytes = Box::new(value.to_le_bytes());
             let address = bytes.as_ptr() as usize;
             let mut engine = GameCheetahEngine {
@@ -1845,7 +2002,10 @@ mod tests {
                 std::thread::yield_now();
             }
             let results = search.collect_results();
-            assert!(results.iter().any(|r| r.addr == address && r.search_type == SearchType::Int64));
+            assert_eq!(
+                results.iter().any(|r| r.addr == address && r.search_type == SearchType::Int64),
+                i32::try_from(value).is_err()
+            );
             assert_eq!(
                 results.iter().any(|r| r.addr == address && r.search_type == SearchType::Int),
                 i32::try_from(value).is_ok()

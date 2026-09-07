@@ -81,6 +81,33 @@ impl App {
         // flag back to `None` once `search_complete` flips.
         self.state.poll_searches();
 
+        self.poll_pointer_scan();
+        self.poll_automatic_save();
+
+        let address_interval = if self.state.searches.iter().any(|search| search.has_pointer_addresses()) {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_secs(1)
+        };
+        if self.state.pid != 0 && self.address_editor.is_none() && self.last_address_refresh.elapsed() >= address_interval {
+            self.last_address_refresh = Instant::now();
+            if self.state.searches.iter().any(|search| {
+                search.address_overrides.values().any(crate::AddressSpec::is_relative)
+                    || search.unresolved_addresses.iter().any(|entry| entry.address.is_relative())
+            }) {
+                // Fail closed when module enumeration fails; a retry can restore
+                // definitions, but cannot silently restore a released freeze.
+                let modules = crate::ModuleCatalog::for_process(self.state.pid).unwrap_or_default();
+                if self.state.resolve_table_addresses(&modules, false) {
+                    self.clear_result_interaction();
+                    self.clear_change_tracker();
+                    if self.app_state == AppState::MemoryEditor {
+                        self.close_memory_editor();
+                    }
+                }
+            }
+        }
+
         match self.app_state {
             AppState::ProcessSelection => {
                 // Do not reorder rows between mouse-down and mouse-up.
@@ -104,7 +131,7 @@ impl App {
                     self.state.update_process_data();
                     let target = self.state.process_name.clone();
                     if let Some(process) = self.state.processes.iter().find(|p| p.name == target).cloned() {
-                        self.state.select_process(&process);
+                        self.select_process(&process);
                     }
                 }
                 // Finalize in-flight searches so the tracker refresh below
@@ -127,6 +154,14 @@ impl App {
                 ctx.request_repaint_after(Duration::from_millis(33));
             }
             AppState::MemoryEditor => {
+                if let Some(index) = self.memory_editor_result_index
+                    && let Some(result) = self.state.searches[self.state.current_search].collect_results().get(index)
+                    && let Err(error) = self.state.validate_result_address(self.state.current_search, result)
+                {
+                    self.state.push_error(error);
+                    self.close_memory_editor();
+                    return;
+                }
                 self.memory_editor.tick(self.state.pid as process_memory::Pid);
                 ctx.request_repaint_after(Duration::from_millis(33));
             }
@@ -200,6 +235,15 @@ impl App {
         // hits sharing a page.
         let mut by_page: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         for (i, r) in window.iter().enumerate() {
+            // Pointer rows are sampled by the visible table with fresh chain
+            // validation, never by a raw-address bulk read.
+            if self.state.searches[search_index]
+                .address_overrides
+                .get(&(r.addr, r.search_type))
+                .is_some_and(crate::AddressSpec::is_pointer)
+            {
+                continue;
+            }
             by_page.entry(r.addr & !(TRACKER_PAGE - 1)).or_default().push(i);
         }
 

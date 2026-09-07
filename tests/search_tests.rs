@@ -1,6 +1,29 @@
 use game_cheetah::{SearchType, SearchValue, search_memory};
 
 #[test]
+fn guess_uses_int64_only_outside_the_signed_int32_range() {
+    for text in ["5222", "0", "-1", "+5222", "2147483647", "-2147483648"] {
+        assert_eq!(SearchType::guess_types(text), &[SearchType::Int, SearchType::Float, SearchType::Double]);
+    }
+    for text in ["2147483648", "-2147483649", "9223372036854775807", "-9223372036854775808"] {
+        assert_eq!(SearchType::guess_types(text), &[SearchType::Int64, SearchType::Float, SearchType::Double]);
+    }
+    for text in ["1.5", "5e9", "9223372036854775808", "-9223372036854775809"] {
+        assert_eq!(SearchType::guess_types(text), &[SearchType::Float, SearchType::Double]);
+    }
+}
+
+#[test]
+fn explicit_int64_still_finds_small_values_as_eight_bytes() {
+    let value = SearchType::Int64.from_string("5222").unwrap();
+    assert_eq!(value.1.len(), 8);
+    let results = search_memory(&5222_i64.to_le_bytes(), &value.1, SearchType::Int64, 0x1000);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].addr, 0x1000);
+    assert_eq!(results[0].search_type, SearchType::Int64);
+}
+
+#[test]
 fn test_string_encoding_and_byte_lengths() {
     for text in ["", "AB", "Grüße", "😀", "A😀B"] {
         let utf8 = SearchType::String.from_string(text).unwrap();
