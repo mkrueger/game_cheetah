@@ -3,6 +3,9 @@
 pub mod search_type;
 pub use search_type::*;
 
+pub mod numeric_filter;
+pub use numeric_filter::{NumericComparison, NumericFilter, ResultFilter};
+
 pub mod cheat_table;
 pub use cheat_table::*;
 

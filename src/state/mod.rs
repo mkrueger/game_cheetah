@@ -21,6 +21,7 @@ mod diagnostics;
 mod memory_reader;
 mod narrowing;
 mod simd;
+mod stability;
 mod string_search;
 mod unknown;
 
@@ -91,7 +92,7 @@ fn search_loaded_memory(
 ) -> Vec<SearchResult> {
     let mut results = if let Some(needles) = guess_needles {
         // Guess mode: scan the buffer for each precomputed typed needle
-        // (Int / Float / Double).
+        // (Int / Int64 / Float / Double).
         let mut all_results = Vec::new();
         for (search_type, bytes) in needles {
             let typed_results: Vec<SearchResult> = search_memory(memory, bytes, *search_type, base_address);
@@ -482,6 +483,53 @@ impl GameCheetahEngine {
     }
 
     pub fn filter_searches(&mut self, search_index: usize) {
+        let Some(search) = self.searches.get(search_index) else {
+            self.push_error(AppError::InvalidSearchIndex { index: search_index });
+            return;
+        };
+        if search.searching != SearchMode::None {
+            return;
+        }
+        let prepared = narrowing::PreparedSearch::new(&search.collect_results(), &search.search_value_text);
+        self.filter_prepared(search_index, prepared, None);
+    }
+
+    /// Narrow all existing numeric hits using current process memory. The
+    /// previous unknown-search baseline stays intact; Undo restores the hit set.
+    pub fn filter_numeric_results(&mut self, search_index: usize, filter: crate::NumericFilter) {
+        self.filter_prepared(search_index, narrowing::PreparedSearch::numeric(filter), None);
+    }
+
+    pub fn filter_results(&mut self, search_index: usize, filter: crate::ResultFilter) {
+        if let Err(error) = filter.validate() {
+            self.push_error(AppError::SearchValueParse { source: error });
+            return;
+        }
+        self.filter_prepared(
+            search_index,
+            narrowing::PreparedSearch::filtered(filter.numeric, &filter.types),
+            filter.stable_for,
+        );
+    }
+
+    fn filter_prepared(&mut self, search_index: usize, prepared: narrowing::PreparedSearch, stable_for: Option<Duration>) {
+        let Some(search) = self.searches.get(search_index) else {
+            self.push_error(AppError::InvalidSearchIndex { index: search_index });
+            return;
+        };
+        if search.searching != SearchMode::None || search.get_result_count() == 0 {
+            return;
+        }
+        // Opening the process must succeed before changing results/history or freezes.
+        let handle = match self.pid.try_into_process_handle() {
+            Ok(handle) => handle,
+            Err(err) => {
+                self.push_error(AppError::Generic {
+                    message: format!("Failed to open process {}: {err}", self.pid),
+                });
+                return;
+            }
+        };
         self.remove_freezes(search_index);
         let Some(search_context) = self.searches.get_mut(search_index) else {
             self.push_error(AppError::InvalidSearchIndex { index: search_index });
@@ -501,28 +549,22 @@ impl GameCheetahEngine {
         search_context.results_receiver = rx;
         search_context.invalidate_cache();
 
+        if let Some(duration) = stable_for {
+            self.spawn_stability_filter(search_index, old_results, prepared, duration);
+            return;
+        }
+
         // For small refinement passes, do the update immediately on the UI
         // thread. Spawning a worker thread + rayon task for a handful of
         // addresses costs noticeably more than the actual memory reads and
         // leaves the UI sitting on "Aktualisiere N/N" until the next tick.
         const INLINE_UPDATE_LIMIT: usize = 1024;
         if old_results.len() <= INLINE_UPDATE_LIMIT {
-            match (self.pid as process_memory::Pid).try_into_process_handle() {
-                Ok(handle) => {
-                    let updated = update_results(&old_results, &search_context.search_value_text, &handle);
-                    search_context.set_cached_results(updated);
-                    search_context.current_bytes.store(old_results.len(), Ordering::SeqCst);
-                    search_context.search_complete.store(true, Ordering::SeqCst);
-                    search_context.searching = SearchMode::None;
-                }
-                Err(err) => {
-                    search_context.search_complete.store(true, Ordering::SeqCst);
-                    search_context.searching = SearchMode::None;
-                    self.push_error(AppError::Generic {
-                        message: format!("Failed to open process {}: {err}", self.pid),
-                    });
-                }
-            }
+            let updated = prepared.update_results(&old_results, &memory_reader::ExactProcessReader(&handle));
+            search_context.set_cached_results(updated);
+            search_context.current_bytes.store(old_results.len(), Ordering::SeqCst);
+            search_context.search_complete.store(true, Ordering::SeqCst);
+            search_context.searching = SearchMode::None;
             return;
         }
 
@@ -532,7 +574,7 @@ impl GameCheetahEngine {
             .map(|i| (i, min(i + max_block, old_results.len())))
             .collect();
 
-        self.spawn_update_search(search_index, old_results, chunks);
+        self.spawn_update_search(search_index, old_results, chunks, prepared);
     }
 
     pub fn remove_freezes(&mut self, search_index: usize) {
@@ -692,14 +734,19 @@ impl GameCheetahEngine {
         }
     }
 
-    fn spawn_update_search(&mut self, search_index: usize, old_results: Arc<Vec<SearchResult>>, chunks: Vec<(usize, usize)>) {
+    fn spawn_update_search(
+        &mut self,
+        search_index: usize,
+        old_results: Arc<Vec<SearchResult>>,
+        chunks: Vec<(usize, usize)>,
+        prepared: narrowing::PreparedSearch,
+    ) {
         let Some(search_context) = self.searches.get_mut(search_index) else {
             self.push_error(AppError::InvalidSearchIndex { index: search_index });
             return;
         };
         let current_bytes = search_context.current_bytes.clone();
         let pid = self.pid;
-        let value_text = search_context.search_value_text.clone();
         let results_sender = search_context.results_sender.clone();
         let search_complete = search_context.search_complete.clone();
         let cache_valid = search_context.cache_valid.clone();
@@ -707,7 +754,6 @@ impl GameCheetahEngine {
         search_complete.store(false, Ordering::SeqCst);
 
         std::thread::spawn(move || {
-            let prepared = narrowing::PreparedSearch::new(&old_results, &value_text);
             chunks.par_iter().for_each(|(from, to)| {
                 let handle = match pid.try_into_process_handle() {
                     Ok(h) => h,
@@ -745,8 +791,8 @@ impl GameCheetahEngine {
         let search_complete: Arc<std::sync::atomic::AtomicBool> = search_context.search_complete.clone();
         let cache_valid = search_context.cache_valid.clone();
 
-        // For Guess scans we try Int / Float / Double per region. Parsing the
-        // user-typed value into those three byte representations is identical
+        // For Guess scans we try Int / Int64 / Float / Double per region. Parsing the
+        // user-typed value into those four byte representations is identical
         // for every region, so do it exactly once here instead of inside the
         // par_iter closure (where it would otherwise run 3*N times). Errors
         // are reported once, up front, rather than spamming stderr per region.
@@ -758,8 +804,8 @@ impl GameCheetahEngine {
             // the scan with an empty needle list silently.
             match std::str::from_utf8(&search_data.1) {
                 Ok(value_text) => {
-                    let mut needles: GuessNeedles = Vec::with_capacity(3);
-                    for search_type in [SearchType::Int, SearchType::Float, SearchType::Double] {
+                    let mut needles: GuessNeedles = Vec::with_capacity(SearchType::GUESS_TYPES.len());
+                    for search_type in SearchType::GUESS_TYPES {
                         match search_type.from_string(value_text) {
                             Ok(typed_value) => needles.push((search_type, typed_value.1)),
                             Err(e) => {
@@ -1649,6 +1695,34 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn guess_scan_finds_int64_and_preserves_ambiguous_int32_hit() {
+        for value in [1_800_000_000_i64, 5_000_000_000_i64] {
+            let bytes = Box::new(value.to_le_bytes());
+            let address = bytes.as_ptr() as usize;
+            let mut engine = GameCheetahEngine {
+                pid: std::process::id() as process_memory::Pid,
+                ..Default::default()
+            };
+            engine.spawn_parallel_search(SearchType::Guess.from_string(&value.to_string()).unwrap(), vec![(address, 8)], 0);
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let search = &engine.searches[0];
+            while !search.search_complete.load(Ordering::Acquire) {
+                search.collect_results();
+                assert!(Instant::now() < deadline, "Guess worker did not finish");
+                std::thread::yield_now();
+            }
+            let results = search.collect_results();
+            assert!(results.iter().any(|r| r.addr == address && r.search_type == SearchType::Int64));
+            assert_eq!(
+                results.iter().any(|r| r.addr == address && r.search_type == SearchType::Int),
+                i32::try_from(value).is_ok()
+            );
+            assert_eq!(i64::from_le_bytes(*bytes), value);
+        }
+    }
 
     #[cfg(unix)]
     #[test]

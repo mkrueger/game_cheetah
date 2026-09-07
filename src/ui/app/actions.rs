@@ -157,6 +157,24 @@ impl App {
         self.state.unknown_search_compare(self.state.current_search, comparison);
     }
 
+    pub fn apply_numeric_filter(&mut self) {
+        let index = self.state.current_search;
+        let Some(search) = self.state.searches.get(index) else {
+            return;
+        };
+        if search.searching != crate::SearchMode::None {
+            return;
+        }
+        match search.result_filter() {
+            Ok(filter) => {
+                self.clear_result_interaction();
+                self.clear_change_tracker();
+                self.state.filter_results(index, filter);
+            }
+            Err(err) => self.state.push_error(AppError::SearchValueParse { source: err }),
+        }
+    }
+
     pub fn undo_search(&mut self) {
         self.clear_result_interaction();
         if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {

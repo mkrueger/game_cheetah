@@ -51,6 +51,34 @@ fn keys(results: &[SearchResult]) -> Vec<(usize, SearchType)> {
     results.iter().map(|r| (r.addr, r.search_type)).collect()
 }
 
+#[test]
+fn numeric_predicates_share_reads_and_retry_unreadable_gaps() {
+    let mut memory = Memory::new(128);
+    let old = [
+        memory.put(0, SearchType::Int, "-1"),
+        memory.put(16, SearchType::Int64, "9007199254740993"),
+        memory.put(32, SearchType::Double, "0.5"),
+    ];
+    let prepared = PreparedSearch::numeric(crate::NumericFilter::parse(crate::NumericComparison::GreaterEqual, "0", "").unwrap());
+    assert_eq!(keys(&prepared.update_results(&old, &memory)), keys(&old[1..]));
+    assert_eq!(memory.reads.borrow().len(), 1);
+    memory.reads.borrow_mut().clear();
+    memory.unreadable.push(BASE + 8..BASE + 12);
+    assert_eq!(keys(&prepared.update_results(&old, &memory)), keys(&old[1..]));
+    assert_eq!(memory.reads.borrow().len(), 4);
+    memory.unreadable.push(BASE + 16..BASE + 24);
+    assert_eq!(keys(&prepared.update_results(&old, &memory)), keys(&old[2..]));
+}
+
+#[test]
+fn numeric_filter_excludes_non_numeric_and_overflowing_addresses() {
+    let memory = Memory::new(0);
+    let old = [SearchResult::new(BASE, SearchType::String), SearchResult::new(usize::MAX, SearchType::Int64)];
+    let prepared = PreparedSearch::numeric(crate::NumericFilter::parse(crate::NumericComparison::NotEqual, "0", "").unwrap());
+    assert!(prepared.update_results(&old, &memory).is_empty());
+    assert!(memory.reads.borrow().is_empty());
+}
+
 // Independent per-hit reference implementation of the original comparison
 // semantics. It deliberately reparses and rereads for each candidate.
 fn reference(old: &[SearchResult], text: &str, memory: &Memory) -> Vec<SearchResult> {

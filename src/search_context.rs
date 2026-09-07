@@ -38,6 +38,7 @@ pub enum SearchMode {
     None,
     Percent,
     Memory,
+    Stability,
 }
 
 pub struct SearchContext {
@@ -45,6 +46,19 @@ pub struct SearchContext {
 
     pub search_value_text: String,
     pub search_type: SearchType,
+
+    /// Per-tab input state; predicates are applied explicitly, never live.
+    pub show_numeric_filter: bool,
+    pub numeric_filter_enabled: bool,
+    pub numeric_comparison: crate::NumericComparison,
+    pub numeric_filter_lower: String,
+    pub numeric_filter_upper: String,
+    pub type_filter_enabled: bool,
+    pub filter_types: [bool; 6],
+    pub stable_filter_enabled: bool,
+    pub stable_filter_seconds: u32,
+    /// Dropping this sender cancels the observation worker, including on tab close.
+    pub(crate) stability_cancel: Option<Sender<()>>,
 
     pub searching: SearchMode,
     pub total_bytes: usize,
@@ -73,6 +87,16 @@ impl SearchContext {
         Self {
             description,
             search_value_text: "".to_owned(),
+            show_numeric_filter: false,
+            numeric_filter_enabled: true,
+            numeric_comparison: crate::NumericComparison::default(),
+            numeric_filter_lower: "0".to_owned(),
+            numeric_filter_upper: String::new(),
+            type_filter_enabled: false,
+            filter_types: [true; 6],
+            stable_filter_enabled: false,
+            stable_filter_seconds: 3,
+            stability_cancel: None,
             searching: SearchMode::None,
             results_sender: tx,
             results_receiver: rx,
@@ -94,6 +118,38 @@ impl SearchContext {
 
     pub fn result_channel() -> (Sender<Vec<SearchResult>>, Receiver<Vec<SearchResult>>) {
         bounded(RESULTS_CHANNEL_CAPACITY)
+    }
+
+    pub fn result_filter(&self) -> Result<crate::ResultFilter, String> {
+        if !self.numeric_filter_enabled && !self.type_filter_enabled && !self.stable_filter_enabled {
+            return Err(i18n_embed_fl::fl!(crate::LANGUAGE_LOADER, "result-filter-no-criteria"));
+        }
+        let numeric = self
+            .numeric_filter_enabled
+            .then(|| crate::NumericFilter::parse(self.numeric_comparison, &self.numeric_filter_lower, &self.numeric_filter_upper))
+            .transpose()?;
+        let types = SearchType::NUMERIC_TYPES
+            .into_iter()
+            .zip(self.filter_types)
+            .filter_map(|(ty, selected)| (!self.type_filter_enabled || selected).then_some(ty))
+            .collect();
+        let filter = crate::ResultFilter {
+            numeric,
+            types,
+            stable_for: self
+                .stable_filter_enabled
+                .then(|| std::time::Duration::from_secs(u64::from(self.stable_filter_seconds))),
+        };
+        filter.validate()?;
+        Ok(filter)
+    }
+
+    fn cancel_stability(&mut self) {
+        if self.stability_cancel.take().is_some() {
+            // Old worker generations must not mark a later search as complete.
+            self.search_complete = Arc::new(AtomicBool::new(self.search_complete.load(Ordering::Acquire)));
+            self.current_bytes = Arc::new(AtomicUsize::new(0));
+        }
     }
 
     pub fn get_result_count(&self) -> usize {
@@ -123,6 +179,7 @@ impl SearchContext {
 
     /// Reset a search after the engine has released this tab's freezes.
     pub(crate) fn clear_results(&mut self) {
+        self.cancel_stability();
         debug_assert!(self.freezed_addresses.is_empty());
         // Clear old results history
         self.old_results.clear();
@@ -160,6 +217,7 @@ impl SearchContext {
         let Some(old) = self.old_results.pop() else {
             return;
         };
+        self.cancel_stability();
         // Discard queued batches from the pass being undone as well as its
         // cached results so they cannot reappear on the next UI tick.
         let (tx, rx) = Self::result_channel();

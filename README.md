@@ -35,6 +35,45 @@ Use it to search values in a running process, narrow down result sets, edit memo
   - Auto-reconnect to a process with the same name after restart
   - Optional update checks against GitHub releases
 
+## Numeric limits and result filters
+
+`Int` is a signed 32-bit integer, limited to −2,147,483,648 through 2,147,483,647.
+This is a storage limit, not an artificial digit limit. For example, if a game
+stores resources scaled by 100,000, a displayed 18,000 is stored as 1,800,000,000.
+Do not assume that a larger resource count can safely be written by selecting a
+wider type: writing eight bytes to a four-byte variable can overwrite its neighbor.
+Use **Check data type…** when an edit is invalid, or click a result's type cell
+to inspect the address. Type changes remain manual and reinterpret the same memory.
+
+**Number / Guess** tries Int32, Int64, Float32 and Float64. Several types can match
+the same address, especially the low four bytes of a small Int64. These are
+possible interpretations, not reliable identification of the game's variable type.
+
+After a numeric search, expand **Filter results** beside **Undo** and **Reset search**.
+Choose `=`, `≠`, `<`, `≤`, `>`, `≥`, or **between**, then **Apply filter**.
+For example, `≥ 0` removes negative values; **between 1000 and 5000** keeps both
+endpoints. All current results are checked, even when the table is hidden.
+
+Filters read current memory without writing it. Like other narrowing passes, they
+release this search's freezes; **Undo** restores the result set, not freezes.
+Unknown-value comparisons retain their previous comparison baseline. Bounds accept
+Int64 integers or finite decimal numbers with a decimal point and optional exponent.
+Comparisons are exact, not epsilon-based; Float32 bounds use Float32 precision.
+The numeric value filter excludes unreadable, non-numeric and non-finite values.
+
+Each filter can be enabled independently; enabled filters are combined:
+- **Data types** keeps only selected interpretations (UInt8, Int16, Int32, Int64,
+  Float32, Float64), without changing types or writing memory. Use **None** then
+  select a type to keep only that type.
+- **Stable values only** observes matching results for 3 seconds by default
+  (adjustable from 1 to 30 seconds). Every observed byte change or failed read
+  permanently removes that candidate, even if it subsequently returns to its old value.
+  Observation starts after **Apply**, not retrospectively. Sampling is roughly
+  every 200 ms, slower for large lists; changes between samples can be missed.
+  **Cancel and restore results** aborts the observation and restores the previous
+  result set. Freezes belonging to other searches remain active and can make
+  a value appear stable.
+
 ## Screenshots
 
 ### Find a process

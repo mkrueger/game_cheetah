@@ -537,6 +537,17 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
                 ui.add_space(4.0);
                 ui.colored_label(egui::Color32::from_rgb(220, 120, 120), format!("\u{26A0}  {err}"));
             }
+            let edit_error = app.editing_result.as_ref().and_then(|(index, text)| {
+                let results = app.state.searches[search_index].collect_results();
+                results.get(*index)?.search_type.from_string(text).err().map(|err| (*index, err))
+            });
+            if let Some((index, err)) = edit_error {
+                ui.add_space(4.0);
+                ui.colored_label(ui.visuals().error_fg_color, err);
+                if ui.button(fl!(crate::LANGUAGE_LOADER, "check-result-type")).clicked() {
+                    app.open_memory_editor(index);
+                }
+            }
             if idle && is_search_complete {
                 ui.add_space(8.0);
                 ui.separator();
@@ -556,7 +567,25 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
                     {
                         app.clear_results();
                     }
+                    if search_results > 0 && !matches!(selected_type, SearchType::String | SearchType::StringUtf16) {
+                        let show = &mut app.state.searches[search_index].show_numeric_filter;
+                        if ui
+                            .selectable_label(*show, fl!(crate::LANGUAGE_LOADER, "numeric-filter-title"))
+                            .on_hover_text(fl!(crate::LANGUAGE_LOADER, "result-filter-combined-hint"))
+                            .clicked()
+                        {
+                            *show = !*show;
+                        }
+                    }
                 });
+            }
+            if app.state.searches[search_index].show_numeric_filter
+                && search_results > 0
+                && !matches!(selected_type, SearchType::String | SearchType::StringUtf16)
+            {
+                ui.add_space(8.0);
+                ui.separator();
+                numeric_filter_controls(app, ui);
             }
         });
 
@@ -564,7 +593,14 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
         ui.add_space(10.0);
         // Searching in progress
         let progress = if total_bytes == 0 { 0.0 } else { current_bytes as f32 / total_bytes as f32 };
-        let label = if searching == SearchMode::Percent {
+        let label = if searching == SearchMode::Stability {
+            fl!(
+                crate::LANGUAGE_LOADER,
+                "result-filter-stability-progress",
+                current = format!("{:.1}", current_bytes as f64 / 1000.0),
+                total = format!("{:.0}", total_bytes as f64 / 1000.0)
+            )
+        } else if searching == SearchMode::Percent {
             fl!(crate::LANGUAGE_LOADER, "update-numbers-progress", current = current_bytes, total = total_bytes)
         } else {
             let bb = gabi::BytesConfig::default();
@@ -580,6 +616,9 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
         .collect::<String>();
         ui.add(egui::ProgressBar::new(progress).desired_width(ui.available_width()).show_percentage());
         ui.label(egui::RichText::new(label).size(13.0).weak());
+        if searching == SearchMode::Stability && ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "result-filter-cancel"))).clicked() {
+            app.undo_search();
+        }
     }
 
     if matches!(searching, SearchMode::None) && search_results > 0 {
@@ -599,6 +638,82 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
     } else if matches!(searching, SearchMode::None) && (!is_search_complete || selected_type != SearchType::Unknown || unknown_comparison.is_some()) {
         ui.add_space(18.0);
         empty_results_panel(ui, is_search_complete);
+    }
+}
+
+fn numeric_filter_controls(app: &mut App, ui: &mut egui::Ui) {
+    let search = &mut app.state.searches[app.state.current_search];
+    let mut apply = false;
+    ui.add_enabled_ui(search.searching == SearchMode::None, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut search.numeric_filter_enabled, fl!(crate::LANGUAGE_LOADER, "result-filter-numeric"))
+                .on_hover_text(fl!(crate::LANGUAGE_LOADER, "numeric-filter-hint"));
+            if search.numeric_filter_enabled {
+                egui::ComboBox::from_id_salt("numeric_filter_operator")
+                    .width(85.0)
+                    .selected_text(search.numeric_comparison.label())
+                    .show_ui(ui, |ui| {
+                        for comparison in crate::NumericComparison::ALL {
+                            ui.selectable_value(&mut search.numeric_comparison, comparison, comparison.label());
+                        }
+                    });
+                ui.add(
+                    egui::TextEdit::singleline(&mut search.numeric_filter_lower)
+                        .id_salt("numeric_filter_lower")
+                        .hint_text(fl!(crate::LANGUAGE_LOADER, "numeric-filter-value"))
+                        .desired_width(110.0),
+                );
+                if search.numeric_comparison == crate::NumericComparison::Between {
+                    ui.horizontal(|ui| {
+                        ui.label(fl!(crate::LANGUAGE_LOADER, "numeric-filter-and"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut search.numeric_filter_upper)
+                                .id_salt("numeric_filter_upper")
+                                .hint_text(fl!(crate::LANGUAGE_LOADER, "numeric-filter-upper"))
+                                .desired_width(110.0),
+                        );
+                    });
+                }
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut search.type_filter_enabled, fl!(crate::LANGUAGE_LOADER, "result-filter-types"))
+                .on_hover_text(fl!(crate::LANGUAGE_LOADER, "result-filter-types-hint"));
+            if search.type_filter_enabled {
+                for (index, ty) in SearchType::NUMERIC_TYPES.into_iter().enumerate() {
+                    ui.toggle_value(&mut search.filter_types[index], compact_type_label(ty));
+                }
+                if ui.small_button(fl!(crate::LANGUAGE_LOADER, "result-filter-types-all")).clicked() {
+                    search.filter_types.fill(true);
+                }
+                if ui.small_button(fl!(crate::LANGUAGE_LOADER, "result-filter-types-none")).clicked() {
+                    search.filter_types.fill(false);
+                }
+            }
+        });
+        let mut validation = Ok(());
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut search.stable_filter_enabled, fl!(crate::LANGUAGE_LOADER, "result-filter-stable"))
+                .on_hover_text(fl!(crate::LANGUAGE_LOADER, "result-filter-stable-hint"));
+            if search.stable_filter_enabled {
+                ui.add(egui::DragValue::new(&mut search.stable_filter_seconds).range(1..=30).speed(0.1));
+                ui.label(fl!(crate::LANGUAGE_LOADER, "result-filter-seconds"));
+            }
+            validation = search.result_filter().map(|_| ());
+            apply = ui
+                .add_enabled(
+                    validation.is_ok(),
+                    egui::Button::new(fl!(crate::LANGUAGE_LOADER, "numeric-filter-apply")).min_size(egui::vec2(0.0, 30.0)),
+                )
+                .on_hover_text(fl!(crate::LANGUAGE_LOADER, "numeric-filter-description"))
+                .clicked();
+        });
+        if let Err(err) = validation {
+            ui.colored_label(ui.visuals().error_fg_color, err);
+        }
+    });
+    if apply {
+        app.apply_numeric_filter();
     }
 }
 
@@ -684,7 +799,7 @@ fn type_picker(app: &mut App, ui: &mut egui::Ui, editable: bool, current: Search
     };
     if editable {
         let mut selected = current;
-        egui::ComboBox::from_id_salt("search_type_picker").selected_text(label).show_ui(ui, |ui| {
+        let response = egui::ComboBox::from_id_salt("search_type_picker").selected_text(label).show_ui(ui, |ui| {
             for st in [
                 SearchType::Guess,
                 SearchType::Unknown,
@@ -699,13 +814,21 @@ fn type_picker(app: &mut App, ui: &mut egui::Ui, editable: bool, current: Search
                 ui.selectable_value(&mut selected, st, st.get_description_text());
             }
         });
+        if current == SearchType::Guess {
+            response.response.on_hover_text(fl!(crate::LANGUAGE_LOADER, "guess-type-hint"));
+        }
         if selected != current
             && let Some(ctx) = app.state.searches.get_mut(app.state.current_search)
         {
             ctx.search_type = selected;
         }
     } else {
-        ui.label(label).on_hover_text(current.get_description_text());
+        let hint = if current == SearchType::Guess {
+            fl!(crate::LANGUAGE_LOADER, "guess-type-hint")
+        } else {
+            current.get_description_text()
+        };
+        ui.label(label).on_hover_text(hint);
     }
 }
 
@@ -1118,8 +1241,17 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                         if is_selected {
                             ui.visuals_mut().override_text_color = Some(ui.visuals().selection.stroke.color);
                         }
-                        ui.add(egui::Label::new(compact_type_label(result.search_type)).selectable(false))
-                            .on_hover_text(result.search_type.get_description_text());
+                        let mut label = egui::RichText::new(compact_type_label(result.search_type));
+                        if is_selected {
+                            label = label.color(ui.visuals().selection.stroke.color);
+                        }
+                        if ui
+                            .add(egui::Label::new(label).selectable(false).sense(egui::Sense::click()))
+                            .on_hover_text(fl!(crate::LANGUAGE_LOADER, "check-result-type"))
+                            .clicked()
+                        {
+                            open_editor = Some(i);
+                        }
                     });
                 }
 

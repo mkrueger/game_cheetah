@@ -27,6 +27,31 @@ pub enum UnknownComparison {
 }
 
 impl SearchType {
+    pub const NUMERIC_TYPES: [Self; 6] = [Self::Byte, Self::Short, Self::Int, Self::Int64, Self::Float, Self::Double];
+
+    /// Guess finds possible interpretations, not the target's variable type.
+    pub const GUESS_TYPES: [Self; 4] = [Self::Int, Self::Int64, Self::Float, Self::Double];
+
+    pub fn integer_range(&self) -> Option<(&'static str, &'static str, &'static str)> {
+        match self {
+            Self::Byte => Some(("UInt8", "0", "255")),
+            Self::Short => Some(("Int16", "-32768", "32767")),
+            Self::Int => Some(("Int32", "-2147483648", "2147483647")),
+            Self::Int64 => Some(("Int64", "-9223372036854775808", "9223372036854775807")),
+            _ => None,
+        }
+    }
+
+    fn integer_parse_error(&self, text: &str, error: std::num::ParseIntError) -> String {
+        if matches!(error.kind(), std::num::IntErrorKind::PosOverflow | std::num::IntErrorKind::NegOverflow)
+            && let Some((kind, min, max)) = self.integer_range()
+        {
+            fl!(crate::LANGUAGE_LOADER, "integer-range-error", kind = kind, min = min, max = max)
+        } else {
+            fl!(crate::LANGUAGE_LOADER, "integer-input-error", value = text)
+        }
+    }
+
     pub fn get_description_text(&self) -> String {
         match self {
             SearchType::Guess => fl!(crate::LANGUAGE_LOADER, "guess-value-item"),
@@ -79,19 +104,19 @@ impl SearchType {
     pub fn from_string(&self, txt: &str) -> Result<SearchValue, String> {
         match self {
             SearchType::Byte => {
-                let val = txt.parse::<u8>().map_err(|_| format!("Invalid byte value: {txt}"))?;
+                let val = txt.parse::<u8>().map_err(|err| self.integer_parse_error(txt, err))?;
                 Ok(SearchValue(*self, vec![val]))
             }
             SearchType::Short => {
-                let val = txt.parse::<i16>().map_err(|_| format!("Invalid short value: {txt}"))?;
+                let val = txt.parse::<i16>().map_err(|err| self.integer_parse_error(txt, err))?;
                 Ok(SearchValue(*self, val.to_le_bytes().to_vec()))
             }
             SearchType::Int => {
-                let val = txt.parse::<i32>().map_err(|_| format!("Invalid int value: {txt}"))?;
+                let val = txt.parse::<i32>().map_err(|err| self.integer_parse_error(txt, err))?;
                 Ok(SearchValue(*self, val.to_le_bytes().to_vec()))
             }
             SearchType::Int64 => {
-                let val = txt.parse::<i64>().map_err(|_| format!("Invalid int64 value: {txt}"))?;
+                let val = txt.parse::<i64>().map_err(|err| self.integer_parse_error(txt, err))?;
                 Ok(SearchValue(*self, val.to_le_bytes().to_vec()))
             }
             SearchType::Float => {

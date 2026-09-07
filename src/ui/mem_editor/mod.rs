@@ -1027,6 +1027,9 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) -> Option<Search
                     .width(84.0);
                 if INSPECTOR_NUMERIC_TYPES.contains(&current_type) {
                     let response = combo.show_ui(ui, |ui| {
+                        ui.set_max_width(320.0);
+                        ui.add(egui::Label::new(fl!(crate::LANGUAGE_LOADER, "type-width-warning")).wrap());
+                        ui.separator();
                         for &ty in INSPECTOR_NUMERIC_TYPES {
                             ui.selectable_value(&mut selected, ty, ty.get_short_description_text());
                         }

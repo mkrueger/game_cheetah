@@ -10,6 +10,8 @@ const MAX_GAP: usize = 64;
 const TYPE_COUNT: usize = SearchType::StringUtf16 as usize + 1;
 
 enum Needle {
+    Any { len: usize },
+    Predicate { ty: SearchType, filter: crate::NumericFilter },
     Integer { bytes: [u8; 8], len: usize },
     Float { target: f32, epsilon: f32 },
     Double { target: f64, epsilon: f64 },
@@ -18,6 +20,8 @@ enum Needle {
 impl Needle {
     fn len(&self) -> usize {
         match self {
+            Self::Any { len } => *len,
+            Self::Predicate { ty, .. } => ty.fixed_byte_length().unwrap(),
             Self::Integer { len, .. } => *len,
             Self::Float { .. } => 4,
             Self::Double { .. } => 8,
@@ -26,6 +30,8 @@ impl Needle {
 
     fn matches(&self, bytes: &[u8]) -> bool {
         match self {
+            Self::Any { .. } => true,
+            Self::Predicate { ty, filter } => filter.matches(*ty, bytes),
             Self::Integer { bytes: target, len } => bytes == &target[..*len],
             Self::Float { target, epsilon } => {
                 let current = f32::from_le_bytes(bytes.try_into().expect("validated float width"));
@@ -52,6 +58,23 @@ pub(super) struct PreparedSearch {
 }
 
 impl PreparedSearch {
+    pub(super) fn numeric(filter: crate::NumericFilter) -> Self {
+        Self::filtered(Some(filter), &SearchType::NUMERIC_TYPES)
+    }
+
+    pub(super) fn filtered(filter: Option<crate::NumericFilter>, types: &[SearchType]) -> Self {
+        let mut needles = std::array::from_fn(|_| None);
+        for &ty in types {
+            if let Some(len) = ty.fixed_byte_length() {
+                needles[ty as usize] = Some(match filter {
+                    Some(filter) => Needle::Predicate { ty, filter },
+                    None => Needle::Any { len },
+                });
+            }
+        }
+        Self { needles }
+    }
+
     pub(super) fn new(results: &[SearchResult], text: &str) -> Self {
         let mut needles = std::array::from_fn(|_| None);
         let mut seen = [false; TYPE_COUNT];
@@ -98,6 +121,12 @@ impl PreparedSearch {
     }
 
     pub(super) fn update_results<T: CopyAddress>(&self, old: &[SearchResult], handle: &T) -> Vec<SearchResult> {
+        self.read_matching(old, handle, |_, _| true)
+    }
+
+    /// The visitor receives the input index and only fully read matching bytes.
+    /// It can collect a baseline or reject values that changed since a prior read.
+    pub(super) fn read_matching<T: CopyAddress>(&self, old: &[SearchResult], handle: &T, mut accept: impl FnMut(usize, &[u8]) -> bool) -> Vec<SearchResult> {
         let mut results = Vec::new();
         let mut buffer = [0u8; READ_WINDOW];
         let mut from = 0;
@@ -130,10 +159,11 @@ impl PreparedSearch {
             }
 
             if handle.copy_address(start, &mut buffer[..end - start]).is_ok() {
-                for result in &old[from..to] {
+                for (index, result) in old.iter().enumerate().take(to).skip(from) {
                     let needle = self.needles[result.search_type as usize].as_ref().unwrap();
                     let offset = result.addr - start;
-                    if needle.matches(&buffer[offset..offset + needle.len()]) {
+                    let bytes = &buffer[offset..offset + needle.len()];
+                    if needle.matches(bytes) && accept(index, bytes) {
                         results.push(*result);
                     }
                 }
@@ -141,10 +171,10 @@ impl PreparedSearch {
                 // A gap, stale mapping or page boundary can make a grouped read
                 // fail even though individual values remain readable. Retry each
                 // hit and never compare a partially filled/failed buffer.
-                for result in &old[from..to] {
+                for (index, result) in old.iter().enumerate().take(to).skip(from) {
                     let needle = self.needles[result.search_type as usize].as_ref().unwrap();
                     let bytes = &mut buffer[..needle.len()];
-                    if handle.copy_address(result.addr, bytes).is_ok() && needle.matches(bytes) {
+                    if handle.copy_address(result.addr, bytes).is_ok() && needle.matches(bytes) && accept(index, bytes) {
                         results.push(*result);
                     }
                 }
