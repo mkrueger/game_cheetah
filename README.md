@@ -58,7 +58,13 @@ a heuristic, not reliable identification of the game's variable type; floating-p
 interpretations can still match the same address (for example for zero).
 
 After a numeric search, expand **Filter results** beside **Undo** and **Reset search**.
-Choose `=`, `≠`, `<`, `≤`, `>`, `≥`, or **between**, then **Apply filter**.
+**Stable values only** is available for all numeric search modes. **Data types**
+is available only for **Number / Guess** and **Unknown**, not for a concrete type
+such as Int32. Hidden type selections are ignored when applying filters.
+The **Value** comparison is available only for **Unknown** searches: choose
+`=`, `≠`, `<`, `≤`, `>`, `≥`, or **between**, then **Apply filter**.
+**Number / Guess** still searches for a concrete value, so it does not offer this
+additional value filter. Hidden value criteria are ignored, including invalid bounds.
 For example, `≥ 0` removes negative values; **between 1000 and 5000** keeps both
 endpoints. All current results are checked, even when the table is hidden.
 

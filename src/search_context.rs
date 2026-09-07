@@ -145,17 +145,18 @@ impl SearchContext {
     }
 
     pub fn result_filter(&self) -> Result<crate::ResultFilter, String> {
-        if !self.numeric_filter_enabled && !self.type_filter_enabled && !self.stable_filter_enabled {
+        let numeric_enabled = self.search_type == SearchType::Unknown && self.numeric_filter_enabled;
+        let types_enabled = matches!(self.search_type, SearchType::Guess | SearchType::Unknown) && self.type_filter_enabled;
+        if !numeric_enabled && !types_enabled && !self.stable_filter_enabled {
             return Err(i18n_embed_fl::fl!(crate::LANGUAGE_LOADER, "result-filter-no-criteria"));
         }
-        let numeric = self
-            .numeric_filter_enabled
+        let numeric = numeric_enabled
             .then(|| crate::NumericFilter::parse(self.numeric_comparison, &self.numeric_filter_lower, &self.numeric_filter_upper))
             .transpose()?;
         let types = SearchType::NUMERIC_TYPES
             .into_iter()
             .zip(self.filter_types)
-            .filter_map(|(ty, selected)| (!self.type_filter_enabled || selected).then_some(ty))
+            .filter_map(|(ty, selected)| (!types_enabled || selected).then_some(ty))
             .collect();
         let filter = crate::ResultFilter {
             numeric,

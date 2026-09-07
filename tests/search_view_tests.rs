@@ -250,6 +250,25 @@ fn wheel_table(app: &mut App, ctx: &Context, delta: f32) -> FullOutput {
     frame(app, ctx, LARGE, vec![Event::PointerGone])
 }
 
+fn wheel_filter(app: &mut App, ctx: &Context, size: Vec2, pos: Pos2, delta: f32) -> FullOutput {
+    frame(app, ctx, size, vec![Event::PointerMoved(pos)]);
+    frame(
+        app,
+        ctx,
+        size,
+        vec![Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, delta),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        }],
+    );
+    for _ in 0..120 {
+        frame(app, ctx, size, vec![]);
+    }
+    frame(app, ctx, size, vec![Event::PointerGone])
+}
+
 #[test]
 fn native_table_scroll_and_selection_are_per_tab_even_after_closing_a_preceding_tab() {
     let mut app = app_with_results(300);
@@ -748,6 +767,7 @@ fn pointer_editor_preserves_width_and_offsets_in_pending_entries() {
 fn numeric_filter_can_expand_with_large_hidden_results_and_range_actions_fit() {
     for size in SIZES {
         let mut app = app_with_results(20_000);
+        app.state.searches[0].search_type = SearchType::Unknown;
         let ctx = context();
         let output = settle(&mut app, &ctx, size);
         let toggle = fl!(LANGUAGE_LOADER, "numeric-filter-title");
@@ -765,6 +785,7 @@ fn numeric_filter_can_expand_with_large_hidden_results_and_range_actions_fit() {
 #[test]
 fn invalid_numeric_range_cannot_dispatch_and_filter_inputs_stay_per_tab() {
     let mut app = app_with_results(23);
+    app.state.searches[0].search_type = SearchType::Unknown;
     app.state.searches[0].show_numeric_filter = true;
     app.state.searches[0].numeric_comparison = game_cheetah::NumericComparison::Between;
     app.state.searches[0].numeric_filter_lower = "10".to_owned();
@@ -789,28 +810,190 @@ fn invalid_numeric_range_cannot_dispatch_and_filter_inputs_stay_per_tab() {
 }
 
 #[test]
-fn all_filter_controls_fit_small_and_large_windows() {
+fn all_filter_controls_are_accessible_in_small_and_large_windows() {
     for size in SIZES {
         let mut app = app_with_results(20_000);
         let search = &mut app.state.searches[0];
+        search.search_type = SearchType::Unknown;
         search.show_numeric_filter = true;
         search.type_filter_enabled = true;
         search.stable_filter_enabled = true;
         search.numeric_comparison = game_cheetah::NumericComparison::Between;
         search.numeric_filter_upper = "1000".to_owned();
         let ctx = context();
-        let output = settle(&mut app, &ctx, size);
-        assert_button_visible(&output, &fl!(LANGUAGE_LOADER, "numeric-filter-apply"), size);
-        for label in ["UInt8", "Int16", "Int64", "Float32", "Float64"] {
-            assert_single_line_visible(&output, label, size);
+        let mut output = settle(&mut app, &ctx, size);
+        let apply = fl!(LANGUAGE_LOADER, "numeric-filter-apply");
+        assert_button_visible(&output, &apply, size);
+        let apply_rect = button_frame(&output, &apply).0;
+        assert_single_line_visible(&output, &fl!(LANGUAGE_LOADER, "result-filter-numeric"), size);
+        assert_single_line_visible(&output, &fl!(LANGUAGE_LOADER, "numeric-filter-and"), size);
+        let scroll_pos = text_rect(&output, &fl!(LANGUAGE_LOADER, "result-filter-numeric")).center();
+        for label in [
+            "UInt8".to_owned(),
+            "Int16".to_owned(),
+            "Int32".to_owned(),
+            "Int64".to_owned(),
+            "Float32".to_owned(),
+            "Float64".to_owned(),
+            fl!(LANGUAGE_LOADER, "result-filter-types-all"),
+            fl!(LANGUAGE_LOADER, "result-filter-types-none"),
+            fl!(LANGUAGE_LOADER, "result-filter-stable"),
+            fl!(LANGUAGE_LOADER, "result-filter-seconds"),
+        ] {
+            if size != LARGE {
+                // Step through wrapped criteria rows, not through the result table.
+                for _ in 0..20 {
+                    let visible = shapes(&output).into_iter().any(|(clip, shape)| {
+                        matches!(shape, Shape::Text(text) if text.galley.job.text == label
+                            && clip.contains_rect(text.galley.rect.translate(text.pos.to_vec2())))
+                    });
+                    if visible {
+                        break;
+                    }
+                    output = wheel_filter(&mut app, &ctx, size, scroll_pos, -16.0);
+                }
+            }
+            assert_single_line_visible(&output, &label, size);
+            assert_button_visible(&output, &apply, size);
+            assert_eq!(button_frame(&output, &apply).0, apply_rect, "Apply must not scroll with the criteria");
         }
-        assert_single_line_visible(&output, &fl!(LANGUAGE_LOADER, "result-filter-seconds"), size);
+        if size != LARGE {
+            output = wheel_filter(&mut app, &ctx, size, scroll_pos, 1000.0);
+            assert_single_line_visible(&output, &fl!(LANGUAGE_LOADER, "result-filter-numeric"), size);
+            assert_single_line_visible(&output, &fl!(LANGUAGE_LOADER, "numeric-filter-and"), size);
+            assert_eq!(button_frame(&output, &apply).0, apply_rect);
+        }
+    }
+}
+
+#[test]
+fn only_unknown_shows_numeric_controls_and_switching_back_preserves_bounds() {
+    // Dedicated layout tests cover scrolling in the small viewport; all criteria
+    // should fit simultaneously here for every search type.
+    for size in [LARGE] {
+        for ty in SearchType::NUMERIC_TYPES.into_iter().chain([SearchType::Guess]) {
+            let mut app = app_with_results(20_000);
+            let search = &mut app.state.searches[0];
+            search.show_numeric_filter = true;
+            search.type_filter_enabled = true;
+            search.filter_types = [false, false, false, true, false, false];
+            search.stable_filter_enabled = true;
+            search.numeric_comparison = game_cheetah::NumericComparison::Between;
+            search.numeric_filter_lower = "17".to_owned();
+            search.numeric_filter_upper = "987".to_owned();
+            let ctx = context();
+            for selected_type in [SearchType::Unknown, ty, SearchType::Guess, ty, SearchType::Unknown] {
+                app.state.searches[0].search_type = selected_type;
+                let types_visible = matches!(selected_type, SearchType::Guess | SearchType::Unknown);
+                let output = settle(&mut app, &ctx, size);
+                for label in [
+                    fl!(LANGUAGE_LOADER, "result-filter-numeric"),
+                    game_cheetah::NumericComparison::Between.label(),
+                    fl!(LANGUAGE_LOADER, "numeric-filter-and"),
+                    "17".to_owned(),
+                    "987".to_owned(),
+                ] {
+                    if selected_type == SearchType::Unknown {
+                        assert_single_line_visible(&output, &label, size);
+                    } else {
+                        assert_text_absent(&output, &label);
+                    }
+                }
+                for label in [
+                    fl!(LANGUAGE_LOADER, "result-filter-types"),
+                    fl!(LANGUAGE_LOADER, "result-filter-types-all"),
+                    fl!(LANGUAGE_LOADER, "result-filter-types-none"),
+                ] {
+                    if types_visible {
+                        assert_single_line_visible(&output, &label, size);
+                    } else {
+                        assert_text_absent(&output, &label);
+                    }
+                }
+                for label in [fl!(LANGUAGE_LOADER, "result-filter-stable"), fl!(LANGUAGE_LOADER, "result-filter-seconds")] {
+                    assert_single_line_visible(&output, &label, size);
+                }
+                // The dropdown and result rows also paint compact type labels.
+                for (chip_type, label) in SearchType::NUMERIC_TYPES
+                    .into_iter()
+                    .zip(["UInt8", "Int16", "Int32", "Int64", "Float32", "Float64"])
+                {
+                    if types_visible {
+                        text_rect(&output, label);
+                    } else if chip_type != selected_type && chip_type != SearchType::Int {
+                        assert_text_absent(&output, label);
+                    }
+                }
+                assert_button_visible(&output, &fl!(LANGUAGE_LOADER, "numeric-filter-apply"), size);
+                let search = &app.state.searches[0];
+                assert!(search.numeric_filter_enabled);
+                assert_eq!(search.numeric_comparison, game_cheetah::NumericComparison::Between);
+                assert_eq!(search.numeric_filter_lower, "17");
+                assert_eq!(search.numeric_filter_upper, "987");
+                assert!(search.type_filter_enabled);
+                assert_eq!(search.filter_types, [false, false, false, true, false, false]);
+                let expected_types = if types_visible {
+                    vec![SearchType::Int64]
+                } else {
+                    SearchType::NUMERIC_TYPES.to_vec()
+                };
+                assert_eq!(search.result_filter().unwrap().types, expected_types);
+                assert_eq!(search.result_filter().unwrap().numeric.is_some(), selected_type == SearchType::Unknown);
+            }
+        }
+    }
+}
+
+#[test]
+fn hidden_numeric_defaults_cannot_enable_apply_without_independent_criteria() {
+    for ty in SearchType::NUMERIC_TYPES.into_iter().chain([SearchType::Guess]) {
+        let mut app = app_with_results(23);
+        let search = &mut app.state.searches[0];
+        search.search_type = ty;
+        search.show_numeric_filter = true;
+        assert!(search.numeric_filter_enabled);
+        let ctx = context();
+        for lower in ["0", "invalid hidden number"] {
+            app.state.searches[0].numeric_filter_lower = lower.to_owned();
+            for selection in [[true; 6], [false; 6], [false, false, false, true, false, false]] {
+                app.state.searches[0].type_filter_enabled = ty != SearchType::Guess;
+                app.state.searches[0].filter_types = selection;
+                let output = settle(&mut app, &ctx, LARGE);
+                text_rect(&output, &fl!(LANGUAGE_LOADER, "result-filter-no-criteria"));
+                assert_text_absent(&output, &fl!(LANGUAGE_LOADER, "numeric-filter-invalid"));
+                assert_text_absent(&output, &fl!(LANGUAGE_LOADER, "result-filter-no-types"));
+                click(
+                    &mut app,
+                    &ctx,
+                    LARGE,
+                    text_rect(&output, &fl!(LANGUAGE_LOADER, "numeric-filter-apply")).center(),
+                );
+                assert_eq!(app.state.searches[0].get_result_count(), 23);
+                assert!(app.state.searches[0].old_results.is_empty());
+                assert_eq!(app.state.searches[0].searching, SearchMode::None);
+                assert!(app.state.current_error().is_none());
+            }
+        }
+        for stable in [false, true] {
+            app.state.searches[0].type_filter_enabled = !stable;
+            app.state.searches[0].stable_filter_enabled = stable;
+            let output = settle(&mut app, &ctx, LARGE);
+            if stable || ty == SearchType::Guess {
+                assert_text_absent(&output, &fl!(LANGUAGE_LOADER, "result-filter-no-criteria"));
+                assert!(app.state.searches[0].result_filter().unwrap().numeric.is_none());
+            } else {
+                text_rect(&output, &fl!(LANGUAGE_LOADER, "result-filter-no-criteria"));
+                assert!(app.state.searches[0].result_filter().is_err());
+            }
+            assert_text_absent(&output, &fl!(LANGUAGE_LOADER, "numeric-filter-invalid"));
+        }
     }
 }
 
 #[test]
 fn type_chips_and_filter_toggles_are_independent_and_empty_selection_cannot_apply() {
     let mut app = app_with_results(20_000);
+    app.state.searches[0].search_type = SearchType::Guess;
     app.state.searches[0].show_numeric_filter = true;
     let ctx = context();
     let output = settle(&mut app, &ctx, LARGE);
@@ -828,7 +1011,7 @@ fn type_chips_and_filter_toggles_are_independent_and_empty_selection_cannot_appl
     text_rect(&output, &fl!(LANGUAGE_LOADER, "result-filter-no-types"));
     click(&mut app, &ctx, LARGE, text_rect(&output, "Int64").center());
     assert_eq!(app.state.searches[0].filter_types, [false, false, false, true, false, false]);
-    app.state.searches[0].numeric_filter_enabled = false;
+    assert!(app.state.searches[0].numeric_filter_enabled);
     app.state.searches[0].numeric_filter_lower = "invalid".to_owned();
     assert!(app.state.searches[0].result_filter().is_ok());
     let output = settle(&mut app, &ctx, LARGE);
@@ -912,24 +1095,33 @@ fn switching_tabs_keeps_search_running_and_closing_it_is_safe() {
 #[cfg(target_os = "linux")]
 #[test]
 fn applying_numeric_filter_through_ui_is_read_only_and_undoable() {
-    let mut value = Box::new(24680_i32);
-    let mut app = own_value_app(&mut value);
-    app.state.searches[0].show_numeric_filter = true;
-    app.state.searches[0].numeric_filter_lower = "30000".to_owned();
-    let ctx = context();
-    let output = settle(&mut app, &ctx, LARGE);
-    click(
-        &mut app,
-        &ctx,
-        LARGE,
-        text_rect(&output, &fl!(LANGUAGE_LOADER, "numeric-filter-apply")).center(),
-    );
-    assert_eq!(app.state.searches[0].get_result_count(), 0);
-    assert_eq!(*value, 24680);
-    let output = settle(&mut app, &ctx, LARGE);
-    click(&mut app, &ctx, LARGE, text_rect(&output, &fl!(LANGUAGE_LOADER, "undo-button")).center());
-    assert_eq!(app.state.searches[0].get_result_count(), 1);
-    assert_eq!(*value, 24680);
+    for size in SIZES {
+        let mut value = Box::new(24680_i32);
+        let mut app = own_value_app(&mut value);
+        app.state.searches[0].search_type = SearchType::Unknown;
+        app.state.searches[0].show_numeric_filter = true;
+        app.state.searches[0].type_filter_enabled = true;
+        app.state.searches[0].numeric_filter_lower = "30000".to_owned();
+        let ctx = context();
+        let mut output = settle(&mut app, &ctx, size);
+        let apply = fl!(LANGUAGE_LOADER, "numeric-filter-apply");
+        assert_button_visible(&output, &apply, size);
+        let apply_rect = button_frame(&output, &apply).0;
+        if size != LARGE {
+            let pos = text_rect(&output, &fl!(LANGUAGE_LOADER, "result-filter-numeric")).center();
+            output = wheel_filter(&mut app, &ctx, size, pos, -1000.0);
+            assert_single_line_visible(&output, &fl!(LANGUAGE_LOADER, "result-filter-stable"), size);
+            assert_button_visible(&output, &apply, size);
+            assert_eq!(button_frame(&output, &apply).0, apply_rect);
+        }
+        click(&mut app, &ctx, size, text_rect(&output, &apply).center());
+        assert_eq!(app.state.searches[0].get_result_count(), 0);
+        assert_eq!(*value, 24680);
+        let output = settle(&mut app, &ctx, size);
+        click(&mut app, &ctx, size, text_rect(&output, &fl!(LANGUAGE_LOADER, "undo-button")).center());
+        assert_eq!(app.state.searches[0].get_result_count(), 1);
+        assert_eq!(*value, 24680);
+    }
 }
 
 #[cfg(target_os = "linux")]

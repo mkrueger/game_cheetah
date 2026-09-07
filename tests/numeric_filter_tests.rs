@@ -124,7 +124,7 @@ mod own_process {
             let mut app = App::default();
             app.state.pid = std::process::id() as process_memory::Pid;
             let search = &mut app.state.searches[0];
-            search.search_type = SearchType::Guess;
+            search.search_type = SearchType::Unknown;
             let original: Vec<_> = values.iter().map(|v| SearchResult::new(v as *const i64 as usize, SearchType::Int64)).collect();
             search.set_cached_results(original.clone());
             search.search_complete.store(true, Ordering::Release);
@@ -179,51 +179,71 @@ mod own_process {
     fn type_filter_alone_retains_negative_values_and_distinguishes_same_address_types() {
         let value = Box::new(-1_i64);
         let address = &*value as *const i64 as usize;
-        let mut app = App::default();
-        app.state.pid = std::process::id() as process_memory::Pid;
-        let search = &mut app.state.searches[0];
-        search.set_cached_results(vec![SearchResult::new(address, SearchType::Int), SearchResult::new(address, SearchType::Int64)]);
-        search.search_complete.store(true, Ordering::Release);
-        search.numeric_filter_enabled = false;
-        search.numeric_filter_lower = "invalid but disabled".to_owned();
-        search.type_filter_enabled = true;
-        search.filter_types = [false, false, false, true, false, false];
-        app.apply_numeric_filter();
-        let results = app.state.searches[0].collect_results();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].addr, address);
-        assert_eq!(results[0].search_type, SearchType::Int64);
-        assert_eq!(*value, -1);
-        app.undo_search();
-        assert_eq!(app.state.searches[0].get_result_count(), 2);
+        for ty in [SearchType::Guess, SearchType::Unknown] {
+            for lower in ["0", "invalid but hidden"] {
+                let mut app = App::default();
+                app.state.pid = std::process::id() as process_memory::Pid;
+                let search = &mut app.state.searches[0];
+                search.search_type = ty;
+                search.set_cached_results(vec![SearchResult::new(address, SearchType::Int), SearchResult::new(address, SearchType::Int64)]);
+                search.search_complete.store(true, Ordering::Release);
+                assert!(search.numeric_filter_enabled);
+                search.numeric_filter_enabled = ty != SearchType::Unknown;
+                search.numeric_comparison = Op::Greater;
+                search.numeric_filter_lower = lower.to_owned();
+                search.type_filter_enabled = true;
+                search.filter_types = [false, false, false, true, false, false];
+                app.apply_numeric_filter();
+                assert!(app.state.current_error().is_none(), "{ty:?}: {lower}");
+                let results = app.state.searches[0].collect_results();
+                assert_eq!(results.len(), 1);
+                assert_eq!(results[0].addr, address);
+                assert_eq!(results[0].search_type, SearchType::Int64);
+                assert_eq!(*value, -1);
+                app.undo_search();
+                assert_eq!(app.state.searches[0].get_result_count(), 2);
+            }
+        }
     }
 
     #[test]
     fn stability_observes_the_full_interval_and_is_undoable() {
         // More than the visible rows; stable filtering must read every candidate.
         let values = vec![-7_i64; 4096];
-        let mut app = App::default();
-        app.state.pid = std::process::id() as process_memory::Pid;
-        let search = &mut app.state.searches[0];
-        search.search_type = SearchType::Unknown;
-        search.unknown_comparison = Some(UnknownComparison::Unchanged);
-        search.set_cached_results(values.iter().map(|v| SearchResult::new(v as *const i64 as usize, SearchType::Int64)).collect());
-        search.search_complete.store(true, Ordering::Release);
-        search.numeric_filter_enabled = false;
-        search.stable_filter_enabled = true;
-        search.stable_filter_seconds = 1;
-        let start = Instant::now();
-        app.apply_numeric_filter();
-        assert_eq!(app.state.searches[0].searching, SearchMode::Stability);
-        finish(&mut app);
-        assert!(start.elapsed() >= Duration::from_secs(1));
-        assert_eq!(app.state.searches[0].get_result_count(), values.len());
-        assert_eq!(app.state.searches[0].current_bytes.load(Ordering::Acquire), 1000);
-        assert_eq!(app.state.searches[0].unknown_comparison, Some(UnknownComparison::Unchanged));
-        app.undo_search();
-        assert_eq!(app.state.searches[0].get_result_count(), values.len());
-        assert!(app.state.searches[0].old_results.is_empty());
-        assert!(values.iter().all(|&v| v == -7));
+        for (ty, selected_types) in [
+            (SearchType::Unknown, [true; 6]),
+            (SearchType::Int64, [false; 6]),
+            (SearchType::Int64, [true, false, false, false, false, false]),
+        ] {
+            let mut app = App::default();
+            app.state.pid = std::process::id() as process_memory::Pid;
+            let search = &mut app.state.searches[0];
+            search.search_type = ty;
+            search.unknown_comparison = Some(UnknownComparison::Unchanged);
+            search.set_cached_results(values.iter().map(|v| SearchResult::new(v as *const i64 as usize, SearchType::Int64)).collect());
+            search.search_complete.store(true, Ordering::Release);
+            search.numeric_filter_enabled = ty != SearchType::Unknown;
+            search.numeric_comparison = Op::Between;
+            search.numeric_filter_lower = "invalid lower".to_owned();
+            search.numeric_filter_upper = "invalid upper".to_owned();
+            search.type_filter_enabled = ty != SearchType::Unknown;
+            search.filter_types = selected_types;
+            search.stable_filter_enabled = true;
+            search.stable_filter_seconds = 1;
+            let start = Instant::now();
+            app.apply_numeric_filter();
+            assert_eq!(app.state.searches[0].searching, SearchMode::Stability);
+            finish(&mut app);
+            assert!(app.state.current_error().is_none(), "{ty:?}");
+            assert!(start.elapsed() >= Duration::from_secs(1));
+            assert_eq!(app.state.searches[0].get_result_count(), values.len());
+            assert_eq!(app.state.searches[0].current_bytes.load(Ordering::Acquire), 1000);
+            assert_eq!(app.state.searches[0].unknown_comparison, Some(UnknownComparison::Unchanged));
+            app.undo_search();
+            assert_eq!(app.state.searches[0].get_result_count(), values.len());
+            assert!(app.state.searches[0].old_results.is_empty());
+            assert!(values.iter().all(|&v| v == -7));
+        }
     }
 
     #[test]
@@ -258,6 +278,7 @@ mod own_process {
         let mut app = App::default();
         app.state.pid = std::process::id() as process_memory::Pid;
         let search = &mut app.state.searches[0];
+        search.search_type = SearchType::Unknown;
         search.set_cached_results(vec![SearchResult::new(0x1000, SearchType::Int)]);
         search.freezed_addresses.insert(0x1000);
         search.numeric_filter_lower = "invalid".to_owned();
@@ -275,8 +296,121 @@ mod own_process {
 }
 
 #[test]
+fn hidden_numeric_fields_are_ignored_and_do_not_count_as_criteria() {
+    for ty in SearchType::NUMERIC_TYPES.into_iter().chain([SearchType::Guess]) {
+        for (lower, upper) in [("0", "1"), ("invalid lower", "invalid upper"), ("10", "5")] {
+            let mut search = game_cheetah::SearchContext::new("filter".to_owned());
+            search.search_type = ty;
+            assert!(search.numeric_filter_enabled);
+            search.numeric_comparison = Op::Between;
+            search.numeric_filter_lower = lower.to_owned();
+            search.numeric_filter_upper = upper.to_owned();
+            assert_eq!(
+                search.result_filter().unwrap_err(),
+                i18n_embed_fl::fl!(game_cheetah::LANGUAGE_LOADER, "result-filter-no-criteria"),
+                "{ty:?}: {lower}, {upper}"
+            );
+            search.type_filter_enabled = true;
+            search.filter_types = [false, false, false, true, false, false];
+            if ty == SearchType::Guess {
+                let filter = search.result_filter().unwrap();
+                assert!(filter.numeric.is_none());
+                assert_eq!(filter.types, vec![SearchType::Int64]);
+                assert!(filter.stable_for.is_none());
+            } else {
+                assert_eq!(
+                    search.result_filter().unwrap_err(),
+                    i18n_embed_fl::fl!(game_cheetah::LANGUAGE_LOADER, "result-filter-no-criteria")
+                );
+            }
+            search.type_filter_enabled = false;
+            search.stable_filter_enabled = true;
+            let filter = search.result_filter().unwrap();
+            assert!(filter.numeric.is_none());
+            assert_eq!(filter.types, SearchType::NUMERIC_TYPES);
+            assert_eq!(filter.stable_for, Some(std::time::Duration::from_secs(3)));
+        }
+    }
+}
+
+#[test]
+fn returning_to_unknown_restores_numeric_bounds_and_validation() {
+    let mut search = game_cheetah::SearchContext::new("filter".to_owned());
+    search.search_type = SearchType::Unknown;
+    search.numeric_comparison = Op::Between;
+    search.numeric_filter_lower = "10".to_owned();
+    search.numeric_filter_upper = "20".to_owned();
+    search.type_filter_enabled = true;
+    search.stable_filter_enabled = true;
+    for ty in SearchType::NUMERIC_TYPES.into_iter().chain([SearchType::Guess]) {
+        search.search_type = ty;
+        assert!(search.result_filter().unwrap().numeric.is_none());
+        search.search_type = SearchType::Unknown;
+        let numeric = search.result_filter().unwrap().numeric.unwrap();
+        for value in [9_i64, 10, 15, 20, 21] {
+            assert_eq!(numeric.matches(SearchType::Int64, &value.to_le_bytes()), (10..=20).contains(&value));
+        }
+        assert!(search.numeric_filter_enabled);
+        assert_eq!(search.numeric_comparison, Op::Between);
+        assert_eq!(search.numeric_filter_lower, "10");
+        assert_eq!(search.numeric_filter_upper, "20");
+    }
+    search.numeric_filter_upper = "5".to_owned();
+    search.search_type = SearchType::Guess;
+    assert!(search.result_filter().unwrap().numeric.is_none());
+    search.search_type = SearchType::Unknown;
+    assert_eq!(
+        search.result_filter().unwrap_err(),
+        i18n_embed_fl::fl!(game_cheetah::LANGUAGE_LOADER, "numeric-filter-reversed")
+    );
+}
+
+#[test]
+fn hidden_type_selections_are_ignored_for_stability_and_restored_for_guess_and_unknown() {
+    for ty in SearchType::NUMERIC_TYPES {
+        for selection in [[false; 6], [false, false, false, true, false, false], [true; 6]] {
+            let mut search = game_cheetah::SearchContext::new("filter".to_owned());
+            search.numeric_filter_enabled = false;
+            search.type_filter_enabled = true;
+            search.filter_types = selection;
+            for visible_type in [SearchType::Unknown, SearchType::Guess] {
+                search.search_type = ty;
+                search.stable_filter_enabled = false;
+                assert_eq!(
+                    search.result_filter().unwrap_err(),
+                    i18n_embed_fl::fl!(game_cheetah::LANGUAGE_LOADER, "result-filter-no-criteria")
+                );
+                search.stable_filter_enabled = true;
+                let filter = search.result_filter().unwrap();
+                assert_eq!(filter.types, SearchType::NUMERIC_TYPES);
+                assert!(filter.numeric.is_none());
+                assert_eq!(filter.stable_for, Some(std::time::Duration::from_secs(3)));
+
+                search.search_type = visible_type;
+                assert!(search.type_filter_enabled);
+                assert_eq!(search.filter_types, selection);
+                if selection == [false; 6] {
+                    assert_eq!(
+                        search.result_filter().unwrap_err(),
+                        i18n_embed_fl::fl!(game_cheetah::LANGUAGE_LOADER, "result-filter-no-types")
+                    );
+                } else {
+                    let expected: Vec<_> = SearchType::NUMERIC_TYPES
+                        .into_iter()
+                        .zip(selection)
+                        .filter_map(|(ty, selected)| selected.then_some(ty))
+                        .collect();
+                    assert_eq!(search.result_filter().unwrap().types, expected);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn disabled_predicates_do_not_validate_and_empty_types_or_invalid_duration_are_rejected() {
     let mut search = game_cheetah::SearchContext::new("filter".to_owned());
+    search.search_type = SearchType::Unknown;
     assert_eq!(search.stable_filter_seconds, 3);
     search.numeric_filter_lower = "invalid".to_owned();
     search.numeric_filter_enabled = false;

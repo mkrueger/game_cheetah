@@ -435,6 +435,8 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
     // Wrap whole input/action groups, never individual words in a count.
     // Keep secondary actions on a separate, predictable status row.
     let card_width = ui.available_width();
+    // Capture the limit before the form can expand its parent's available rect.
+    let card_content_bottom = ui.available_rect_before_wrap().bottom() - 11.0;
     let selected_text_color = ui.visuals().selection.stroke.color;
     let primary_btn = |label: String| {
         egui::Button::new(egui::RichText::new(label).size(14.0).strong().color(selected_text_color))
@@ -581,9 +583,8 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
                 && search_results > 0
                 && !matches!(selected_type, SearchType::String | SearchType::StringUtf16)
             {
-                ui.add_space(8.0);
-                ui.separator();
-                numeric_filter_controls(app, ui);
+                let remaining_height = (card_content_bottom - ui.available_rect_before_wrap().top()).max(0.0);
+                numeric_filter_controls(app, ui, remaining_height);
             }
         });
 
@@ -648,10 +649,40 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
-fn numeric_filter_controls(app: &mut App, ui: &mut egui::Ui) {
+fn numeric_filter_controls(app: &mut App, ui: &mut egui::Ui, remaining_height: f32) {
     let search = &mut app.state.searches[app.state.current_search];
     let mut apply = false;
     ui.add_enabled_ui(search.searching == SearchMode::None, |ui| {
+        // Only criteria scroll; reserve the Apply row even in the minimum window.
+        let criteria_height = (remaining_height - 30.0 - ui.spacing().item_spacing.y).max(0.0);
+        let mut validation = Ok(());
+        egui::ScrollArea::vertical()
+            .id_salt(("result_filter_criteria", search.view_id))
+            .max_height(criteria_height)
+            .min_scrolled_height(0.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                numeric_filter_criteria(search, ui);
+                validation = search.result_filter().map(|_| ());
+                if let Err(err) = &validation {
+                    ui.colored_label(ui.visuals().error_fg_color, err);
+                }
+            });
+        apply = ui
+            .add_enabled(
+                validation.is_ok(),
+                egui::Button::new(fl!(crate::LANGUAGE_LOADER, "numeric-filter-apply")).min_size(egui::vec2(0.0, 30.0)),
+            )
+            .on_hover_text(fl!(crate::LANGUAGE_LOADER, "numeric-filter-description"))
+            .clicked();
+    });
+    if apply {
+        app.apply_numeric_filter();
+    }
+}
+
+fn numeric_filter_criteria(search: &mut crate::SearchContext, ui: &mut egui::Ui) {
+    if search.search_type == SearchType::Unknown {
         ui.horizontal_wrapped(|ui| {
             ui.checkbox(&mut search.numeric_filter_enabled, fl!(crate::LANGUAGE_LOADER, "result-filter-numeric"))
                 .on_hover_text(fl!(crate::LANGUAGE_LOADER, "numeric-filter-hint"));
@@ -683,6 +714,8 @@ fn numeric_filter_controls(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
         });
+    }
+    if matches!(search.search_type, SearchType::Guess | SearchType::Unknown) {
         ui.horizontal_wrapped(|ui| {
             ui.checkbox(&mut search.type_filter_enabled, fl!(crate::LANGUAGE_LOADER, "result-filter-types"))
                 .on_hover_text(fl!(crate::LANGUAGE_LOADER, "result-filter-types-hint"));
@@ -698,30 +731,15 @@ fn numeric_filter_controls(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
         });
-        let mut validation = Ok(());
-        ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut search.stable_filter_enabled, fl!(crate::LANGUAGE_LOADER, "result-filter-stable"))
-                .on_hover_text(fl!(crate::LANGUAGE_LOADER, "result-filter-stable-hint"));
-            if search.stable_filter_enabled {
-                ui.add(egui::DragValue::new(&mut search.stable_filter_seconds).range(1..=30).speed(0.1));
-                ui.label(fl!(crate::LANGUAGE_LOADER, "result-filter-seconds"));
-            }
-            validation = search.result_filter().map(|_| ());
-            apply = ui
-                .add_enabled(
-                    validation.is_ok(),
-                    egui::Button::new(fl!(crate::LANGUAGE_LOADER, "numeric-filter-apply")).min_size(egui::vec2(0.0, 30.0)),
-                )
-                .on_hover_text(fl!(crate::LANGUAGE_LOADER, "numeric-filter-description"))
-                .clicked();
-        });
-        if let Err(err) = validation {
-            ui.colored_label(ui.visuals().error_fg_color, err);
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.checkbox(&mut search.stable_filter_enabled, fl!(crate::LANGUAGE_LOADER, "result-filter-stable"))
+            .on_hover_text(fl!(crate::LANGUAGE_LOADER, "result-filter-stable-hint"));
+        if search.stable_filter_enabled {
+            ui.add(egui::DragValue::new(&mut search.stable_filter_seconds).range(1..=30).speed(0.1));
+            ui.label(fl!(crate::LANGUAGE_LOADER, "result-filter-seconds"));
         }
     });
-    if apply {
-        app.apply_numeric_filter();
-    }
 }
 
 fn empty_results_panel(app: &mut App, ui: &mut egui::Ui, search_complete: bool) {
