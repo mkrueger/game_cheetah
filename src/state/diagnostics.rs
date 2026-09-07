@@ -10,6 +10,7 @@
 //! read one byte from the first readable region. Anything more would slow
 //! down the attach path that runs on every process selection.
 
+use super::AppError;
 use proc_maps::get_process_maps;
 use process_memory::{Pid, TryIntoProcessHandle, copy_address};
 
@@ -17,12 +18,12 @@ use process_memory::{Pid, TryIntoProcessHandle, copy_address};
 ///
 /// Returns `Ok(())` if memory is readable, otherwise a human-readable hint
 /// suitable for direct display in the engine error banner.
-pub fn diagnose_attach(pid: Pid) -> Result<(), String> {
+pub fn diagnose_attach(pid: Pid) -> Result<(), AppError> {
     let handle = pid
         .try_into_process_handle()
-        .map_err(|e| format!("Failed to attach to PID {pid}: {e}{}", platform_attach_hint()))?;
+        .map_err(|e| attach_error(&e, format!("Failed to attach to PID {pid}: {e}")))?;
 
-    let maps = get_process_maps(pid).map_err(|e| format!("Failed to read memory map of PID {pid}: {e}{}", platform_attach_hint()))?;
+    let maps = get_process_maps(pid).map_err(|e| attach_error(&e, format!("Failed to read memory map of PID {pid}: {e}")))?;
 
     // Pick the first plausibly-readable region. On Linux maps without the
     // 'r' bit are unreadable; on other platforms `proc_maps` reports the
@@ -30,44 +31,35 @@ pub fn diagnose_attach(pid: Pid) -> Result<(), String> {
     let probe_region = maps.iter().find(|m| m.is_read() && m.size() > 0);
     let Some(region) = probe_region else {
         // Empty map list is itself a sign the process is gone or restricted.
-        return Err(format!("PID {pid} reports no readable memory regions.{}", platform_attach_hint()));
+        return Err(AppError::AttachDiagnostic {
+            message: format!("PID {pid} reports no readable memory regions."),
+        });
     };
 
     if let Err(e) = copy_address(region.start(), 1, &handle) {
-        return Err(format!(
-            "Failed to read memory of PID {pid} at 0x{:X}: {e}{}",
-            region.start(),
-            platform_attach_hint()
-        ));
+        return Err(attach_error(&e, format!("Failed to read memory of PID {pid} at 0x{:X}: {e}", region.start())));
     }
 
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
-fn platform_attach_hint() -> &'static str {
-    "\nHint: on Linux this usually means ptrace is restricted. Try one of:\n  \
-     - run game-cheetah with the same UID as the target process\n  \
-     - sudo sysctl -w kernel.yama.ptrace_scope=0  (until next reboot)\n  \
-     - run game-cheetah with sudo"
+fn attach_error(error: &std::io::Error, message: String) -> AppError {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        AppError::AccessDenied { source: message }
+    } else {
+        AppError::AttachDiagnostic { message }
+    }
 }
 
-#[cfg(target_os = "macos")]
-fn platform_attach_hint() -> &'static str {
-    "\nHint: on macOS task_for_pid is restricted. Try one of:\n  \
-     - run game-cheetah with sudo\n  \
-     - codesign game-cheetah with the com.apple.security.cs.debugger entitlement\n  \
-     - disable SIP for development (not recommended)"
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[cfg(target_os = "windows")]
-fn platform_attach_hint() -> &'static str {
-    "\nHint: on Windows the target may require elevated privileges. Try one of:\n  \
-     - run game-cheetah as Administrator\n  \
-     - confirm the target is not a protected process (anti-cheat / system process)"
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn platform_attach_hint() -> &'static str {
-    ""
+    #[test]
+    fn attach_classification_uses_os_error_kind() {
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(matches!(attach_error(&denied, "context".into()), AppError::AccessDenied { source } if source == "context"));
+        let unreadable = std::io::Error::from(std::io::ErrorKind::UnexpectedEof);
+        assert!(matches!(attach_error(&unreadable, "short read".into()), AppError::AttachDiagnostic { .. }));
+    }
 }

@@ -1,3 +1,22 @@
+error-process-title = Process no longer available.
+error-process-help = Start the game and select it again.
+error-access-title = Access denied.
+error-access-help = Check process permissions; see Details for guidance.
+error-read-title = Memory cannot be read.
+error-read-help = Check the running game process and access permissions.
+error-input-title = Invalid value.
+error-input-help = Check the input and data type.
+error-address-title = Invalid address or write failed.
+error-address-help = Find the value again instead of continuing to edit this address.
+error-other-title = Action failed.
+error-other-help = Check Details for the cause; nothing was automatically retried.
+error-select-process = Select process
+error-new-search = New search tab
+error-edit-value = Correct input
+error-access-linux = Linux: run the game and Game Cheetah as the same user. If access is denied, check ptrace and sandbox restrictions. No system settings are changed automatically.
+error-access-macos = macOS: signing, debugger permissions or protected processes may restrict access. Check the application's permissions; do not disable system protection indiscriminately.
+error-access-windows = Windows: check the permission levels of the game and Game Cheetah. Protected processes may block access. Do not bypass protection mechanisms.
+empty-results-undo = Undo last narrowing
 persistence-label = Persistence (UNSAFE)
 persistence-description = Experimental: shows Save/Load, the address editor and pointer scanner. No restart guarantee: saved chains may point to wrong but still readable memory. Independently verify values before editing or freezing. Disabling cancels these tasks and clears tabs containing saved address definitions, including Undo; files are kept.
 persistence-disabled = Persistence is disabled. This experimental feature can be enabled in Settings.
@@ -355,3 +374,13 @@ memory-editor-error-write-address = Failed to write 0x{ $address }: { $error }
 memory-editor-error-invalid-value = Invalid { $kind } value '{ $input }': { $error }
 memory-editor-error-out-of-range-max = { $kind } value { $value } is out of range (max { $max })
 memory-editor-error-out-of-range = { $kind } value { $value } is out of range ({ $min }..={ $max })
+
+# Compact Save/Load notices
+notice-details = Details
+notice-file = File: { $path }
+notice-saved = Saved { $count } entries · { $absolute } absolute (session only)
+notice-loaded = Loaded { $count } entries · { $unresolved } unresolved
+notice-unverified = Pointers unverified after restart
+notice-save-failed = Save failed. Check the process and file/memory access.
+notice-load-failed = Load failed. Check that the file exists, is a valid table, and matches the process; check access.
+notice-chain-risk = A readable pointer chain can still point to the wrong value. Verify targets after each restart before editing or freezing.

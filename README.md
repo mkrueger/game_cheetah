@@ -240,6 +240,21 @@ especially one through allocators or system libraries, is only a candidate—not
 of a stable game object. Even a successful restart check does not guarantee other
 savegames or future game versions.
 
+## Status messages and recovery
+
+Save/Load and error messages show a short summary. **Details** expands the original
+diagnostic, file path or limitations in a bounded scroll area; technical text is
+collapsed by default. Pointer warnings remain visible in the summary. Load notices
+stay visible while hovered or while their details are open.
+
+Errors offer a relevant next step: **Select process** for a missing process or
+access failure, **Correct input** for an invalid value, and **New search tab** for
+an invalid address or failed write. These actions never retry a write or change
+system permissions. Platform-specific access guidance is available under Details.
+A completed search with no matches is not an access error: **Undo last narrowing**
+(when available) restores the previous results, or **New search tab** starts over
+without discarding the old tab.
+
 ## Cancelling searches
 
 **Cancel and restore results** is available during numeric and text scans,

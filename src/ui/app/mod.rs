@@ -53,7 +53,7 @@ pub struct App {
     pub address_editor: Option<crate::ui::address_editor::AddressEditor>,
     pub pointer_scanner: crate::ui::pointer_scanner::PointerScanner,
     pub(crate) automatic_save: Option<crate::ui::auto_save::AutomaticSave>,
-    pub(crate) automatic_save_notice: Option<String>,
+    pub(crate) automatic_save_notice: Option<crate::ui::notice::Notice>,
     last_address_refresh: Instant,
     pub app_state: AppState,
     pub state: GameCheetahEngine,
@@ -91,6 +91,8 @@ pub struct App {
 
     /// Brief Save/Load status shown as a transient toast.
     pub cheat_table_status: String,
+    /// Technical information, collapsed by default; never parsed from summary.
+    pub cheat_table_status_details: String,
     pub cheat_table_status_at: Option<Instant>,
 
     /// Reattach to a process with the same name after the attached one exits.
@@ -174,6 +176,7 @@ impl Default for App {
             process_selection: ProcessSelectionState::default(),
             hovered_result_row: None,
             cheat_table_status: String::new(),
+            cheat_table_status_details: String::new(),
             cheat_table_status_at: None,
             auto_reconnect: false,
             check_for_updates: false,
@@ -234,6 +237,7 @@ impl App {
         self.cancel_cheat_table_save();
         self.automatic_save_notice = None;
         self.cheat_table_status.clear();
+        self.cheat_table_status_details.clear();
         self.cheat_table_status_at = None;
         self.pointer_scanner = Default::default();
         self.address_editor = None;

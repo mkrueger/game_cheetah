@@ -165,6 +165,7 @@ pub enum AppError {
     ProcessMapRead { pid: process_memory::Pid, source: String },
     SearchValueParse { source: String },
     SearchReadFailed,
+    AccessDenied { source: String },
     CurrentPidUnavailable,
     CurrentProcessMissing,
     FreezeChannelClosed { source: String },
@@ -178,6 +179,10 @@ pub enum AppError {
 }
 
 impl AppError {
+    pub fn access_error(error: &std::io::Error) -> Option<Self> {
+        (error.kind() == std::io::ErrorKind::PermissionDenied).then(|| Self::AccessDenied { source: error.to_string() })
+    }
+
     pub fn memory_editor(message: impl Into<String>) -> Self {
         Self::MemoryEditor { message: message.into() }
     }
@@ -204,6 +209,7 @@ impl std::fmt::Display for AppError {
             Self::ProcessMapRead { pid, source } => write!(f, "Error getting process maps for pid {pid}: {source}"),
             Self::SearchValueParse { source } => write!(f, "Parse error: {source}"),
             Self::SearchReadFailed => f.write_str(&fl!(crate::LANGUAGE_LOADER, "search-read-failed")),
+            Self::AccessDenied { source } => write!(f, "{}: {source}", fl!(crate::LANGUAGE_LOADER, "error-access-title")),
             Self::CurrentPidUnavailable => f.write_str("Failed to get current pid"),
             Self::CurrentProcessMissing => f.write_str("Current process info not found"),
             Self::FreezeChannelClosed { source } => write!(f, "Freeze channel closed: {source}"),
@@ -1003,7 +1009,7 @@ impl GameCheetahEngine {
         // the OS denies ptrace / task_for_pid / OpenProcess.
         match diagnostics::diagnose_attach(process.pid) {
             Ok(()) => self.clear_errors(),
-            Err(message) => self.push_error(AppError::AttachDiagnostic { message }),
+            Err(error) => self.push_error(error),
         }
     }
 

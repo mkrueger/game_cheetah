@@ -9,6 +9,7 @@ use std::{
 
 use i18n_embed_fl::fl;
 
+use super::notice::{self, Notice};
 use crate::{
     AddressSpec, App, CheatTable, ModuleCatalog, PointerWidth, SearchResult, SearchType,
     pointer_scan::{ProcessIdentity, ScanJob, ScanOptions, ScanReport},
@@ -94,7 +95,7 @@ impl AutomaticSave {
         }
     }
 
-    fn finish(mut self) -> Result<String, String> {
+    fn finish(mut self) -> Result<Notice, String> {
         if ProcessIdentity::capture(self.identity.pid)? != self.identity {
             return Err(fl!(crate::LANGUAGE_LOADER, "pointer-scan-wrong-target"));
         }
@@ -130,16 +131,37 @@ impl AutomaticSave {
             self.table.version = 3;
         }
         self.table.save(&self.path)?;
-        let mut message = fl!(
+        let count: usize = self.table.searches.iter().map(|search| search.entries.len()).sum();
+        let mut summary = fl!(
             crate::LANGUAGE_LOADER,
-            "auto-save-done",
-            count = automatic.to_string(),
+            "notice-saved",
+            count = count.to_string(),
             absolute = absolute.to_string()
         );
-        if self.incomplete {
-            message.push_str(&format!("\n{}", fl!(crate::LANGUAGE_LOADER, "auto-save-limited")));
+        if self
+            .table
+            .searches
+            .iter()
+            .flat_map(|search| &search.entries)
+            .any(|entry| entry.address.is_pointer())
+        {
+            notice::unverified_summary(&mut summary);
         }
-        Ok(message)
+        let mut details = format!(
+            "{}\n{}",
+            notice::file_details(&self.path),
+            fl!(
+                crate::LANGUAGE_LOADER,
+                "auto-save-done",
+                count = automatic.to_string(),
+                absolute = absolute.to_string()
+            )
+        );
+        details.push_str(&format!("\n{}", fl!(crate::LANGUAGE_LOADER, "notice-chain-risk")));
+        if self.incomplete {
+            details.push_str(&format!("\n{}", fl!(crate::LANGUAGE_LOADER, "auto-save-limited")));
+        }
+        Ok(Notice::new(summary, details))
     }
 }
 
@@ -150,7 +172,7 @@ impl App {
 
     pub fn cancel_cheat_table_save(&mut self) {
         if self.automatic_save.take().is_some() {
-            self.automatic_save_notice = Some(fl!(crate::LANGUAGE_LOADER, "auto-save-cancelled"));
+            self.automatic_save_notice = Some(Notice::new(fl!(crate::LANGUAGE_LOADER, "auto-save-cancelled"), String::new()));
         }
     }
 
@@ -201,9 +223,10 @@ impl App {
             return;
         }
         let save = self.automatic_save.take().unwrap();
+        let path = save.path.clone();
         self.automatic_save_notice = Some(match save.finish() {
-            Ok(message) => message,
-            Err(error) => fl!(crate::LANGUAGE_LOADER, "auto-save-error", error = error),
+            Ok(notice) => notice,
+            Err(error) => Notice::save_failed(&path, error),
         });
     }
 }
@@ -240,11 +263,10 @@ pub(crate) fn show(app: &mut App, ui: &mut egui::Ui) {
                 app.cancel_cheat_table_save();
             }
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
-        } else if let Some(notice) = &app.automatic_save_notice {
-            ui.add(egui::Label::new(notice).wrap());
-            if ui.small_button(fl!(crate::LANGUAGE_LOADER, "auto-save-dismiss")).clicked() {
-                app.automatic_save_notice = None;
-            }
+        } else if let Some(notice) = &app.automatic_save_notice
+            && notice::show(ui, "automatic_save_notice", &notice.summary, &notice.details).dismissed
+        {
+            app.automatic_save_notice = None;
         }
     });
 }
@@ -322,12 +344,8 @@ mod tests {
             crate::ui::theme::apply(&ctx);
             let mut app = App::default();
             app.set_persistence_enabled(true);
-            let notice = format!(
-                "{}\n{}",
-                fl!(crate::LANGUAGE_LOADER, "auto-save-done", count = "0", absolute = "1"),
-                fl!(crate::LANGUAGE_LOADER, "auto-save-limited")
-            );
-            app.automatic_save_notice = Some(notice.clone());
+            let notice = fl!(crate::LANGUAGE_LOADER, "notice-saved", count = "1", absolute = "1");
+            app.automatic_save_notice = Some(Notice::new(notice.clone(), fl!(crate::LANGUAGE_LOADER, "auto-save-limited")));
             let dismiss = fl!(crate::LANGUAGE_LOADER, "auto-save-dismiss");
             let mut render = |events| {
                 let mut output = ctx.run_ui(
@@ -475,6 +493,11 @@ mod tests {
         assert_eq!(app.state.searches.len(), 1);
         assert!(app.state.searches[0].address_overrides.is_empty());
         assert!(app.state.searches[0].freezed_addresses.is_empty());
+        let notice = app.automatic_save_notice.as_ref().unwrap();
+        assert!(notice.summary.contains(&fl!(crate::LANGUAGE_LOADER, "notice-unverified")));
+        assert!(!notice.summary.contains(&path.display().to_string()));
+        assert!(notice.details.contains(&path.display().to_string()));
+        assert!(notice.details.contains(&fl!(crate::LANGUAGE_LOADER, "notice-chain-risk")));
 
         // Cancel immediately, including a worker that may already have finished.
         let before = std::fs::read(&path).unwrap();
@@ -535,7 +558,11 @@ mod tests {
         ];
         let save = AutomaticSave::new(identity, path.clone(), table(entries), vec![2]);
         assert!(save.targets.is_empty());
-        save.finish().unwrap();
+        let notice = save.finish().unwrap();
+        let mut expected = fl!(crate::LANGUAGE_LOADER, "notice-saved", count = "3", absolute = "1");
+        notice::unverified_summary(&mut expected);
+        assert_eq!(notice.summary, expected);
+        assert!(notice.details.contains(&path.display().to_string()));
         let saved: CheatTable = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved.searches[0].entries[0].address, module);
         assert_eq!(saved.searches[0].entries[1].address, pointer);

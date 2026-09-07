@@ -1,11 +1,13 @@
 pub mod address_editor;
 pub mod app;
 pub(crate) mod auto_save;
+pub(crate) mod error_notice;
 pub mod pointer_scanner;
 
 pub mod in_process_view;
 pub mod main_window;
 pub mod mem_editor;
+pub(crate) mod notice;
 pub mod process_selection;
 pub mod theme;
 pub mod value_cache;

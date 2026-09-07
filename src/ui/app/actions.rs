@@ -8,6 +8,7 @@
 use process_memory::{PutAddress, TryIntoProcessHandle, copy_address};
 
 use super::{App, AppState};
+use crate::ui::notice::{self, Notice};
 use crate::{AppError, FreezeMessage, GameCheetahEngine, MessageCommand, SearchContext, SearchResult, SearchType, SearchValue};
 
 impl App {
@@ -44,6 +45,7 @@ impl App {
         self.cached_process_handle = None;
         self.clear_result_interaction();
         self.cheat_table_status.clear();
+        self.cheat_table_status_details.clear();
         self.cheat_table_status_at = None;
     }
 
@@ -376,10 +378,10 @@ impl App {
         match result.search_type.from_string(value_text) {
             Ok(value) => {
                 if let Err(err) = handle.put_address(result.addr, &value.1) {
-                    self.state.push_error(AppError::MemoryWrite {
+                    self.state.push_error(AppError::access_error(&err).unwrap_or_else(|| AppError::MemoryWrite {
                         addr: result.addr,
                         source: err.to_string(),
-                    });
+                    }));
                     return false;
                 }
                 if current_search.freezed_addresses.contains(&result.addr)
@@ -521,9 +523,10 @@ impl App {
         }
         let path = crate::default_cheat_table_path(&self.state.process_name);
         self.cheat_table_status.clear();
+        self.cheat_table_status_details.clear();
         self.cheat_table_status_at = None;
-        if let Err(error) = self.start_automatic_save(path) {
-            self.automatic_save_notice = Some(i18n_embed_fl::fl!(crate::LANGUAGE_LOADER, "auto-save-error", error = error));
+        if let Err(error) = self.start_automatic_save(path.clone()) {
+            self.automatic_save_notice = Some(Notice::save_failed(&path, error));
         }
     }
 
@@ -540,6 +543,7 @@ impl App {
             return;
         }
         self.cancel_cheat_table_save();
+        self.automatic_save_notice = None;
         let loaded = crate::ModuleCatalog::for_process(self.state.pid)
             .and_then(|modules| crate::load_cheat_table_with_process(path, &self.state.process_name, &modules, self.state.pid));
         match loaded {
@@ -553,9 +557,29 @@ impl App {
                 self.state.current_search = 0;
                 self.clear_result_interaction();
                 self.clear_change_tracker();
-                self.cheat_table_status = format!("Loaded: {} · {}", path.display(), address_summary(&self.state));
+                let count: usize = self.state.searches.iter().map(|search| search.get_result_count()).sum();
+                let unresolved: usize = self.state.searches.iter().map(|search| search.unresolved_addresses.len()).sum();
+                self.cheat_table_status = i18n_embed_fl::fl!(
+                    crate::LANGUAGE_LOADER,
+                    "notice-loaded",
+                    count = count.to_string(),
+                    unresolved = unresolved.to_string()
+                );
+                self.cheat_table_status_details = format!("{}\n{}", notice::file_details(path), address_summary(&self.state));
+                if self.state.searches.iter().any(|search| {
+                    search.address_overrides.values().any(crate::AddressSpec::is_pointer)
+                        || search.unresolved_addresses.iter().any(|entry| entry.address.is_pointer())
+                }) {
+                    notice::unverified_summary(&mut self.cheat_table_status);
+                    self.cheat_table_status_details
+                        .push_str(&format!("\n{}", i18n_embed_fl::fl!(crate::LANGUAGE_LOADER, "notice-chain-risk")));
+                }
             }
-            Err(e) => self.cheat_table_status = format!("Load error: {e}"),
+            Err(error) => {
+                let notice = Notice::load_failed(path, error);
+                self.cheat_table_status = notice.summary;
+                self.cheat_table_status_details = notice.details;
+            }
         }
         self.cheat_table_status_at = Some(std::time::Instant::now());
     }
@@ -689,7 +713,13 @@ mod tests {
         app.set_persistence_enabled(true);
         let fixture = TableFixture::new(&app);
         app.load_cheat_table_from_path(&fixture.0);
-        assert!(app.cheat_table_status.starts_with("Loaded:"));
+        assert_eq!(
+            app.cheat_table_status,
+            i18n_embed_fl::fl!(crate::LANGUAGE_LOADER, "notice-loaded", count = "2", unresolved = "0")
+        );
+        assert!(!app.cheat_table_status.contains(&fixture.0.display().to_string()));
+        assert!(app.cheat_table_status_details.contains(&fixture.0.display().to_string()));
+        assert!(app.cheat_table_status_details.contains(&address_summary(&app.state)));
         assert!(app.state.searches.iter().all(|search| search.freezed_addresses.is_empty()));
         assert_eq!(app.state.searches[0].get_result_count(), 1);
         let message = rx.try_recv().expect("loading must stop the old freeze");
@@ -705,7 +735,9 @@ mod tests {
         let fixture = TableFixture::new(&app);
         app.state.process_name = "different-process".to_owned();
         app.load_cheat_table_from_path(&fixture.0);
-        assert!(app.cheat_table_status.starts_with("Load error:"));
+        assert_eq!(app.cheat_table_status, i18n_embed_fl::fl!(crate::LANGUAGE_LOADER, "notice-load-failed"));
+        assert!(app.cheat_table_status_details.contains(&fixture.0.display().to_string()));
+        assert!(app.cheat_table_status_details.contains("different-process"));
         assert!(app.state.searches.iter().all(|search| search.freezed_addresses.contains(&ADDRESS)));
         assert_eq!(app.state.current_search, 1);
         assert!(rx.try_recv().is_err());

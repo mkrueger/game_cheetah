@@ -27,6 +27,7 @@ pub(crate) struct SearchWorker {
     failed: Arc<AtomicBool>,
     read_any: Arc<AtomicBool>,
     attempted_read: Arc<AtomicBool>,
+    access_error: Arc<Mutex<Option<AppError>>>,
     pid: process_memory::Pid,
     start_time: u64,
     name: String,
@@ -44,6 +45,7 @@ impl SearchTask {
                 failed: Arc::new(AtomicBool::new(false)),
                 read_any: Arc::new(AtomicBool::new(false)),
                 attempted_read: Arc::new(AtomicBool::new(false)),
+                access_error: Arc::new(Mutex::new(None)),
                 pid,
                 start_time,
                 name,
@@ -119,7 +121,8 @@ impl SearchWorker {
         }
         self.check_process();
         if !self.stopped() && self.attempted_read.load(Ordering::Relaxed) && !self.read_any.load(Ordering::Relaxed) {
-            self.fail(AppError::SearchReadFailed);
+            let access_error = self.access_error.lock().ok().and_then(|error| error.clone());
+            self.fail(access_error.unwrap_or(AppError::SearchReadFailed));
         }
         self.complete.store(true, Ordering::Release);
     }
@@ -141,6 +144,12 @@ impl<T: CopyAddress> CopyAddress for SearchReader<'_, T> {
         }
         let result = self.inner.copy_address(addr, bytes);
         self.worker.record_read(result.is_ok());
+        if let Err(error) = &result
+            && let Some(error) = AppError::access_error(error)
+            && let Ok(mut slot) = self.worker.access_error.lock()
+        {
+            slot.get_or_insert(error);
+        }
         result
     }
 
@@ -153,6 +162,30 @@ impl<T: CopyAddress> CopyAddress for SearchReader<'_, T> {
 mod tests {
     use super::*;
     use std::{cell::Cell, time::Duration};
+
+    #[test]
+    fn permission_errors_are_reported_only_when_no_reads_succeed() {
+        struct Denied;
+        impl CopyAddress for Denied {
+            fn copy_address(&self, _: usize, _: &mut [u8]) -> io::Result<()> {
+                Err(io::ErrorKind::PermissionDenied.into())
+            }
+            fn get_pointer_width(&self) -> process_memory::Architecture {
+                process_memory::Architecture::Arch64Bit
+            }
+        }
+        for successful in [false, true] {
+            let task = SearchTask::new(std::process::id() as _, 0, "test".into(), Arc::new(AtomicBool::new(false)));
+            assert!(task.worker.reader(Denied).copy_address(1, &mut [0]).is_err());
+            task.worker.record_read(successful);
+            task.worker.finish();
+            if successful {
+                assert!(task.worker.error().is_none(), "a skipped restricted page is not a failed search");
+            } else {
+                assert!(matches!(task.worker.error(), Some(AppError::AccessDenied { .. })));
+            }
+        }
+    }
 
     #[test]
     fn tab_drop_wakes_a_sender_blocked_on_a_full_channel() {

@@ -113,65 +113,35 @@ fn cheat_table_toast(app: &mut App, ctx: &egui::Context) {
         return;
     };
     let elapsed = shown_at.elapsed();
-    if elapsed >= CHEAT_TABLE_TOAST_DURATION {
-        app.cheat_table_status.clear();
-        app.cheat_table_status_at = None;
-        return;
-    }
-
-    ctx.request_repaint_after(CHEAT_TABLE_TOAST_DURATION - elapsed);
-    let status = app.cheat_table_status.clone();
     let mut dismiss = false;
+    let mut reading = false;
     egui::Area::new(egui::Id::new("cheat_table_status_toast"))
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-20.0, 104.0))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             ui.set_max_width((ctx.content_rect().width() - 40.0).clamp(180.0, 520.0));
             egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.add(egui::Label::new(egui::RichText::new(&status).size(13.0)).truncate())
-                        .on_hover_text(&status);
-                    if ui.small_button(REMOVE_ICON).clicked() {
-                        dismiss = true;
-                    }
-                });
+                let response = crate::ui::notice::show(ui, "cheat_table_notice", &app.cheat_table_status, &app.cheat_table_status_details);
+                dismiss = response.dismissed;
+                reading = response.hovered || response.expanded;
             });
         });
 
-    if dismiss {
+    // Check after rendering, so hover/expansion protects even an overdue toast.
+    if dismiss || (!reading && elapsed >= CHEAT_TABLE_TOAST_DURATION) {
         app.cheat_table_status.clear();
+        app.cheat_table_status_details.clear();
         app.cheat_table_status_at = None;
+    } else if reading {
+        app.cheat_table_status_at = Some(std::time::Instant::now());
+        ctx.request_repaint_after(CHEAT_TABLE_TOAST_DURATION);
+    } else {
+        ctx.request_repaint_after(CHEAT_TABLE_TOAST_DURATION.saturating_sub(elapsed));
     }
 }
 
 fn error_bar(app: &mut App, ui: &mut egui::Ui) {
-    if let Some(error) = app.state.current_error() {
-        let text = error.to_string();
-        let mut dismiss = false;
-        egui::Panel::top("in_process_error")
-            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(20, 6)))
-            .show(ui, |ui| {
-                egui::Frame::new()
-                    .fill(egui::Color32::from_rgba_unmultiplied(160, 50, 50, 30))
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(160, 70, 70)))
-                    .corner_radius(egui::CornerRadius::same(8))
-                    .inner_margin(egui::Margin::symmetric(12, 8))
-                    .show(ui, |ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("\u{00D7}").clicked() {
-                                dismiss = true;
-                            }
-                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                ui.colored_label(egui::Color32::from_rgb(220, 120, 120), "\u{26A0}");
-                                ui.add(egui::Label::new(egui::RichText::new(text).color(egui::Color32::from_rgb(232, 180, 180))).wrap());
-                            });
-                        });
-                    });
-            });
-        if dismiss {
-            app.state.dismiss_error();
-        }
-    }
+    crate::ui::error_notice::show(app, ui);
 }
 
 /// Browser-style horizontal tab bar listing all active searches.
@@ -662,7 +632,7 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
         }
     } else if matches!(searching, SearchMode::None) && (!is_search_complete || selected_type != SearchType::Unknown || unknown_comparison.is_some()) {
         ui.add_space(18.0);
-        empty_results_panel(ui, is_search_complete);
+        empty_results_panel(app, ui, is_search_complete);
     }
 }
 
@@ -742,7 +712,7 @@ fn numeric_filter_controls(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
-fn empty_results_panel(ui: &mut egui::Ui, search_complete: bool) {
+fn empty_results_panel(app: &mut App, ui: &mut egui::Ui, search_complete: bool) {
     let (title, hint) = if search_complete {
         (
             fl!(crate::LANGUAGE_LOADER, "empty-results-title"),
@@ -762,7 +732,18 @@ fn empty_results_panel(ui: &mut egui::Ui, search_complete: bool) {
         ui.add_space(((available_size.y - CONTENT_HEIGHT) * VERTICAL_POSITION).max(20.0));
         ui.label(egui::RichText::new(title).size(20.0).strong());
         ui.add_space(7.0);
-        ui.label(egui::RichText::new(hint).size(15.0).weak());
+        ui.add(egui::Label::new(egui::RichText::new(hint).size(15.0).weak()).wrap());
+        if search_complete && app.state.current_error().is_none() {
+            ui.horizontal_wrapped(|ui| {
+                let can_undo = !app.state.searches[app.state.current_search].old_results.is_empty();
+                if can_undo && ui.button(fl!(crate::LANGUAGE_LOADER, "empty-results-undo")).clicked() {
+                    app.undo_search();
+                }
+                if ui.button(fl!(crate::LANGUAGE_LOADER, "error-new-search")).clicked() {
+                    app.new_search();
+                }
+            });
+        }
     });
 }
 

@@ -1,3 +1,22 @@
+error-process-title = Prozess nicht mehr verfügbar.
+error-process-help = Spiel starten und erneut auswählen.
+error-access-title = Zugriff verweigert.
+error-access-help = Prozessberechtigungen prüfen; Hinweise unter Details.
+error-read-title = Speicher nicht lesbar.
+error-read-help = Laufenden Spielprozess und Zugriffsrechte prüfen.
+error-input-title = Ungültiger Wert.
+error-input-help = Eingabe und Datentyp prüfen.
+error-address-title = Adresse ungültig oder Schreiben fehlgeschlagen.
+error-address-help = Wert neu suchen, statt diese Adresse weiter zu bearbeiten.
+error-other-title = Aktion fehlgeschlagen.
+error-other-help = Ursache unter Details prüfen; nichts wurde automatisch erneut versucht.
+error-select-process = Prozess auswählen
+error-new-search = Neuer Such-Tab
+error-edit-value = Eingabe korrigieren
+error-access-linux = Linux: Spiel und Game Cheetah mit demselben Benutzer ausführen. Bei verweigertem Zugriff ptrace- und Sandbox-Beschränkungen prüfen. Es werden keine Systemeinstellungen automatisch verändert.
+error-access-macos = macOS: Prozesszugriff kann durch Signatur, Debugger-Berechtigungen oder geschützte Prozesse beschränkt sein. Berechtigungen der Anwendung prüfen; Systemschutz nicht pauschal abschalten.
+error-access-windows = Windows: Berechtigungsstufen von Spiel und Game Cheetah prüfen. Geschützte Prozesse können den Zugriff blockieren. Keine Schutzmechanismen umgehen.
+empty-results-undo = Letzte Eingrenzung zurücknehmen
 persistence-label = Persistenz (UNSAFE)
 persistence-description = Experimentell: Blendet Save/Load, Adresseditor und Pointer-Scanner ein. Keine Neustartgarantie: Gespeicherte Ketten können auf falschen, weiterhin lesbaren Speicher zeigen. Werte vor Änderungen oder Freeze unabhängig prüfen. Deaktivieren bricht diese Aufgaben ab und leert Tabs mit gespeicherten Adressdefinitionen samt Undo; Dateien bleiben erhalten.
 persistence-disabled = Persistenz ist deaktiviert. Diese experimentelle Funktion kann in den Einstellungen aktiviert werden.
@@ -358,3 +377,13 @@ memory-editor-error-write-address = Schreiben nach 0x{ $address } fehlgeschlagen
 memory-editor-error-invalid-value = Ungültiger { $kind }-Wert '{ $input }': { $error }
 memory-editor-error-out-of-range-max = { $kind }-Wert { $value } liegt außerhalb des Bereichs (max { $max })
 memory-editor-error-out-of-range = { $kind }-Wert { $value } liegt außerhalb des Bereichs ({ $min }..={ $max })
+
+# Kompakte Speichern-/Laden-Meldungen
+notice-details = Details
+notice-file = Datei: { $path }
+notice-saved = { $count } Einträge gespeichert · { $absolute } absolut (nur diese Sitzung)
+notice-loaded = { $count } Einträge geladen · { $unresolved } nicht aufgelöst
+notice-unverified = Pointer nach Neustart ungeprüft
+notice-save-failed = Speichern fehlgeschlagen. Prozess sowie Datei-/Speicherzugriff prüfen.
+notice-load-failed = Laden fehlgeschlagen. Datei vorhanden, gültige Tabelle und passender Prozess? Zugriffsrechte prüfen.
+notice-chain-risk = Eine lesbare Pointer-Kette kann trotzdem auf den falschen Wert zeigen. Ziele nach jedem Neustart vor dem Ändern oder Einfrieren überprüfen.

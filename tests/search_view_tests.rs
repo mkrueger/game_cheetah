@@ -280,21 +280,96 @@ fn loaded_unreadable_or_pending_addresses_can_be_reset_without_a_completed_scan(
 }
 
 #[test]
-fn long_search_error_wraps_and_can_be_dismissed() {
+fn search_error_is_compact_with_expandable_details_and_can_be_dismissed() {
     for size in SIZES {
         let mut app = app_with_results(2);
         app.state.push_error(game_cheetah::AppError::SearchReadFailed);
         let message = app.state.current_error().unwrap().to_string();
         let ctx = context();
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
         let output = settle(&mut app, &ctx, size);
         let bounds = Rect::from_min_size(Pos2::ZERO, size);
-        assert!(bounds.contains_rect(text_rect(&output, &message)));
-        let dismiss = text_rect(&output, "×");
+        let summary = format!("{} {}", fl!(LANGUAGE_LOADER, "error-read-title"), fl!(LANGUAGE_LOADER, "error-read-help"));
+        assert!(bounds.contains_rect(text_rect(&output, &summary)));
+        assert!(
+            !shapes(&output)
+                .iter()
+                .any(|(_, shape)| matches!(shape, Shape::Text(text) if text.galley.job.text.contains(&message)))
+        );
+        let details = text_rect(&output, &fl!(LANGUAGE_LOADER, "notice-details"));
+        click(&mut app, &ctx, size, details.center());
+        let output = settle(&mut app, &ctx, size);
+        assert!(
+            shapes(&output)
+                .iter()
+                .any(|(_, shape)| matches!(shape, Shape::Text(text) if text.galley.job.text.contains(&message)))
+        );
+        let dismiss = text_rect(&output, &fl!(LANGUAGE_LOADER, "auto-save-dismiss"));
         assert!(bounds.contains_rect(dismiss));
         click(&mut app, &ctx, size, dismiss.center());
         assert!(app.state.current_error().is_none());
         assert_eq!(app.state.searches[0].get_result_count(), 2);
     }
+}
+
+#[test]
+fn error_recovery_actions_preserve_results_and_never_write() {
+    for size in SIZES {
+        for error in [
+            game_cheetah::AppError::ProcessExited { name: "test".into() },
+            game_cheetah::AppError::AccessDenied {
+                source: "permission denied".into(),
+            },
+            game_cheetah::AppError::SearchReadFailed,
+        ] {
+            let mut app = app_with_results(2);
+            let before = result_identities(&app);
+            app.state.push_error(error);
+            let ctx = context();
+            let output = settle(&mut app, &ctx, size);
+            let action = text_rect(&output, &fl!(LANGUAGE_LOADER, "error-select-process"));
+            assert!(Rect::from_min_size(Pos2::ZERO, size).contains_rect(action));
+            click(&mut app, &ctx, size, action.center());
+            assert_eq!(app.app_state, AppState::ProcessSelection);
+            assert_eq!(result_identities(&app), before);
+        }
+        let mut app = app_with_results(2);
+        let before = result_identities(&app);
+        app.state.push_error(game_cheetah::AppError::MemoryWrite {
+            addr: 0x1000,
+            source: "bad address".into(),
+        });
+        let ctx = context();
+        let output = settle(&mut app, &ctx, size);
+        click(&mut app, &ctx, size, text_rect(&output, &fl!(LANGUAGE_LOADER, "error-new-search")).center());
+        assert_eq!(app.state.searches.len(), 2);
+        assert_eq!(app.state.current_search, 1);
+        assert_eq!(result_identities(&app), before);
+        assert!(app.state.current_error().is_none());
+
+        app.state.push_error(game_cheetah::AppError::SearchValueParse {
+            source: "invalid number".into(),
+        });
+        let output = settle(&mut app, &ctx, size);
+        click(&mut app, &ctx, size, text_rect(&output, &fl!(LANGUAGE_LOADER, "error-edit-value")).center());
+        assert!(app.state.current_error().is_none());
+        assert_eq!(app.state.searches.len(), 2);
+    }
+}
+
+#[test]
+fn empty_results_offer_undo_without_being_an_access_error() {
+    let mut app = app_with_results(2);
+    let before = result_identities(&app);
+    let search = &mut app.state.searches[0];
+    search.push_undo_state(search.collect_results());
+    search.set_cached_results(Vec::new());
+    let ctx = context();
+    let output = settle(&mut app, &ctx, LARGE);
+    assert!(app.state.current_error().is_none());
+    text_rect(&output, &fl!(LANGUAGE_LOADER, "empty-results-title"));
+    click(&mut app, &ctx, LARGE, text_rect(&output, &fl!(LANGUAGE_LOADER, "empty-results-undo")).center());
+    assert_eq!(result_identities(&app), before);
 }
 
 #[test]
