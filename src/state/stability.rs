@@ -2,7 +2,7 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -78,28 +78,34 @@ fn observe<T: CopyAddress>(
 impl GameCheetahEngine {
     pub(super) fn spawn_stability_filter(&mut self, index: usize, old: Arc<Vec<SearchResult>>, prepared: PreparedSearch, duration: Duration) {
         let search = &mut self.searches[index];
+        let worker = search.search_worker(SearchMode::Stability, self.pid, self.attached_start_time, self.process_name.clone());
+        let prepared = prepared.with_worker(worker.clone());
         search.searching = SearchMode::Stability;
         search.total_bytes = duration.as_millis() as usize;
-        // Private atomics per worker generation prevent a cancelled observation
-        // from completing a later scan after reset/undo.
-        search.current_bytes = Arc::new(AtomicUsize::new(0));
-        search.search_complete = Arc::new(AtomicBool::new(false));
-        let (cancel_sender, cancel_receiver) = crossbeam_channel::bounded(1);
-        search.stability_cancel = Some(cancel_sender);
         let progress = search.current_bytes.clone();
-        let complete = search.search_complete.clone();
         let sender = search.results_sender.clone();
         let pid = self.pid;
         std::thread::spawn(move || {
             let results = match pid.try_into_process_handle() {
-                Ok(handle) => observe(&old, &prepared, &ExactProcessReader(&handle), duration, &cancel_receiver, &progress),
-                // All addresses are unreadable if the process can no longer be opened.
-                Err(_) => Some(Vec::new()),
+                Ok(handle) => observe(
+                    &old,
+                    &prepared,
+                    &worker.reader(ExactProcessReader(&handle)),
+                    duration,
+                    &worker.cancel,
+                    &progress,
+                ),
+                Err(err) => {
+                    worker.fail(crate::AppError::Generic {
+                        message: format!("Failed to open process {pid}: {err}"),
+                    });
+                    Some(Vec::new())
+                }
             };
             if let Some(results) = results {
-                let _ = sender.send(results);
+                worker.send(&sender, results);
                 progress.store(duration.as_millis() as usize, Ordering::Release);
-                complete.store(true, Ordering::Release);
+                worker.finish();
             }
         });
     }

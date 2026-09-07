@@ -31,6 +31,8 @@ pub struct SearchHistoryEntry {
     memory_snapshot: Vec<(usize, Arc<[u8]>)>,
     unknown_comparison: Option<UnknownComparison>,
     search_complete: bool,
+    total_bytes: usize,
+    current_bytes: usize,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -57,8 +59,9 @@ pub struct SearchContext {
     pub filter_types: [bool; 6],
     pub stable_filter_enabled: bool,
     pub stable_filter_seconds: u32,
-    /// Dropping this sender cancels the observation worker, including on tab close.
-    pub(crate) stability_cancel: Option<Sender<()>>,
+    /// Dropping a tab also drops the only cancellation sender for its workers.
+    pub(crate) task: Option<crate::search_task::SearchTask>,
+    pub(crate) pending_search_error: Option<crate::AppError>,
 
     pub searching: SearchMode,
     pub total_bytes: usize,
@@ -96,7 +99,8 @@ impl SearchContext {
             filter_types: [true; 6],
             stable_filter_enabled: false,
             stable_filter_seconds: 3,
-            stability_cancel: None,
+            task: None,
+            pending_search_error: None,
             searching: SearchMode::None,
             results_sender: tx,
             results_receiver: rx,
@@ -144,11 +148,42 @@ impl SearchContext {
         Ok(filter)
     }
 
-    fn cancel_stability(&mut self) {
-        if self.stability_cancel.take().is_some() {
-            // Old worker generations must not mark a later search as complete.
-            self.search_complete = Arc::new(AtomicBool::new(self.search_complete.load(Ordering::Acquire)));
-            self.current_bytes = Arc::new(AtomicUsize::new(0));
+    /// Snapshot before mutation, then allocate private state for this generation.
+    pub(crate) fn begin_search(&mut self, mode: SearchMode, pid: process_memory::Pid, start_time: u64, name: String) -> crate::search_task::SearchWorker {
+        self.task.take();
+        self.push_undo_state(self.collect_results());
+        self.search_complete = Arc::new(AtomicBool::new(false));
+        self.current_bytes = Arc::new(AtomicUsize::new(0));
+        self.cache_valid = Arc::new(AtomicBool::new(false));
+        self.cached_results = Arc::new(RwLock::new(None));
+        // Workers must never mutate a previous generation's snapshot/map.
+        let snapshot = self.memory_snapshot.read().map(|pages| pages.clone()).unwrap_or_default();
+        self.memory_snapshot = Arc::new(RwLock::new(snapshot));
+        let previous = self.previous_unknown_values.read().map(|map| map.clone()).unwrap_or_default();
+        self.previous_unknown_values = Arc::new(RwLock::new(previous));
+        let (tx, rx) = Self::result_channel();
+        self.results_sender = tx;
+        self.results_receiver = rx;
+        self.total_bytes = 0;
+        self.searching = mode;
+        self.pending_search_error = None;
+        let task = crate::search_task::SearchTask::new(pid, start_time, name, self.search_complete.clone());
+        let worker = task.worker.clone();
+        self.task = Some(task);
+        worker
+    }
+
+    pub(crate) fn search_worker(&mut self, mode: SearchMode, pid: process_memory::Pid, start_time: u64, name: String) -> crate::search_task::SearchWorker {
+        if let Some(task) = &self.task {
+            task.worker.clone()
+        } else {
+            self.begin_search(mode, pid, start_time, name)
+        }
+    }
+
+    pub fn cancel_search(&mut self) {
+        if self.task.is_some() {
+            self.undo_last_search();
         }
     }
 
@@ -179,7 +214,14 @@ impl SearchContext {
 
     /// Reset a search after the engine has released this tab's freezes.
     pub(crate) fn clear_results(&mut self) {
-        self.cancel_stability();
+        self.task.take();
+        self.search_complete = Arc::new(AtomicBool::new(false));
+        self.current_bytes = Arc::new(AtomicUsize::new(0));
+        self.memory_snapshot = Arc::new(RwLock::new(Vec::new()));
+        self.previous_unknown_values = Arc::new(RwLock::new(HashMap::new()));
+        self.cached_results = Arc::new(RwLock::new(None));
+        self.cache_valid = Arc::new(AtomicBool::new(false));
+        self.pending_search_error = None;
         debug_assert!(self.freezed_addresses.is_empty());
         // Clear old results history
         self.old_results.clear();
@@ -210,6 +252,8 @@ impl SearchContext {
             memory_snapshot: self.memory_snapshot.read().map(|pages| pages.clone()).unwrap_or_default(),
             unknown_comparison: self.unknown_comparison,
             search_complete: self.search_complete.load(Ordering::Acquire),
+            total_bytes: self.total_bytes,
+            current_bytes: self.current_bytes.load(Ordering::Acquire),
         });
     }
 
@@ -217,21 +261,20 @@ impl SearchContext {
         let Some(old) = self.old_results.pop() else {
             return;
         };
-        self.cancel_stability();
+        self.task.take();
         // Discard queued batches from the pass being undone as well as its
         // cached results so they cannot reappear on the next UI tick.
         let (tx, rx) = Self::result_channel();
         self.results_sender = tx;
         self.results_receiver = rx;
-        self.set_cached_results((*old.results).clone());
-        if let Ok(mut previous) = self.previous_unknown_values.write() {
-            *previous = old.previous_unknown_values;
-        }
-        if let Ok(mut snapshot) = self.memory_snapshot.write() {
-            *snapshot = old.memory_snapshot;
-        }
+        self.cached_results = Arc::new(RwLock::new(Some(old.results)));
+        self.cache_valid = Arc::new(AtomicBool::new(true));
+        self.previous_unknown_values = Arc::new(RwLock::new(old.previous_unknown_values));
+        self.memory_snapshot = Arc::new(RwLock::new(old.memory_snapshot));
         self.unknown_comparison = old.unknown_comparison;
-        self.search_complete.store(old.search_complete, Ordering::Release);
+        self.search_complete = Arc::new(AtomicBool::new(old.search_complete));
+        self.current_bytes = Arc::new(AtomicUsize::new(old.current_bytes));
+        self.total_bytes = old.total_bytes;
         self.searching = SearchMode::None;
     }
 
@@ -297,6 +340,13 @@ impl SearchContext {
 
     pub fn update_search_mode(&mut self) {
         if self.search_complete.load(Ordering::Acquire) && !matches!(self.searching, SearchMode::None) {
+            if let Some(error) = self.task.as_ref().and_then(|task| task.worker.error()) {
+                self.cancel_search();
+                self.pending_search_error = Some(error);
+                return;
+            }
+            self.collect_results();
+            self.task.take();
             self.searching = SearchMode::None;
         }
     }
@@ -332,6 +382,57 @@ fn merge_results(results: &mut Vec<SearchResult>, incoming: &[SearchResult]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancel_restores_history_and_isolates_all_worker_owned_state() {
+        let mut search = SearchContext::new("cancel".into());
+        let original = SearchResult::new(0x1000, SearchType::Int);
+        search.set_cached_results(vec![original]);
+        search.search_complete.store(true, Ordering::Release);
+        search.total_bytes = 17;
+        search.current_bytes.store(17, Ordering::Release);
+        search.unknown_comparison = Some(UnknownComparison::Changed);
+        search.store_memory_snapshot(0x1000, vec![1; 8]);
+        search.previous_unknown_values.write().unwrap().insert((0x1000, SearchType::Int), [2; 8]);
+        search.push_undo_state(search.collect_results());
+        let worker = search.begin_search(SearchMode::Memory, 0, 0, "test".into());
+        let old_snapshot = search.memory_snapshot.clone();
+        let old_previous = search.previous_unknown_values.clone();
+        let old_complete = search.search_complete.clone();
+        let old_progress = search.current_bytes.clone();
+        let sender = search.results_sender.clone();
+        sender.send(vec![SearchResult::new(0x2000, SearchType::Double)]).unwrap();
+        search.cancel_search();
+        assert!(worker.cancelled());
+        assert_eq!(keys(&search.collect_results()), vec![(0x1000, SearchType::Int as u8)]);
+        assert_eq!(search.old_results.len(), 1);
+        assert_eq!(search.total_bytes, 17);
+        assert_eq!(search.current_bytes.load(Ordering::Acquire), 17);
+        assert_eq!(search.unknown_comparison, Some(UnknownComparison::Changed));
+        // Simulate late writes from an in-flight OS read/comparison.
+        old_snapshot.write().unwrap().clear();
+        old_previous.write().unwrap().clear();
+        old_complete.store(true, Ordering::Release);
+        old_progress.store(999, Ordering::Release);
+        assert_eq!(search.memory_snapshot.read().unwrap().len(), 1);
+        assert_eq!(search.previous_unknown_values.read().unwrap().len(), 1);
+        let next = search.begin_search(SearchMode::Percent, 0, 0, "next".into());
+        worker.finish();
+        assert!(!next.cancelled());
+        assert!(!search.search_complete.load(Ordering::Acquire));
+        assert!(sender.send(vec![original]).is_err());
+        search.cancel_search();
+    }
+
+    #[test]
+    fn closing_a_tab_broadcasts_cancellation_to_all_workers() {
+        let mut search = SearchContext::new("drop".into());
+        let worker = search.begin_search(SearchMode::Memory, 0, 0, "test".into());
+        let other_worker = worker.clone();
+        drop(search);
+        assert!(worker.cancelled());
+        assert!(other_worker.cancelled());
+    }
 
     fn keys(results: &[SearchResult]) -> Vec<(usize, u8)> {
         results.iter().map(result_key).collect()

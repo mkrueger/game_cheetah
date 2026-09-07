@@ -79,9 +79,7 @@ impl App {
 
         // Search context state machine: cycle each context's search-mode
         // flag back to `None` once `search_complete` flips.
-        for search_context in &mut self.state.searches {
-            search_context.update_search_mode();
-        }
+        self.state.poll_searches();
 
         match self.app_state {
             AppState::ProcessSelection => {
@@ -111,24 +109,9 @@ impl App {
                 }
                 // Finalize in-flight searches so the tracker refresh below
                 // sees the final result set.
+                self.state.poll_searches();
                 let completed_without_results = {
-                    let ctx_search = &mut self.state.searches[self.state.current_search];
-                    if !matches!(ctx_search.searching, SearchMode::None) {
-                        let _ = ctx_search.collect_results();
-                    }
-                    if ctx_search.search_complete.load(Ordering::SeqCst) {
-                        // Drain trailing batches so addresses don't keep
-                        // shifting after the search ends.
-                        loop {
-                            let before = ctx_search.get_result_count();
-                            let _ = ctx_search.collect_results();
-                            let after = ctx_search.get_result_count();
-                            if before == after {
-                                break;
-                            }
-                        }
-                        ctx_search.searching = SearchMode::None;
-                    }
+                    let ctx_search = &self.state.searches[self.state.current_search];
                     current_search_was_active && ctx_search.search_complete.load(Ordering::SeqCst) && ctx_search.get_result_count() == 0
                 };
                 if completed_without_results {

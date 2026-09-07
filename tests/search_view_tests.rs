@@ -321,6 +321,49 @@ fn stability_progress_has_a_working_cancel_action() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn every_progress_mode_offers_cancel_in_both_window_sizes() {
+    for size in SIZES {
+        for mode in [SearchMode::Memory, SearchMode::Percent, SearchMode::Stability] {
+            let mut value = Box::new(24680_i32);
+            let mut app = own_value_app(&mut value);
+            app.state.searches[0].stable_filter_enabled = true;
+            app.state.searches[0].stable_filter_seconds = 30;
+            app.apply_numeric_filter();
+            // Reuse a real cancellable task to exercise each progress presentation.
+            app.state.searches[0].searching = mode;
+            let ctx = context();
+            let output = settle(&mut app, &ctx, size);
+            let cancel = fl!(LANGUAGE_LOADER, "result-filter-cancel");
+            assert_button_visible(&output, &cancel, size);
+            click(&mut app, &ctx, size, text_rect(&output, &cancel).center());
+            assert_eq!(app.state.searches[0].searching, SearchMode::None);
+            assert_eq!(app.state.searches[0].get_result_count(), 1);
+            assert!(app.state.searches[0].old_results.is_empty());
+            assert_eq!(*value, 24680);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn switching_tabs_keeps_search_running_and_closing_it_is_safe() {
+    let mut value = Box::new(24680_i32);
+    let mut app = own_value_app(&mut value);
+    app.state.searches[0].stable_filter_enabled = true;
+    app.state.searches[0].stable_filter_seconds = 30;
+    app.apply_numeric_filter();
+    app.new_search();
+    assert_eq!(app.state.searches[0].searching, SearchMode::Stability);
+    app.close_search(0);
+    assert_eq!(app.state.searches.len(), 1);
+    assert_eq!(app.state.current_search, 0);
+    assert_eq!(app.state.searches[0].searching, SearchMode::None);
+    assert!(app.state.searches[0].old_results.is_empty());
+    assert_eq!(*value, 24680);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn applying_numeric_filter_through_ui_is_read_only_and_undoable() {
     let mut value = Box::new(24680_i32);
     let mut app = own_value_app(&mut value);

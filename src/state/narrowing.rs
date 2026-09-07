@@ -55,6 +55,7 @@ impl Needle {
 
 pub(super) struct PreparedSearch {
     needles: [Option<Needle>; TYPE_COUNT],
+    worker: Option<crate::search_task::SearchWorker>,
 }
 
 impl PreparedSearch {
@@ -72,7 +73,7 @@ impl PreparedSearch {
                 });
             }
         }
-        Self { needles }
+        Self { needles, worker: None }
     }
 
     pub(super) fn new(results: &[SearchResult], text: &str) -> Self {
@@ -117,7 +118,12 @@ impl PreparedSearch {
                 }
             });
         }
-        Self { needles }
+        Self { needles, worker: None }
+    }
+
+    pub(super) fn with_worker(mut self, worker: crate::search_task::SearchWorker) -> Self {
+        self.worker = Some(worker);
+        self
     }
 
     pub(super) fn update_results<T: CopyAddress>(&self, old: &[SearchResult], handle: &T) -> Vec<SearchResult> {
@@ -131,6 +137,9 @@ impl PreparedSearch {
         let mut buffer = [0u8; READ_WINDOW];
         let mut from = 0;
         while from < old.len() {
+            if self.worker.as_ref().is_some_and(|worker| worker.stopped()) {
+                break;
+            }
             let first = old[from];
             let Some(needle) = &self.needles[first.search_type as usize] else {
                 from += 1;

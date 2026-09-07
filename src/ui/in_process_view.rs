@@ -616,8 +616,8 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
         .collect::<String>();
         ui.add(egui::ProgressBar::new(progress).desired_width(ui.available_width()).show_percentage());
         ui.label(egui::RichText::new(label).size(13.0).weak());
-        if searching == SearchMode::Stability && ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "result-filter-cancel"))).clicked() {
-            app.undo_search();
+        if ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "result-filter-cancel"))).clicked() {
+            app.cancel_search();
         }
     }
 

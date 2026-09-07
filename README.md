@@ -79,6 +79,23 @@ Each filter can be enabled independently; enabled filters are combined:
   result set. Freezes belonging to other searches remain active and can make
   a value appear stable.
 
+## Cancelling searches
+
+**Cancel and restore results** is available during numeric and text scans,
+snapshot capture, unknown-value comparisons, refinement and stability observation.
+It restores the previous results, comparison baseline and progress state, including
+large unknown-value result sets. Released freezes stay off.
+
+Switching tabs leaves a search running; closing its tab or detaching cancels its
+background work. Cancellation also releases workers waiting to deliver results.
+An OS memory read already in progress may finish, but its results cannot affect
+the restored state or a new search.
+
+If the target exits or its PID is reused, searches are cancelled and restored,
+all freezes are cleared, and a clear error is shown. A pass in which every attempted
+memory read fails also restores the previous state instead of reporting a successful
+empty result; individually unreadable regions or candidates may still be skipped.
+
 ## Screenshots
 
 ### Find a process

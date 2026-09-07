@@ -20,6 +20,8 @@ pub use search_value::*;
 pub mod search_context;
 pub use search_context::*;
 
+mod search_task;
+
 pub mod ui;
 pub use ui::*;
 

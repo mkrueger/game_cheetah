@@ -183,6 +183,12 @@ impl App {
         self.clear_change_tracker();
     }
 
+    pub fn cancel_search(&mut self) {
+        self.state.cancel_search(self.state.current_search);
+        self.clear_result_interaction();
+        self.clear_change_tracker();
+    }
+
     pub fn clear_results(&mut self) {
         self.state.remove_freezes(self.state.current_search);
         if let Some(search_context) = self.state.searches.get_mut(self.state.current_search) {

@@ -163,6 +163,7 @@ pub enum AppError {
     SearchContextMissing { index: usize },
     ProcessMapRead { pid: process_memory::Pid, source: String },
     SearchValueParse { source: String },
+    SearchReadFailed,
     CurrentPidUnavailable,
     CurrentProcessMissing,
     FreezeChannelClosed { source: String },
@@ -201,10 +202,11 @@ impl std::fmt::Display for AppError {
             Self::SearchContextMissing { index } => write!(f, "Search context vanished for index {index}"),
             Self::ProcessMapRead { pid, source } => write!(f, "Error getting process maps for pid {pid}: {source}"),
             Self::SearchValueParse { source } => write!(f, "Parse error: {source}"),
+            Self::SearchReadFailed => f.write_str(&fl!(crate::LANGUAGE_LOADER, "search-read-failed")),
             Self::CurrentPidUnavailable => f.write_str("Failed to get current pid"),
             Self::CurrentProcessMissing => f.write_str("Current process info not found"),
             Self::FreezeChannelClosed { source } => write!(f, "Freeze channel closed: {source}"),
-            Self::ProcessExited { name } => write!(f, "Process '{name}' exited; freezes cleared."),
+            Self::ProcessExited { name } => f.write_str(&fl!(crate::LANGUAGE_LOADER, "search-process-exited", name = name.as_str())),
             Self::MemoryWrite { addr, source } => write!(f, "Failed to write 0x{addr:X}: {source}"),
             Self::InvalidValue { value, source } => write!(f, "Invalid value '{value}': {source}"),
             Self::InvalidAddress { raw, source } => write!(f, "Invalid address '{raw}': {source}"),
@@ -369,6 +371,37 @@ impl GameCheetahEngine {
         self.errors.back()
     }
 
+    /// Finalize every tab, not only the one currently visible. Failed searches
+    /// roll back before their results can be presented as a successful pass.
+    pub fn poll_searches(&mut self) {
+        let mut errors = Vec::new();
+        for search in &mut self.searches {
+            // Drain inactive tabs as well, or bounded channels can stall them.
+            if search.searching != SearchMode::None {
+                search.collect_results();
+            }
+            search.update_search_mode();
+            if let Some(error) = search.pending_search_error.take() {
+                errors.push(error);
+            }
+        }
+        let exited = errors.iter().any(|error| matches!(error, AppError::ProcessExited { .. }));
+        if exited {
+            self.detach();
+        }
+        for error in errors {
+            if self.errors.back() != Some(&error) {
+                self.push_error(error);
+            }
+        }
+    }
+
+    pub fn cancel_search(&mut self, index: usize) {
+        if let Some(search) = self.searches.get_mut(index) {
+            search.cancel_search();
+        }
+    }
+
     pub fn new_search(&mut self) {
         let ctx = SearchContext::new(
             fl!(crate::LANGUAGE_LOADER, "search-label", search = (1 + self.searches.len()).to_string())
@@ -381,103 +414,55 @@ impl GameCheetahEngine {
     }
 
     pub fn initial_search(&mut self, search_index: usize) {
-        // Validate index
         let Some(search_context) = self.searches.get(search_index) else {
             self.push_error(AppError::InvalidSearchIndex { index: search_index });
             return;
         };
-        if !matches!(search_context.searching, SearchMode::None) {
+        if search_context.searching != SearchMode::None {
             return;
         }
-
-        // Remove freezes first
-        self.remove_freezes(search_index);
-
-        // Set searching state (need mutable borrow)
-        if let Some(ctx_mut) = self.searches.get_mut(search_index) {
-            ctx_mut.searching = SearchMode::Memory;
-            ctx_mut.total_bytes = 0;
-            ctx_mut.current_bytes.swap(0, Ordering::SeqCst);
-            // Drop any previously cached results / drain the result channel so
-            // a fresh initial search (e.g. a re-run of a string search) cannot
-            // leak rows from the previous pass into the new result set.
-            ctx_mut.invalidate_cache();
-            let (tx, rx) = SearchContext::result_channel();
-            ctx_mut.results_sender = tx;
-            ctx_mut.results_receiver = rx;
-        } else {
-            self.push_error(AppError::InvalidSearchIndex { index: search_index });
-            return;
-        }
-
-        // Extract needed data (release mutable borrow)
-        let (search_type, search_value_text) = {
-            let ctx = &self.searches[search_index];
-            (ctx.search_type, ctx.search_value_text.clone())
-        };
-
-        if search_type == SearchType::String {
-            self.clear_errors();
-
-            // Precompute overlaps for chunking so we don't miss boundary-crossing matches
-            let utf8_len = search_value_text.len();
-            let utf16_len = utf8_len.saturating_mul(2);
-            // For UTF-8, need len-1 overlap; for UTF-16LE, need 2*len - 2 overlap (one u16 less)
-            let overlap = std::cmp::max(utf8_len.saturating_sub(1), utf16_len.saturating_sub(2));
-
-            match get_process_maps(self.pid) {
-                Ok(maps) => {
-                    let (regions, total_bytes) = chunk_process_regions(maps, overlap);
-                    if let Some(ctx_mut) = self.searches.get_mut(search_index) {
-                        ctx_mut.total_bytes += total_bytes;
-                    } else {
-                        self.push_error(AppError::SearchContextMissing { index: search_index });
-                        return;
-                    }
-
-                    self.spawn_string_search(search_value_text, regions, search_index);
-                }
-                Err(err) => {
-                    eprintln!("error getting process maps for pid {}: {}", self.pid, err);
-                    self.push_error(AppError::ProcessMapRead {
-                        pid: self.pid,
-                        source: err.to_string(),
-                    });
-                }
-            }
-            return;
-        }
-
-        // Parse target value
+        let search_type = search_context.search_type;
+        let search_value_text = search_context.search_value_text.clone();
         let search_for_value = match search_type.from_string(&search_value_text) {
             Ok(v) => v,
             Err(e) => {
-                self.push_error(AppError::SearchValueParse { source: e.to_string() });
+                self.push_error(AppError::SearchValueParse { source: e });
                 return;
             }
         };
         self.clear_errors();
-
+        let worker = self.searches[search_index].begin_search(SearchMode::Memory, self.pid, self.attached_start_time, self.process_name.clone());
+        if !worker.check_process() {
+            worker.finish();
+            self.poll_searches();
+            return;
+        }
+        self.remove_freezes(search_index);
         match get_process_maps(self.pid) {
             Ok(maps) => {
-                // Numeric scans need a 7-byte overlap so an 8-byte value straddling
-                // a chunk boundary is still found.
-                let (regions, total_bytes) = chunk_process_regions(maps, 7);
-                if let Some(ctx_mut) = self.searches.get_mut(search_index) {
-                    ctx_mut.total_bytes += total_bytes;
+                let overlap = if search_type == SearchType::String {
+                    search_value_text
+                        .len()
+                        .max(search_value_text.encode_utf16().count().saturating_mul(2))
+                        .saturating_sub(1)
                 } else {
-                    self.push_error(AppError::SearchContextMissing { index: search_index });
-                    return;
+                    7
+                };
+                let (regions, total_bytes) = chunk_process_regions(maps, overlap);
+                self.searches[search_index].total_bytes = total_bytes;
+                if search_type == SearchType::String {
+                    self.spawn_string_search(search_value_text, regions, search_index);
+                } else {
+                    self.spawn_parallel_search(search_for_value, regions, search_index);
                 }
-
-                self.spawn_parallel_search(search_for_value, regions, search_index);
             }
             Err(err) => {
-                eprintln!("error getting process maps for pid {}: {}", self.pid, err);
-                self.push_error(AppError::ProcessMapRead {
+                worker.fail(AppError::ProcessMapRead {
                     pid: self.pid,
                     source: err.to_string(),
                 });
+                worker.finish();
+                self.poll_searches();
             }
         }
     }
@@ -535,19 +520,9 @@ impl GameCheetahEngine {
             self.push_error(AppError::InvalidSearchIndex { index: search_index });
             return;
         };
-        search_context.searching = SearchMode::Percent;
-
-        // collect_results now returns Arc<Vec<SearchResult>>
         let old_results = search_context.collect_results();
+        let worker = search_context.begin_search(SearchMode::Percent, self.pid, self.attached_start_time, self.process_name.clone());
         search_context.total_bytes = old_results.len();
-        search_context.current_bytes.swap(0, Ordering::SeqCst);
-
-        search_context.push_undo_state(Arc::clone(&old_results));
-
-        let (tx, rx) = SearchContext::result_channel();
-        search_context.results_sender = tx;
-        search_context.results_receiver = rx;
-        search_context.invalidate_cache();
 
         if let Some(duration) = stable_for {
             self.spawn_stability_filter(search_index, old_results, prepared, duration);
@@ -560,11 +535,11 @@ impl GameCheetahEngine {
         // leaves the UI sitting on "Aktualisiere N/N" until the next tick.
         const INLINE_UPDATE_LIMIT: usize = 1024;
         if old_results.len() <= INLINE_UPDATE_LIMIT {
-            let updated = prepared.update_results(&old_results, &memory_reader::ExactProcessReader(&handle));
+            let updated = prepared.update_results(&old_results, &worker.reader(memory_reader::ExactProcessReader(&handle)));
             search_context.set_cached_results(updated);
             search_context.current_bytes.store(old_results.len(), Ordering::SeqCst);
-            search_context.search_complete.store(true, Ordering::SeqCst);
-            search_context.searching = SearchMode::None;
+            worker.finish();
+            self.poll_searches();
             return;
         }
 
@@ -745,37 +720,41 @@ impl GameCheetahEngine {
             self.push_error(AppError::InvalidSearchIndex { index: search_index });
             return;
         };
+        let worker = search_context.search_worker(SearchMode::Percent, self.pid, self.attached_start_time, self.process_name.clone());
+        let prepared = prepared.with_worker(worker.clone());
         let current_bytes = search_context.current_bytes.clone();
         let pid = self.pid;
         let results_sender = search_context.results_sender.clone();
-        let search_complete = search_context.search_complete.clone();
         let cache_valid = search_context.cache_valid.clone();
-
-        search_complete.store(false, Ordering::SeqCst);
 
         std::thread::spawn(move || {
             chunks.par_iter().for_each(|(from, to)| {
+                if worker.stopped() {
+                    return;
+                }
                 let handle = match pid.try_into_process_handle() {
                     Ok(h) => h,
                     Err(e) => {
-                        eprintln!("Failed to get process handle: {e}");
+                        worker.fail(AppError::Generic {
+                            message: format!("Failed to open process {pid}: {e}"),
+                        });
                         current_bytes.fetch_add(to - from, Ordering::SeqCst);
                         return;
                     }
                 };
 
                 let chunk = &old_results[*from..*to];
-                let updated = prepared.update_results(chunk, &memory_reader::ExactProcessReader(&handle));
+                let updated = prepared.update_results(chunk, &worker.reader(memory_reader::ExactProcessReader(&handle)));
 
                 if !updated.is_empty() {
-                    let _ = results_sender.send(updated);
+                    worker.send(&results_sender, updated);
                 }
 
                 current_bytes.fetch_add(to - from, Ordering::SeqCst);
             });
 
             cache_valid.store(false, Ordering::Release);
-            search_complete.store(true, Ordering::SeqCst);
+            worker.finish();
         });
     }
 
@@ -785,10 +764,10 @@ impl GameCheetahEngine {
             return;
         };
 
+        let worker = search_context.search_worker(SearchMode::Memory, self.pid, self.attached_start_time, self.process_name.clone());
         let current_bytes = search_context.current_bytes.clone();
         let pid = self.pid;
         let results_sender = search_context.results_sender.clone();
-        let search_complete: Arc<std::sync::atomic::AtomicBool> = search_context.search_complete.clone();
         let cache_valid = search_context.cache_valid.clone();
 
         // For Guess scans we try Int / Int64 / Float / Double per region. Parsing the
@@ -832,8 +811,6 @@ impl GameCheetahEngine {
         let chunk_overlap = max_needle_len.saturating_sub(1);
         let chunks = split_search_regions(&regions, SEARCH_REGION_CHUNK_SIZE, chunk_overlap);
 
-        search_complete.store(false, Ordering::SeqCst);
-
         std::thread::spawn(move || {
             // Use one persistent /proc/[pid]/mem fd and read buffer per Rayon
             // worker. Local profiling showed `read_into` buffer reuse was
@@ -844,6 +821,9 @@ impl GameCheetahEngine {
             }
 
             chunks.par_iter().for_each(|chunk| {
+                if worker.stopped() {
+                    return;
+                }
                 #[cfg(target_os = "linux")]
                 {
                     MEM_READER.with(|reader_cell| {
@@ -863,30 +843,48 @@ impl GameCheetahEngine {
                         let results = if let Some((_, reader, buffer)) = reader_opt.as_mut() {
                             buffer.resize(chunk.read_size, 0);
                             match reader.read_into(chunk.start, &mut buffer[..chunk.read_size]) {
-                                Ok(read_size) => search_loaded_memory(
-                                    &buffer[..read_size],
-                                    chunk.start,
-                                    logical_end,
-                                    &search_data,
-                                    guess_needles.as_ref().map(|needles| needles.as_slice()),
-                                ),
-                                Err(_) => Vec::new(),
+                                Ok(read_size) => {
+                                    worker.record_read(read_size > 0);
+                                    if worker.stopped() {
+                                        return;
+                                    }
+                                    search_loaded_memory(
+                                        &buffer[..read_size],
+                                        chunk.start,
+                                        logical_end,
+                                        &search_data,
+                                        guess_needles.as_ref().map(|needles| needles.as_slice()),
+                                    )
+                                }
+                                Err(_) => {
+                                    worker.record_read(false);
+                                    Vec::new()
+                                }
                             }
                         } else {
                             match fast_read_memory(pid, chunk.start, chunk.read_size) {
-                                Ok(memory) => search_loaded_memory(
-                                    &memory,
-                                    chunk.start,
-                                    logical_end,
-                                    &search_data,
-                                    guess_needles.as_ref().map(|needles| needles.as_slice()),
-                                ),
-                                Err(_) => Vec::new(),
+                                Ok(memory) => {
+                                    worker.record_read(!memory.is_empty());
+                                    if worker.stopped() {
+                                        return;
+                                    }
+                                    search_loaded_memory(
+                                        &memory,
+                                        chunk.start,
+                                        logical_end,
+                                        &search_data,
+                                        guess_needles.as_ref().map(|needles| needles.as_slice()),
+                                    )
+                                }
+                                Err(_) => {
+                                    worker.record_read(false);
+                                    Vec::new()
+                                }
                             }
                         };
 
                         if !results.is_empty() {
-                            let _ = results_sender.send(results);
+                            worker.send(&results_sender, results);
                         }
                     });
                 }
@@ -894,6 +892,10 @@ impl GameCheetahEngine {
                 #[cfg(not(target_os = "linux"))]
                 {
                     let memory_result = fast_read_memory(pid, chunk.start, chunk.read_size);
+                    worker.record_read(memory_result.as_ref().is_ok_and(|bytes| !bytes.is_empty()));
+                    if worker.stopped() {
+                        return;
+                    }
 
                     match memory_result {
                         Ok(memory) => {
@@ -906,7 +908,7 @@ impl GameCheetahEngine {
                                 guess_needles.as_ref().map(|needles| needles.as_slice()),
                             );
                             if !results.is_empty() {
-                                let _ = results_sender.send(results);
+                                worker.send(&results_sender, results);
                             }
                         }
                         Err(_) => {
@@ -921,7 +923,7 @@ impl GameCheetahEngine {
             });
 
             cache_valid.store(false, Ordering::Release);
-            search_complete.store(true, Ordering::SeqCst);
+            worker.finish();
         });
     }
 
@@ -962,6 +964,7 @@ impl GameCheetahEngine {
     pub fn detach(&mut self) {
         self.send_freeze(FreezeMessage::from_addr(MessageCommand::Pid, 0));
         for search in &mut self.searches {
+            search.cancel_search();
             search.freezed_addresses.clear();
         }
         self.pid = 0;
@@ -982,15 +985,21 @@ impl GameCheetahEngine {
     }
 
     pub fn take_memory_snapshot(&mut self, search_index: usize) {
-        {
-            let Some(search_context) = self.searches.get_mut(search_index) else {
-                return;
-            };
-
-            search_context.searching = SearchMode::Memory;
-            search_context.clear_memory_snapshot();
+        let Some(search_context) = self.searches.get_mut(search_index) else {
+            return;
+        };
+        if search_context.searching != SearchMode::None {
+            return;
         }
-
+        let worker = search_context.begin_search(SearchMode::Memory, self.pid, self.attached_start_time, self.process_name.clone());
+        search_context.clear_memory_snapshot();
+        search_context.clear_previous_unknown_values();
+        search_context.unknown_comparison = None;
+        if !worker.check_process() {
+            worker.finish();
+            self.poll_searches();
+            return;
+        }
         match get_process_maps(self.pid) {
             Ok(maps) => {
                 // Snapshot capture reads each region whole; no overlap needed.
@@ -1004,14 +1013,12 @@ impl GameCheetahEngine {
                 self.spawn_snapshot_capture(search_index, regions);
             }
             Err(e) => {
-                if let Some(search_context) = self.searches.get_mut(search_index) {
-                    // Set search complete even on error so UI doesn't get stuck
-                    search_context.search_complete.store(true, Ordering::SeqCst);
-                }
-                self.push_error(AppError::ProcessMapRead {
+                worker.fail(AppError::ProcessMapRead {
                     pid: self.pid,
                     source: e.to_string(),
                 });
+                worker.finish();
+                self.poll_searches();
             }
         }
     }
@@ -1021,12 +1028,10 @@ impl GameCheetahEngine {
             return;
         };
 
+        let worker = search_context.search_worker(SearchMode::Memory, self.pid, self.attached_start_time, self.process_name.clone());
         let pid = self.pid;
         let current_bytes = search_context.current_bytes.clone();
         let memory_snapshot = search_context.memory_snapshot.clone();
-        let search_complete = search_context.search_complete.clone();
-
-        search_complete.store(false, Ordering::SeqCst);
 
         std::thread::spawn(move || {
             // Open /proc/[pid]/mem once for all reads
@@ -1037,6 +1042,9 @@ impl GameCheetahEngine {
                 const CHUNK_SIZE: usize = 50 * 1024 * 1024; // 50MB
                 let mut region_offset = 0;
                 while region_offset < *size {
+                    if worker.stopped() {
+                        return;
+                    }
                     let chunk_size = (*size - region_offset).min(CHUNK_SIZE);
                     let chunk_start = *start + region_offset;
 
@@ -1051,6 +1059,10 @@ impl GameCheetahEngine {
                     #[cfg(not(target_os = "linux"))]
                     let memory_result = fast_read_memory(pid, chunk_start, chunk_size);
 
+                    worker.record_read(memory_result.as_ref().is_ok_and(|bytes| !bytes.is_empty()));
+                    if worker.stopped() {
+                        return;
+                    }
                     if let Ok(memory) = memory_result {
                         let arc_page: Arc<[u8]> = Arc::<[u8]>::from(memory.into_boxed_slice());
                         if let Ok(mut snap) = memory_snapshot.write() {
@@ -1062,7 +1074,7 @@ impl GameCheetahEngine {
                 }
             }
 
-            search_complete.store(true, Ordering::SeqCst);
+            worker.finish();
         });
     }
 
@@ -1070,28 +1082,16 @@ impl GameCheetahEngine {
         let Some(search_context) = self.searches.get_mut(search_index) else {
             return;
         };
-        search_context.searching = SearchMode::Percent;
-
-        let old_results = search_context.collect_results();
-        if old_results.len() < 100000 {
-            search_context.push_undo_state(Arc::clone(&old_results));
-        } else {
-            // A skipped history entry must not leave an older, unrelated
-            // pass available as if it were the immediate predecessor.
-            search_context.old_results.clear();
+        if search_context.searching != SearchMode::None {
+            return;
         }
+        let old_results = search_context.collect_results();
+        let worker = search_context.begin_search(SearchMode::Percent, self.pid, self.attached_start_time, self.process_name.clone());
         search_context.unknown_comparison = Some(comparison);
-
-        // Reset channel/cache
-        let (tx, rx) = SearchContext::result_channel();
-        search_context.results_sender = tx;
-        search_context.results_receiver = rx;
-        search_context.invalidate_cache();
 
         let pid = self.pid;
         let current_bytes = search_context.current_bytes.clone();
         let results_sender = search_context.results_sender.clone();
-        let search_complete = search_context.search_complete.clone();
         let cache_valid = search_context.cache_valid.clone();
         let memory_snapshot = search_context.memory_snapshot.clone();
         let previous_unknown_values = search_context.previous_unknown_values.clone();
@@ -1108,11 +1108,10 @@ impl GameCheetahEngine {
         };
 
         current_bytes.store(0, Ordering::SeqCst);
-        search_complete.store(false, Ordering::SeqCst);
 
         std::thread::spawn(move || {
-            if pid.try_into_process_handle().is_err() {
-                search_complete.store(true, Ordering::SeqCst);
+            if !worker.check_process() {
+                worker.finish();
                 return;
             }
 
@@ -1124,31 +1123,25 @@ impl GameCheetahEngine {
                 } else {
                     Vec::new()
                 };
-                // Use bounded channel to prevent memory bloat
-                let (local_tx, local_rx) = crossbeam_channel::bounded::<Vec<SearchResult>>(100);
-
-                // Spawn consumer thread
-                let results_sender_clone = results_sender.clone();
-                let consumer = std::thread::spawn(move || {
-                    let mut total = 0;
-                    while let Ok(batch) = local_rx.recv() {
-                        total += batch.len();
-                        let _ = results_sender_clone.send(batch);
-                    }
-                    total
-                });
                 pages.par_iter().for_each(|(base, old_mem)| {
+                    if worker.stopped() {
+                        return;
+                    }
                     let len = old_mem.len();
                     // Each worker gets its own handle (avoid sharing across threads)
                     let handle = match pid.try_into_process_handle() {
                         Ok(h) => h,
-                        Err(_) => {
+                        Err(err) => {
+                            worker.fail(AppError::Generic {
+                                message: format!("Failed to open process {pid}: {err}"),
+                            });
                             current_bytes.fetch_add(len, Ordering::SeqCst);
                             return;
                         }
                     };
 
-                    if let Ok(new_mem) = copy_address(*base, len, &handle) {
+                    let reader = worker.reader(memory_reader::ExactProcessReader(&handle));
+                    if let Ok(new_mem) = copy_address(*base, len, &reader) {
                         let mut local_out: Vec<SearchResult> = Vec::with_capacity(BATCH);
                         let mut local_prev: Vec<((usize, SearchType), [u8; 8])> = Vec::with_capacity(BATCH);
 
@@ -1162,7 +1155,10 @@ impl GameCheetahEngine {
                         };
 
                         // 4-byte aligned
-                        for i in (0..=(len.saturating_sub(4))).step_by(4) {
+                        for i in (0..len.saturating_sub(3)).step_by(4) {
+                            if i % (BATCH * 4) == 0 && worker.stopped() {
+                                return;
+                            }
                             let oldb = &old_mem[i..i + 4];
                             let newb = &new_mem[i..i + 4];
 
@@ -1182,13 +1178,16 @@ impl GameCheetahEngine {
                                 }
                             }
 
-                            if local_out.len() >= BATCH {
-                                let _ = local_tx.send(std::mem::take(&mut local_out));
+                            if local_out.len() >= BATCH && !worker.send(&results_sender, std::mem::take(&mut local_out)) {
+                                return;
                             }
                         }
 
                         // 8-byte aligned
-                        for i in (0..=(len.saturating_sub(8))).step_by(8) {
+                        for i in (0..len.saturating_sub(7)).step_by(8) {
+                            if i % (BATCH * 8) == 0 && worker.stopped() {
+                                return;
+                            }
                             let oldb = &old_mem[i..i + 8];
                             let newb = &new_mem[i..i + 8];
 
@@ -1201,13 +1200,13 @@ impl GameCheetahEngine {
                                 record(*base + i, SearchType::Double, newb, &mut local_out, &mut local_prev);
                             }
 
-                            if local_out.len() >= BATCH {
-                                let _ = local_tx.send(std::mem::take(&mut local_out));
+                            if local_out.len() >= BATCH && !worker.send(&results_sender, std::mem::take(&mut local_out)) {
+                                return;
                             }
                         }
 
-                        if !local_out.is_empty() {
-                            let _ = local_tx.send(local_out);
+                        if !local_out.is_empty() && !worker.send(&results_sender, local_out) {
+                            return;
                         }
 
                         if !local_prev.is_empty()
@@ -1222,9 +1221,6 @@ impl GameCheetahEngine {
 
                     current_bytes.fetch_add(len, Ordering::SeqCst);
                 });
-
-                drop(local_tx); // Signal completion
-                let _ = consumer.join();
 
                 // Clear snapshot after first pass to free memory
                 if let Ok(mut snap) = memory_snapshot.write() {
@@ -1245,7 +1241,10 @@ impl GameCheetahEngine {
                 // Group by address for single-read optimization
                 let mut addr_to_types: std::collections::BTreeMap<usize, Vec<(SearchType, [u8; 8])>> = std::collections::BTreeMap::new();
 
-                for r in old_results.iter() {
+                for (index, r) in old_results.iter().enumerate() {
+                    if index % BATCH == 0 && worker.stopped() {
+                        return;
+                    }
                     if let Some(old8) = prev_snapshot.get(&(r.addr, r.search_type)) {
                         addr_to_types.entry(r.addr).or_default().push((r.search_type, *old8));
                     }
@@ -1254,6 +1253,9 @@ impl GameCheetahEngine {
                 // Group addresses by page
                 let mut per_page: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
                 for addr in addr_to_types.keys() {
+                    if worker.stopped() {
+                        return;
+                    }
                     per_page.entry(addr & !(PAGE - 1)).or_default().push(*addr);
                 }
 
@@ -1264,6 +1266,9 @@ impl GameCheetahEngine {
                 let next_prev: Arc<Mutex<UnknownPrevMap>> = Arc::new(Mutex::new(HashMap::with_capacity(old_results.len())));
 
                 per_page_vec.par_iter().for_each(|(_page_base, addrs)| {
+                    if worker.stopped() {
+                        return;
+                    }
                     // Sort addresses within page for better cache locality
                     let mut sorted_addrs = addrs.clone();
                     sorted_addrs.sort_unstable();
@@ -1292,17 +1297,24 @@ impl GameCheetahEngine {
 
                     let handle = match pid.try_into_process_handle() {
                         Ok(h) => h,
-                        Err(_) => {
+                        Err(err) => {
+                            worker.fail(AppError::Generic {
+                                message: format!("Failed to open process {pid}: {err}"),
+                            });
                             current_bytes.fetch_add(sorted_addrs.len(), Ordering::Relaxed);
                             return;
                         }
                     };
 
-                    if let Ok(buf) = copy_address(min_addr, span_len, &handle) {
+                    let reader = worker.reader(memory_reader::ExactProcessReader(&handle));
+                    if let Ok(buf) = copy_address(min_addr, span_len, &reader) {
                         let mut local_out: Vec<SearchResult> = Vec::with_capacity(BATCH);
                         let mut local_prev: Vec<((usize, SearchType), [u8; 8])> = Vec::with_capacity(BATCH);
 
                         for addr in sorted_addrs {
+                            if worker.stopped() {
+                                return;
+                            }
                             if let Some(types) = addr_to_types.get(&addr) {
                                 let offset = addr - min_addr;
 
@@ -1342,15 +1354,15 @@ impl GameCheetahEngine {
                                         local_prev.push(((addr, *ty), pack_bytes(newb)));
                                     }
 
-                                    if local_out.len() >= BATCH {
-                                        let _ = results_sender.send(std::mem::take(&mut local_out));
+                                    if local_out.len() >= BATCH && !worker.send(&results_sender, std::mem::take(&mut local_out)) {
+                                        return;
                                     }
                                 }
                             }
                         }
 
-                        if !local_out.is_empty() {
-                            let _ = results_sender.send(local_out);
+                        if !local_out.is_empty() && !worker.send(&results_sender, local_out) {
+                            return;
                         }
 
                         if !local_prev.is_empty()
@@ -1374,7 +1386,7 @@ impl GameCheetahEngine {
             }
 
             cache_valid.store(false, Ordering::Release);
-            search_complete.store(true, Ordering::SeqCst);
+            worker.finish();
         });
     }
 
@@ -1384,13 +1396,14 @@ impl GameCheetahEngine {
             return;
         };
 
+        let worker = search_context.search_worker(SearchMode::Memory, self.pid, self.attached_start_time, self.process_name.clone());
         let current_bytes = search_context.current_bytes.clone();
         let pid = self.pid;
         let results_sender = search_context.results_sender.clone();
-        let search_complete = search_context.search_complete.clone();
         let cache_valid = search_context.cache_valid.clone();
 
-        search_complete.store(false, Ordering::SeqCst);
+        let overlap = search_text.len().max(search_text.encode_utf16().count().saturating_mul(2)).saturating_sub(1);
+        let chunks = split_search_regions(&regions, SEARCH_REGION_CHUNK_SIZE, overlap);
 
         std::thread::spawn(move || {
             // Use thread-local ProcessMemReader for efficient repeated reads
@@ -1399,7 +1412,11 @@ impl GameCheetahEngine {
                 static MEM_READER: std::cell::RefCell<Option<(process_memory::Pid, ProcessMemReader)>> = const { std::cell::RefCell::new(None) };
             }
 
-            regions.par_iter().for_each(|(start, size)| {
+            chunks.par_iter().for_each(|chunk| {
+                if worker.stopped() {
+                    return;
+                }
+                let (start, size) = (chunk.start, chunk.read_size);
                 #[cfg(target_os = "linux")]
                 let memory_result = MEM_READER.with(|reader_cell| {
                     let mut reader_opt = reader_cell.borrow_mut();
@@ -1414,21 +1431,27 @@ impl GameCheetahEngine {
                     }
 
                     if let Some((_, reader)) = &*reader_opt {
-                        reader.read_at(*start, *size)
+                        reader.read_at(start, size)
                     } else {
-                        fast_read_memory(pid, *start, *size)
+                        fast_read_memory(pid, start, size)
                     }
                 });
 
                 #[cfg(not(target_os = "linux"))]
-                let memory_result = fast_read_memory(pid, *start, *size);
+                let memory_result = fast_read_memory(pid, start, size);
+
+                worker.record_read(memory_result.as_ref().is_ok_and(|bytes| !bytes.is_empty()));
+                if worker.stopped() {
+                    return;
+                }
 
                 match memory_result {
                     Ok(memory) => {
-                        let results = search_string_in_memory(&memory, &search_text, *start);
+                        let mut results = search_string_in_memory(&memory, &search_text, start);
+                        results.retain(|result| result.addr < start.saturating_add(chunk.logical_size));
 
                         if !results.is_empty() {
-                            let _ = results_sender.send(results);
+                            worker.send(&results_sender, results);
                         }
                     }
                     Err(_) => {
@@ -1436,11 +1459,11 @@ impl GameCheetahEngine {
                     }
                 }
 
-                current_bytes.fetch_add(*size, Ordering::SeqCst);
+                current_bytes.fetch_add(chunk.logical_size, Ordering::SeqCst);
             });
 
             cache_valid.store(false, Ordering::Release);
-            search_complete.store(true, Ordering::SeqCst);
+            worker.finish();
         });
     }
 
@@ -1695,6 +1718,113 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn every_search_worker_can_cancel_without_losing_the_previous_state() {
+        let memory = vec![42_i32; 4096];
+        let address = memory.as_ptr() as usize;
+        for kind in 0..6 {
+            let mut engine = GameCheetahEngine {
+                pid: std::process::id() as process_memory::Pid,
+                ..Default::default()
+            };
+            let search = &mut engine.searches[0];
+            search.set_cached_results(vec![SearchResult::new(address, SearchType::Int)]);
+            search.search_complete.store(true, Ordering::Release);
+            search.store_memory_snapshot(address, vec![0; memory.len() * 4]);
+            search.previous_unknown_values.write().unwrap().insert((address, SearchType::Int), [0; 8]);
+            let original_history = search.old_results.len();
+            match kind {
+                0 => engine.spawn_parallel_search(SearchType::Int.from_string("42").unwrap(), vec![(address, memory.len() * 4)], 0),
+                1 => engine.spawn_string_search("*".into(), vec![(address, memory.len() * 4)], 0),
+                2 => engine.spawn_snapshot_capture(0, vec![(address, memory.len() * 4)]),
+                3 => engine.unknown_search_compare(0, UnknownComparison::Changed),
+                4 => {
+                    let old = engine.searches[0].collect_results();
+                    engine.spawn_update_search(0, old.clone(), vec![(0, old.len())], narrowing::PreparedSearch::new(&old, "42"));
+                }
+                _ => {
+                    let old = engine.searches[0].collect_results();
+                    engine.spawn_stability_filter(0, old.clone(), narrowing::PreparedSearch::new(&old, "42"), Duration::from_secs(30));
+                }
+            }
+            let worker = engine.searches[0].task.as_ref().unwrap().worker.clone();
+            engine.cancel_search(0);
+            assert!(worker.cancelled(), "kind {kind}");
+            let search = &engine.searches[0];
+            assert_eq!(search.get_result_count(), 1, "kind {kind}");
+            assert_eq!(search.collect_results()[0].addr, address);
+            assert_eq!(search.old_results.len(), original_history);
+            assert_eq!(search.memory_snapshot.read().unwrap().len(), 1);
+            assert_eq!(search.previous_unknown_values.read().unwrap().len(), 1);
+            assert_eq!(search.searching, SearchMode::None);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn large_unknown_search_and_first_snapshot_comparison_are_reversible() {
+        let mut engine = GameCheetahEngine {
+            pid: std::process::id() as process_memory::Pid,
+            ..Default::default()
+        };
+        // Test the former 100000-result history cutoff without allocating target memory.
+        engine.searches[0].set_cached_results((0..100_001).map(|i| SearchResult::new(0x1000 + i * 8, SearchType::Int)).collect());
+        engine.unknown_search_compare(0, UnknownComparison::Changed);
+        engine.cancel_search(0);
+        assert_eq!(engine.searches[0].get_result_count(), 100_001);
+        engine.searches[0].set_cached_results(Vec::new());
+        let value = Box::new(42_i32);
+        let address = &*value as *const i32 as usize;
+        engine.searches[0].store_memory_snapshot(address, vec![0; 4]);
+        engine.unknown_search_compare(0, UnknownComparison::Changed);
+        engine.cancel_search(0);
+        assert_eq!(engine.searches[0].get_result_count(), 0);
+        assert_eq!(engine.searches[0].memory_snapshot.read().unwrap().len(), 1);
+        assert_eq!(engine.searches[0].unknown_comparison, None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn failed_reads_restore_results_but_readable_no_matches_are_successful() {
+        let mut engine = GameCheetahEngine {
+            pid: std::process::id() as process_memory::Pid,
+            ..Default::default()
+        };
+        engine.searches[0].set_cached_results(vec![SearchResult::new(1, SearchType::Int)]);
+        engine.searches[0].search_value_text = "42".into();
+        engine.filter_searches(0);
+        assert_eq!(engine.searches[0].get_result_count(), 1);
+        assert!(matches!(engine.current_error(), Some(AppError::SearchReadFailed)));
+        assert!(engine.searches[0].old_results.is_empty());
+        let value = Box::new(43_i32);
+        engine.clear_errors();
+        engine.searches[0].set_cached_results(vec![SearchResult::new(&*value as *const i32 as usize, SearchType::Int)]);
+        engine.filter_searches(0);
+        assert_eq!(engine.searches[0].get_result_count(), 0);
+        assert!(engine.current_error().is_none());
+        assert_eq!(engine.searches[0].old_results.len(), 1);
+    }
+
+    #[test]
+    fn process_exit_rolls_back_all_tabs_and_clears_freezes() {
+        let mut engine = GameCheetahEngine::default();
+        engine.new_search();
+        for search in &mut engine.searches {
+            search.set_cached_results(vec![SearchResult::new(0x1000, SearchType::Int)]);
+            search.freezed_addresses.insert(0x1000);
+            search.begin_search(SearchMode::Memory, 0, 0, "gone".into());
+        }
+        engine.searches[0].task.as_ref().unwrap().worker.finish();
+        engine.poll_searches();
+        for search in &engine.searches {
+            assert_eq!(search.get_result_count(), 1);
+            assert_eq!(search.searching, SearchMode::None);
+            assert!(search.freezed_addresses.is_empty());
+        }
+        assert!(matches!(engine.current_error(), Some(AppError::ProcessExited { .. })));
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
