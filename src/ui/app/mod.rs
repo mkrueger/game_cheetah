@@ -66,6 +66,7 @@ pub struct App {
 
     /// One-shot request to return keyboard focus to the search value field.
     pub search_value_request_focus: bool,
+    pub(crate) search_value_select_all: bool,
 
     /// Selected result identity (address and type), independent of row order.
     pub selected_result: Option<crate::SearchResult>,
@@ -167,6 +168,7 @@ impl Default for App {
             rename_search_text: String::new(),
             rename_request_focus: false,
             search_value_request_focus: false,
+            search_value_select_all: false,
             selected_result: None,
             result_selection_request_scroll: false,
             result_edit_request_focus: false,
@@ -259,12 +261,80 @@ impl App {
 
     /// Discard result interaction when the active result set is replaced.
     pub fn clear_result_interaction(&mut self) {
+        if let Some(search) = self.state.searches.get_mut(self.state.current_search) {
+            search.selected_result = None;
+        }
         self.address_editor = None;
         self.selected_result = None;
         self.editing_result = None;
         self.result_selection_request_scroll = false;
         self.result_edit_request_focus = false;
         self.hovered_result_row = None;
+    }
+
+    /// Tab changes end editing, but never discard browsing state or write values.
+    pub(crate) fn remember_search_view(&mut self) {
+        let selected = self.selected_result;
+        self.clear_result_interaction();
+        if let Some(search) = self.state.searches.get_mut(self.state.current_search) {
+            search.selected_result = selected;
+        }
+        self.search_value_request_focus = false;
+        self.search_value_select_all = false;
+    }
+
+    pub(crate) fn restore_search_view(&mut self) {
+        self.selected_result = self.state.searches[self.state.current_search].selected_result;
+        // Scroll is held by egui under the context's stable view_id, not its index.
+        self.result_selection_request_scroll = false;
+        self.clear_change_tracker();
+    }
+
+    pub(crate) fn prepare_refinement(&mut self) {
+        self.remember_search_view();
+        self.restore_search_view();
+        self.state.searches[self.state.current_search].refinement_pending = true;
+    }
+
+    /// Runs after engine polling and also on view-only/inline completion paths.
+    pub(crate) fn finish_refinement_ui(&mut self, ctx: &egui::Context) {
+        for (index, search) in self.state.searches.iter_mut().enumerate() {
+            if !search.refinement_pending || search.searching != crate::SearchMode::None {
+                continue;
+            }
+            search.refinement_pending = false;
+            let selected = if index == self.state.current_search {
+                self.selected_result
+            } else {
+                search.selected_result
+            };
+            let results = search.collect_results();
+            search.selected_result = selected.filter(|selected| {
+                results
+                    .binary_search_by_key(&(selected.addr, selected.search_type as u8), |r| (r.addr, r.search_type as u8))
+                    .is_ok()
+            });
+            if index == self.state.current_search {
+                self.selected_result = search.selected_result;
+                // Keep a surviving selection visible after rows before it vanish.
+                self.result_selection_request_scroll = self.selected_result.is_some();
+                if search.search_complete.load(std::sync::atomic::Ordering::Acquire)
+                    && self.app_state == AppState::InProcess
+                    && ctx.input(|input| input.focused)
+                    && self.editing_result.is_none()
+                    && self.address_editor.is_none()
+                    && !self.pointer_scanner.open
+                    && !egui::Popup::is_any_open(ctx)
+                    && ctx.memory(|memory| {
+                        let focused = memory.focused();
+                        focused.is_none() || focused == search.search_input_id || focused == Some(egui::Id::new("result_table_focus"))
+                    })
+                {
+                    self.search_value_request_focus = true;
+                    self.search_value_select_all = true;
+                }
+            }
+        }
     }
 
     pub fn clear_change_tracker(&mut self) {
@@ -303,5 +373,58 @@ impl eframe::App for App {
                 _ => {}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod search_view_tests {
+    use super::*;
+    use crate::{SearchResult, SearchType};
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn completing_background_tab_keeps_active_focus_and_selection() {
+        let mut app = App {
+            app_state: AppState::InProcess,
+            ..Default::default()
+        };
+        let selected = SearchResult::new(0x1000, SearchType::Int);
+        app.state.searches[0].set_cached_results(vec![selected]);
+        app.selected_result = Some(selected);
+        app.prepare_refinement();
+        app.new_search();
+        let active = SearchResult::new(0x2000, SearchType::Int);
+        app.state.searches[1].set_cached_results(vec![active]);
+        app.selected_result = Some(active);
+        app.search_value_request_focus = false;
+        app.state.searches[0].search_complete.store(true, Ordering::Release);
+        let ctx = egui::Context::default();
+        let editing = egui::Id::new("other_input");
+        ctx.memory_mut(|memory| memory.request_focus(editing));
+        app.finish_refinement_ui(&ctx);
+        assert_eq!(app.selected_result.unwrap().addr, active.addr);
+        assert_eq!(ctx.memory(|memory| memory.focused()), Some(editing));
+        assert!(!app.search_value_request_focus);
+        assert!(!app.search_value_select_all);
+        app.switch_search(0);
+        assert_eq!(app.selected_result.unwrap().addr, selected.addr);
+        assert!(!app.search_value_request_focus);
+    }
+
+    #[test]
+    fn refinement_never_steals_focus_from_another_input() {
+        let mut app = App {
+            app_state: AppState::InProcess,
+            ..Default::default()
+        };
+        app.state.searches[0].search_complete.store(true, Ordering::Release);
+        app.state.searches[0].refinement_pending = true;
+        let ctx = egui::Context::default();
+        let editing = egui::Id::new("filter_input");
+        ctx.memory_mut(|memory| memory.request_focus(editing));
+        app.finish_refinement_ui(&ctx);
+        assert_eq!(ctx.memory(|memory| memory.focused()), Some(editing));
+        assert!(!app.search_value_request_focus);
+        assert!(!app.search_value_select_all);
     }
 }

@@ -49,6 +49,7 @@ fn icon_button(ui: &mut egui::Ui, visible: bool, glyph: &str, tooltip: String) -
 }
 
 pub fn view_in_process(app: &mut App, ui: &mut egui::Ui) {
+    app.finish_refinement_ui(ui.ctx());
     top_bar(app, ui);
     crate::ui::auto_save::show(app, ui);
     error_bar(app, ui);
@@ -414,7 +415,7 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
     let current_bytes = search_context.current_bytes.load(Ordering::Acquire);
     let total_bytes = search_context.total_bytes;
     let has_pointers = search_context.has_pointer_addresses();
-    if search_results == 0 && app.selected_result.is_some() {
+    if searching == SearchMode::None && search_results == 0 && app.selected_result.is_some() {
         app.clear_result_interaction();
     }
 
@@ -455,25 +456,36 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
                             ui.label(fl!(crate::LANGUAGE_LOADER, "search-type-label"));
                         } else {
                             ui.label(fl!(crate::LANGUAGE_LOADER, "value-label"));
-                            let response = ui.add(
-                                egui::TextEdit::singleline(&mut value_text)
-                                    .id_salt("search_value_input")
-                                    .hint_text(fl!(
-                                        crate::LANGUAGE_LOADER,
-                                        "search-value-label",
-                                        valuetype = selected_type.get_short_description_text()
-                                    ))
-                                    .desired_width(SEARCH_FIELD_WIDTH.min((card_width - 360.0).max(120.0)))
-                                    .margin(egui::Margin::symmetric(10, 8)),
-                            );
-                            if app.search_value_request_focus {
+                            let mut output = egui::TextEdit::singleline(&mut value_text)
+                                .id_salt(("search_value_input", app.state.searches[search_index].view_id))
+                                .hint_text(fl!(
+                                    crate::LANGUAGE_LOADER,
+                                    "search-value-label",
+                                    valuetype = selected_type.get_short_description_text()
+                                ))
+                                .desired_width(SEARCH_FIELD_WIDTH.min((card_width - 360.0).max(120.0)))
+                                .margin(egui::Margin::symmetric(10, 8))
+                                .show(ui);
+                            let response = output.response;
+                            app.state.searches[search_index].search_input_id = Some(response.id);
+                            let restoring_focus = idle && app.search_value_request_focus;
+                            if restoring_focus {
                                 response.request_focus();
                                 app.search_value_request_focus = false;
+                                if app.search_value_select_all {
+                                    output.state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+                                        egui::text::CCursor::new(0),
+                                        egui::text::CCursor::new(value_text.chars().count()),
+                                    )));
+                                    output.state.store(ui.ctx(), response.id);
+                                    app.search_value_select_all = false;
+                                }
                             }
                             if response.changed() {
                                 app.state.searches[search_index].search_value_text = value_text.clone();
                             }
-                            enter_search = (response.has_focus() || response.lost_focus()) && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                            enter_search =
+                                !restoring_focus && (response.has_focus() || response.lost_focus()) && ui.input(|input| input.key_pressed(egui::Key::Enter));
                         }
                         type_picker(app, ui, show_type_picker, selected_type);
                     });
@@ -977,6 +989,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     // table's interaction area to the window edge, so wheel scrolling also
     // works over the otherwise-unused space on the right.
     let mut builder = TableBuilder::new(ui)
+        .id_salt(("search_results", app.state.searches[search_index].view_id))
         .striped(true)
         .resizable(true)
         .sense(egui::Sense::click())
@@ -990,6 +1003,10 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
         builder = builder.column(Column::initial(56.0).at_least(48.0));
     }
     builder = builder.column(Column::remainder().resizable(false));
+    if app.state.searches[search_index].reset_result_scroll {
+        builder = builder.vertical_scroll_offset(0.0);
+        app.state.searches[search_index].reset_result_scroll = false;
+    }
     if app.result_selection_request_scroll {
         if let Some(index) = selected_index {
             builder = builder.scroll_to_row(index, None);

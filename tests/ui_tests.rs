@@ -1,7 +1,6 @@
 //! UI behavior tests. These were originally written against the
 //! `Message`-based update loop; with the egui port they target the
-//! direct-call methods on [`App`] instead. The semantics being asserted
-//! are unchanged.
+//! direct-call methods on [`App`] instead, including per-tab result selection.
 
 use game_cheetah::{App, AppState, SearchMode, SearchResult, SearchType};
 
@@ -283,7 +282,7 @@ fn test_result_interaction_defaults_and_explicit_reset() {
 }
 
 #[test]
-fn test_tab_and_reset_actions_clear_result_interaction() {
+fn test_tab_and_reset_actions_end_editing_and_only_retain_the_kept_tabs_selection() {
     for action in [
         "switch",
         "switch_same",
@@ -291,6 +290,7 @@ fn test_tab_and_reset_actions_clear_result_interaction() {
         "close_current",
         "close_other",
         "close_others",
+        "close_others_current",
         "clear",
         "undo",
         "main_menu",
@@ -307,14 +307,67 @@ fn test_tab_and_reset_actions_clear_result_interaction() {
             "close_current" => app.close_search(2),
             "close_other" => app.close_search(0),
             "close_others" => app.close_other_searches(1),
+            "close_others_current" => app.close_other_searches(2),
             "clear" => app.clear_results(),
             "undo" => app.undo_search(),
             "main_menu" => app.back_to_main_menu(),
             _ => unreachable!(),
         }
 
-        assert_result_interaction_cleared(&app);
+        if matches!(action, "switch_same" | "close_other" | "close_others_current") {
+            assert_eq!(result_identity(app.selected_result), Some((0x2000, SearchType::Int)), "{action}");
+            assert!(app.editing_result.is_none(), "{action}");
+            assert!(!app.result_selection_request_scroll, "{action}");
+            assert!(!app.result_edit_request_focus, "{action}");
+            assert!(app.hovered_result_row.is_none(), "{action}");
+        } else {
+            // In particular, closing others while keeping the unselected tab 1
+            // must NOT transfer the selection from the discarded active tab 2.
+            assert_result_interaction_cleared(&app);
+        }
     }
+}
+
+#[test]
+fn test_tab_actions_restore_selection_by_address_and_type_not_row_or_tab_index() {
+    let mut app = create_test_app();
+    let int = SearchResult::new(0x2000, SearchType::Int);
+    let byte = SearchResult::new(0x2000, SearchType::Byte);
+    app.state.searches[0].set_cached_results(vec![byte, int]);
+    app.selected_result = Some(int);
+
+    app.new_search();
+    assert_result_interaction_cleared(&app);
+    app.state.searches[1].set_cached_results(vec![byte, int]);
+    app.selected_result = Some(byte);
+
+    app.switch_search(0);
+    assert_eq!(result_identity(app.selected_result), Some((int.addr, int.search_type)));
+    // Insert an earlier row while the second tab is inactive.
+    app.state.searches[1]
+        .results_sender
+        .send(vec![SearchResult::new(0x1000, SearchType::Int)])
+        .unwrap();
+    app.switch_search(1);
+    assert_eq!(app.state.searches[1].collect_results()[1].addr, byte.addr);
+    assert_eq!(result_identity(app.selected_result), Some((byte.addr, byte.search_type)));
+
+    app.close_search(0);
+    assert_eq!(app.state.current_search, 0);
+    assert_eq!(result_identity(app.selected_result), Some((byte.addr, byte.search_type)));
+    app.new_search();
+    assert_result_interaction_cleared(&app);
+    app.close_search(1);
+    assert_eq!(result_identity(app.selected_result), Some((byte.addr, byte.search_type)));
+
+    app.new_search();
+    app.state.searches[1].set_cached_results(vec![int]);
+    app.selected_result = Some(int);
+    app.close_other_searches(0);
+    assert_eq!(app.state.searches.len(), 1);
+    assert_eq!(result_identity(app.selected_result), Some((byte.addr, byte.search_type)));
+    assert!(app.editing_result.is_none());
+    assert!(!app.result_selection_request_scroll);
 }
 
 #[test]

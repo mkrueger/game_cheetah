@@ -83,6 +83,7 @@ impl App {
 
         self.poll_pointer_scan();
         self.poll_automatic_save();
+        self.finish_refinement_ui(ctx);
 
         let address_interval = if self.state.searches.iter().any(|search| search.has_pointer_addresses()) {
             Duration::from_millis(100)

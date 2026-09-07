@@ -1,8 +1,8 @@
 //! Headless integration regressions for the real in-process view.
 //!
-//! No locale/environment mutation, attachment or search dispatch. Synthetic
-//! rows use PID 0; Linux-only editing tests touch exclusively owned test data.
-//! Only the view is run, not App::logic (process polling/background work).
+//! No locale/environment mutation or game attachment. Synthetic rows use PID 0;
+//! Linux-only editing/narrowing tests touch exclusively owned test data.
+//! Only the view is run, not App::logic; narrowing explicitly polls the engine.
 
 use std::sync::atomic::Ordering;
 
@@ -201,6 +201,117 @@ fn result_identities(app: &App) -> Vec<(usize, SearchType)> {
 fn click_address(app: &mut App, ctx: &Context, address: usize) {
     let output = settle(app, ctx, LARGE);
     click(app, ctx, LARGE, text_rect(&output, &format!("0x{address:X}")).center());
+}
+
+fn visible_address_rows(output: &FullOutput) -> Vec<(usize, f32)> {
+    let mut rows: Vec<_> = shapes(output)
+        .into_iter()
+        .filter_map(|(clip, shape)| {
+            let Shape::Text(text) = shape else { return None };
+            let address = usize::from_str_radix(text.galley.job.text.strip_prefix("0x")?, 16).ok()?;
+            let rect = text.galley.rect.translate(text.pos.to_vec2());
+            clip.contains(rect.center()).then_some((address, rect.center().y))
+        })
+        .collect();
+    rows.sort_by(|a, b| a.1.total_cmp(&b.1));
+    assert!(rows.len() >= 3, "Expected several visible virtualized table rows: {rows:?}");
+    rows
+}
+
+fn assert_same_visible_rows(actual: &FullOutput, expected: &[(usize, f32)]) {
+    let actual = visible_address_rows(actual);
+    assert_eq!(actual.len(), expected.len(), "Visible row count changed: {actual:?} vs {expected:?}");
+    for ((address, y), (expected_address, expected_y)) in actual.iter().zip(expected) {
+        assert_eq!(address, expected_address, "Native table scroll restored a different row");
+        assert!((y - expected_y).abs() < 0.1, "Row {address:#X} moved from {expected_y} to {y}");
+    }
+}
+
+fn wheel_table(app: &mut App, ctx: &Context, delta: f32) -> FullOutput {
+    let output = settle(app, ctx, LARGE);
+    let rows = visible_address_rows(&output);
+    let pos = text_rect(&output, &format!("0x{:X}", rows[rows.len() / 2].0)).center();
+    frame(app, ctx, LARGE, vec![Event::PointerMoved(pos)]);
+    frame(
+        app,
+        ctx,
+        LARGE,
+        vec![Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, delta),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        }],
+    );
+    // Let egui consume its smoothed wheel delta using frame time, not sleeps.
+    for _ in 0..120 {
+        frame(app, ctx, LARGE, vec![]);
+    }
+    frame(app, ctx, LARGE, vec![Event::PointerGone])
+}
+
+#[test]
+fn native_table_scroll_and_selection_are_per_tab_even_after_closing_a_preceding_tab() {
+    let mut app = app_with_results(300);
+    let ctx = context();
+    click_address(&mut app, &ctx, 0x2000);
+    let output = wheel_table(&mut app, &ctx, -1300.0);
+    let first_rows = visible_address_rows(&output);
+    assert!(first_rows[0].0 > 0x2000, "Wheel must really scroll the native table");
+    assert_eq!(identity(app.selected_result), Some((0x2000, SearchType::Int)));
+
+    app.new_search();
+    let results = app.state.searches[0].collect_results();
+    let search = &mut app.state.searches[1];
+    search.search_type = SearchType::Int;
+    search.search_value_text = "12345".to_owned();
+    search.set_cached_results(results.to_vec());
+    search.search_complete.store(true, Ordering::Release);
+    let output = settle(&mut app, &ctx, LARGE);
+    assert_eq!(visible_address_rows(&output)[0].0, 0x1000, "New tab must start at the top");
+    assert!(app.selected_result.is_none());
+    click_address(&mut app, &ctx, 0x4000);
+    let output = wheel_table(&mut app, &ctx, -2600.0);
+    let second_rows = visible_address_rows(&output);
+    assert!(second_rows[0].0 > first_rows[0].0, "Tabs must have distinct nonzero scroll positions");
+
+    for _ in 0..3 {
+        app.switch_search(0);
+        assert_eq!(identity(app.selected_result), Some((0x2000, SearchType::Int)));
+        assert_same_visible_rows(&settle(&mut app, &ctx, LARGE), &first_rows);
+        app.switch_search(1);
+        assert_eq!(identity(app.selected_result), Some((0x4000, SearchType::Int)));
+        assert_same_visible_rows(&settle(&mut app, &ctx, LARGE), &second_rows);
+        assert!(app.editing_result.is_none());
+    }
+    app.close_search(0);
+    assert_eq!(app.state.current_search, 0);
+    assert_eq!(identity(app.selected_result), Some((0x4000, SearchType::Int)));
+    assert_same_visible_rows(&settle(&mut app, &ctx, LARGE), &second_rows);
+
+    app.new_search();
+    let results = app.state.searches[0].collect_results();
+    app.state.searches[1].set_cached_results(results.to_vec());
+    app.state.searches[1].search_complete.store(true, Ordering::Release);
+    assert_eq!(visible_address_rows(&settle(&mut app, &ctx, LARGE))[0].0, 0x1000);
+    assert!(app.selected_result.is_none());
+    app.close_other_searches(0);
+    assert_same_visible_rows(&settle(&mut app, &ctx, LARGE), &second_rows);
+    assert_eq!(identity(app.selected_result), Some((0x4000, SearchType::Int)));
+}
+
+#[test]
+fn restoring_a_tab_clears_a_missing_selected_type_without_selecting_the_same_address() {
+    let mut app = app_with_results(3);
+    let ctx = context();
+    click_address(&mut app, &ctx, 0x2000);
+    app.new_search();
+    app.state.searches[0].set_cached_results(vec![SearchResult::new(0x2000, SearchType::Byte)]);
+    app.switch_search(0);
+    settle(&mut app, &ctx, LARGE);
+    assert!(app.selected_result.is_none());
+    assert!(app.editing_result.is_none());
+    assert_eq!(result_identities(&app), vec![(0x2000, SearchType::Byte)]);
 }
 
 #[test]
@@ -1138,6 +1249,214 @@ fn result_actions_only_appear_on_cell_hover_even_when_selected() {
         let output = frame(&mut app, &ctx, LARGE, vec![Event::PointerGone]);
         assert!(icons(&output).is_empty(), "Leaving the row must hide actions again");
         assert_eq!(app.selected_result.is_some(), selected);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn narrow_owned_results(count: usize, selected_survives: bool, replace_text: bool) {
+    use std::time::{Duration, Instant};
+
+    // Both concrete types at the target address can survive, or Int32 alone
+    // can survive while the selected Int64 interpretation is filtered away.
+    let mut values = vec![54321_i64; count].into_boxed_slice();
+    values[5] = if selected_survives { 12345 } else { (1_i64 << 32) + 12345 };
+    values[count - 1] = 12345;
+    let before = values.to_vec();
+    let target = &values[5] as *const i64 as usize;
+    let last = &values[count - 1] as *const i64 as usize;
+    let mut app = app_with_results(0);
+    app.state.pid = std::process::id() as _;
+    app.state.show_results = true;
+    let search = &mut app.state.searches[0];
+    search.search_type = SearchType::Guess;
+    search.search_value_text = "12345".to_owned();
+    search.set_cached_results(values.iter().map(|v| SearchResult::new(v as *const i64 as usize, SearchType::Int64)).collect());
+    search.search_complete.store(true, Ordering::Release);
+    let ctx = context();
+    click_address(&mut app, &ctx, target);
+    assert_eq!(identity(app.selected_result), Some((target, SearchType::Int64)));
+    assert!(app.editing_result.is_none(), "Address selection must not enter the value editor");
+    app.state.searches[0]
+        .results_sender
+        .send(vec![SearchResult::new(target, SearchType::Int)])
+        .unwrap();
+    settle(&mut app, &ctx, LARGE);
+    assert_eq!(identity(app.selected_result), Some((target, SearchType::Int64)));
+
+    // Exercise the public App dispatch, not a direct engine filter or a
+    // fabricated completed flag. There are count + 1 actual input hits.
+    app.start_search();
+    assert_eq!(
+        app.state.searches[0].searching,
+        if count < 1024 { SearchMode::None } else { SearchMode::Percent }
+    );
+    assert_eq!(
+        identity(app.selected_result),
+        Some((target, SearchType::Int64)),
+        "Dispatch must retain selection"
+    );
+    assert!(app.editing_result.is_none());
+    assert!(!app.result_edit_request_focus);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        app.state.poll_searches();
+        frame(&mut app, &ctx, LARGE, vec![]);
+        assert!(app.editing_result.is_none(), "Narrowing must never open the result editor");
+        assert!(app.state.current_error().is_none(), "Narrowing failed: {:?}", app.state.current_error());
+        if app.state.searches[0].searching == SearchMode::None {
+            break;
+        }
+        assert!(Instant::now() < deadline, "Own-process narrowing did not finish");
+        std::thread::yield_now();
+    }
+    let output = settle(&mut app, &ctx, LARGE);
+    assert!(app.state.searches[0].search_complete.load(Ordering::Acquire));
+    assert_eq!(app.state.searches[0].current_bytes.load(Ordering::Acquire), count + 1);
+    let mut expected = vec![(target, SearchType::Int)];
+    if selected_survives {
+        expected.push((target, SearchType::Int64));
+    }
+    expected.push((last, SearchType::Int64));
+    assert_eq!(result_identities(&app), expected);
+    let selected = selected_survives.then_some((target, SearchType::Int64));
+    assert_eq!(
+        identity(app.selected_result),
+        selected,
+        "Selection must match address AND concrete type after narrowing"
+    );
+    text_rect(&output, &format!("0x{target:X}"));
+    assert_eq!(&*values, before.as_slice(), "Narrowing changed owned target memory");
+
+    if replace_text {
+        // No click, select-all shortcut or injected focus: completion itself
+        // must focus the search field and select its ENTIRE previous value.
+        frame(&mut app, &ctx, LARGE, vec![Event::Text("67890".to_owned())]);
+        assert!(app.editing_result.is_none(), "Typing after completion entered a result editor");
+        assert_eq!(&*values, before.as_slice(), "Typing the next query wrote target memory");
+        assert_eq!(
+            app.state.searches[0].search_value_text,
+            "67890",
+            "Completion must select all search text for replacement (focused={:?}, wants_keyboard={})",
+            ctx.memory(|memory| memory.focused()),
+            ctx.egui_wants_keyboard_input()
+        );
+        assert_eq!(identity(app.selected_result), selected);
+        assert_eq!(result_identities(&app), expected);
+        assert_eq!(app.state.searches[0].searching, SearchMode::None, "Text alone must not dispatch another search");
+        assert_eq!(app.state.searches[0].old_results.len(), 1);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn inline_start_search_preserves_selected_type_and_selects_all_query_text() {
+    narrow_owned_results(12, true, true);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn enter_and_button_narrowing_return_to_search_field_without_duplicate_dispatch() {
+    for via_enter in [false, true] {
+        let mut value = Box::new(12345_i32);
+        let mut app = own_value_app(&mut value);
+        app.state.searches[0].search_value_text = "12345".into();
+        let ctx = context();
+        let output = settle(&mut app, &ctx, LARGE);
+        if via_enter {
+            // The first matching value is the search field above the result table.
+            click(&mut app, &ctx, LARGE, text_rect(&output, "12345").center());
+            press_key(&mut app, &ctx, Key::Enter);
+        } else {
+            click(&mut app, &ctx, LARGE, text_rect(&output, &fl!(LANGUAGE_LOADER, "update-button")).center());
+        }
+        settle(&mut app, &ctx, LARGE);
+        assert_eq!(app.state.searches[0].old_results.len(), 1);
+        frame(&mut app, &ctx, LARGE, vec![Event::Text("54321".into())]);
+        assert_eq!(app.state.searches[0].search_value_text, "54321", "via_enter={via_enter}");
+        assert!(app.editing_result.is_none());
+        assert_eq!(*value, 12345);
+        assert_eq!(app.state.searches[0].old_results.len(), 1);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn asynchronous_start_search_preserves_selected_type_and_selects_all_query_text() {
+    narrow_owned_results(4096, true, true);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn inline_start_search_clears_missing_selected_type_even_when_address_survives() {
+    narrow_owned_results(12, false, false);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn asynchronous_start_search_clears_missing_selected_type_even_when_address_survives() {
+    narrow_owned_results(4096, false, false);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn tab_actions_discard_real_uncommitted_edit_buffers_without_writing() {
+    for action in ["switch", "switch_same", "new", "close_current", "close_other", "close_others", "keep_inactive"] {
+        let mut values = Box::new([24680_i32, 13579]);
+        let mut app = own_value_app(&mut values[0]);
+        app.confirm_value_writes = true;
+        let first = SearchResult::new(&values[0] as *const i32 as usize, SearchType::Int);
+        let second = SearchResult::new(&values[1] as *const i32 as usize, SearchType::Int);
+        let ctx = context();
+        click_address(&mut app, &ctx, first.addr);
+        app.new_search();
+        app.state.searches[1].search_type = SearchType::Int;
+        app.state.searches[1].set_cached_results(vec![second]);
+        app.state.searches[1].search_complete.store(true, Ordering::Release);
+        click_address(&mut app, &ctx, second.addr);
+        press_key(&mut app, &ctx, Key::F2);
+        press_key(&mut app, &ctx, Key::End);
+        frame(&mut app, &ctx, LARGE, vec![Event::Text("9".to_owned())]);
+        assert_eq!(app.editing_result.as_ref().unwrap().1, "135799");
+        assert_eq!(*values, [24680, 13579]);
+
+        let expected = match action {
+            "switch" => {
+                app.switch_search(0);
+                Some(first)
+            }
+            "switch_same" => {
+                app.switch_search(1);
+                Some(second)
+            }
+            "new" => {
+                app.new_search();
+                None
+            }
+            "close_current" => {
+                app.close_search(1);
+                Some(first)
+            }
+            "close_other" => {
+                app.close_search(0);
+                Some(second)
+            }
+            "close_others" => {
+                app.close_other_searches(1);
+                Some(second)
+            }
+            "keep_inactive" => {
+                app.close_other_searches(0);
+                Some(first)
+            }
+            _ => unreachable!(),
+        };
+        assert!(app.editing_result.is_none(), "{action}");
+        assert!(!app.result_edit_request_focus, "{action}");
+        settle(&mut app, &ctx, LARGE);
+        assert_eq!(identity(app.selected_result), identity(expected), "{action}");
+        assert!(app.editing_result.is_none(), "Tab restoration must not resurrect the editor: {action}");
+        assert_eq!(*values, [24680, 13579], "Tab action committed an unfinished edit: {action}");
+        assert!(app.state.current_error().is_none(), "{action}");
     }
 }
 

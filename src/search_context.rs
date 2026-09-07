@@ -46,6 +46,12 @@ pub enum SearchMode {
 }
 
 pub struct SearchContext {
+    /// Ephemeral UI identity: survives tab reordering, never saved to disk.
+    pub(crate) view_id: u64,
+    pub(crate) selected_result: Option<SearchResult>,
+    pub(crate) refinement_pending: bool,
+    pub(crate) search_input_id: Option<egui::Id>,
+    pub(crate) reset_result_scroll: bool,
     /// Metadata stays out of the compact scan result. Only edited/loaded
     /// entries need it; unresolved entries must never enter a memory scan.
     pub address_overrides: HashMap<(usize, SearchType), crate::AddressSpec>,
@@ -92,8 +98,14 @@ pub struct SearchContext {
 
 impl SearchContext {
     pub fn new(description: String) -> Self {
+        static NEXT_VIEW_ID: AtomicUsize = AtomicUsize::new(1);
         let (tx, rx) = Self::result_channel();
         Self {
+            view_id: NEXT_VIEW_ID.fetch_add(1, Ordering::Relaxed) as u64,
+            selected_result: None,
+            refinement_pending: false,
+            search_input_id: None,
+            reset_result_scroll: false,
             address_overrides: HashMap::new(),
             unresolved_addresses: Vec::new(),
             description,
@@ -236,6 +248,9 @@ impl SearchContext {
 
     /// Reset a search after the engine has released this tab's freezes.
     pub(crate) fn clear_results(&mut self) {
+        self.selected_result = None;
+        self.refinement_pending = false;
+        self.reset_result_scroll = true;
         self.address_overrides.clear();
         self.unresolved_addresses.clear();
         self.task.take();

@@ -52,8 +52,9 @@ impl App {
     // ---- Search tabs ---------------------------------------------------
 
     pub fn new_search(&mut self) {
-        self.clear_result_interaction();
+        self.remember_search_view();
         self.state.new_search();
+        self.restore_search_view();
         self.search_value_request_focus = true;
         self.clear_change_tracker();
     }
@@ -62,7 +63,7 @@ impl App {
         if index >= self.state.searches.len() {
             return;
         }
-        self.clear_result_interaction();
+        self.remember_search_view();
         self.state.remove_freezes(index);
         self.state.searches.remove(index);
         if self.state.searches.is_empty() {
@@ -73,7 +74,7 @@ impl App {
         } else if self.state.current_search >= self.state.searches.len() {
             self.state.current_search = self.state.searches.len() - 1;
         }
-        self.clear_change_tracker();
+        self.restore_search_view();
     }
 
     /// Close every search except `keep_index`. The kept search becomes the
@@ -82,6 +83,7 @@ impl App {
         if keep_index >= self.state.searches.len() {
             return;
         }
+        self.remember_search_view();
         // Walk from the end so indices stay valid as we remove.
         for i in (0..self.state.searches.len()).rev() {
             if i != keep_index {
@@ -90,14 +92,14 @@ impl App {
             }
         }
         self.state.current_search = 0;
-        self.clear_result_interaction();
-        self.clear_change_tracker();
+        self.restore_search_view();
     }
 
     pub fn switch_search(&mut self, index: usize) {
         if index < self.state.searches.len() {
+            self.remember_search_view();
             self.state.current_search = index;
-            self.clear_result_interaction();
+            self.restore_search_view();
             self.search_value_request_focus = self.state.searches[index].get_result_count() == 0;
             self.clear_change_tracker();
         }
@@ -150,10 +152,11 @@ impl App {
         match search_type.from_string(&current_search.search_value_text) {
             Ok(_) => {
                 let has_results = current_search.get_result_count() > 0;
-                self.clear_result_interaction();
                 if !has_results || search_type == SearchType::String {
+                    self.clear_result_interaction();
                     self.state.initial_search(search_index);
                 } else {
+                    self.prepare_refinement();
                     self.state.filter_searches(search_index);
                 }
             }
@@ -164,7 +167,7 @@ impl App {
     }
 
     pub fn unknown_search(&mut self, comparison: crate::UnknownComparison) {
-        self.clear_result_interaction();
+        self.prepare_refinement();
         self.state.unknown_search_compare(self.state.current_search, comparison);
     }
 
@@ -178,7 +181,7 @@ impl App {
         }
         match search.result_filter() {
             Ok(filter) => {
-                self.clear_result_interaction();
+                self.prepare_refinement();
                 self.clear_change_tracker();
                 self.state.filter_results(index, filter);
             }
@@ -195,6 +198,7 @@ impl App {
     }
 
     pub fn cancel_search(&mut self) {
+        self.state.searches[self.state.current_search].refinement_pending = false;
         self.state.cancel_search(self.state.current_search);
         self.clear_result_interaction();
         self.clear_change_tracker();

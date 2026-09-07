@@ -240,6 +240,20 @@ especially one through allocators or system libraries, is only a candidate—not
 of a stable game object. Even a successful restart check does not guarantee other
 savegames or future game versions.
 
+## Repeating searches and switching tabs
+
+After narrowing completes in the active tab, the search field receives focus and
+its previous value is selected: type the next value and press Enter. This does not
+open a result editor or write game memory. Completion in a background tab, another
+active input or an unfocused application does not steal focus.
+
+Each search tab remembers its selected address/type and result-table scroll
+position, including when preceding tabs are closed. Narrowing retains a selected
+hit only if both its address and concrete data type survive, and brings it back
+into view. Switching tabs ends result editing without committing buffered edits;
+live writes already performed are not undone. Explicit Reset clears the selection
+and resets the result scroll position.
+
 ## Status messages and recovery
 
 Save/Load and error messages show a short summary. **Details** expands the original
