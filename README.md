@@ -329,6 +329,15 @@ Release artifacts usually include:
 - Windows x64 ZIP containing the executable
 - macOS universal `.dmg`
 
+### Fedora and Nobara (COPR)
+
+Game Cheetah is available for Fedora 43, Fedora 44, Fedora 45, and Fedora Rawhide:
+
+```bash
+sudo dnf copr enable omnibrain/game-cheetah
+sudo dnf install game-cheetah
+```
+
 ### Install with Cargo
 
 Game Cheetah is also published on crates.io:

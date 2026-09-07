@@ -86,6 +86,7 @@ package() {
     
     # Install desktop file
     install -Dm644 "build/linux/${APP_NAME}.desktop" "\$pkgdir/usr/share/applications/$PKG_NAME.desktop"
+    install -Dm644 "build/linux/io.github.mkrueger.game_cheetah.metainfo.xml" "\$pkgdir/usr/share/metainfo/io.github.mkrueger.game_cheetah.metainfo.xml"
     
     # Fix the desktop file to use correct binary and icon names
     sed -i "s/Exec=.*$/Exec=$PKG_NAME/" "\$pkgdir/usr/share/applications/$PKG_NAME.desktop"

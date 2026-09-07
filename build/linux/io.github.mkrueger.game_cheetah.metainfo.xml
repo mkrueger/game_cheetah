@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2026 Mike Krüger -->
+<component type="desktop-application">
+  <id>io.github.mkrueger.game_cheetah</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+
+  <name>Game Cheetah</name>
+  <summary>Scan and edit values in running games and applications</summary>
+  <summary xml:lang="de">Werte in laufenden Spielen und Anwendungen suchen und bearbeiten</summary>
+
+  <developer id="io.github.mkrueger">
+    <name>Mike Krüger</name>
+  </developer>
+
+  <description>
+    <p>
+      Game Cheetah is a fast memory scanner and editor for single-player games,
+      debugging, reverse engineering, game modding, and educational use.
+    </p>
+    <p xml:lang="de">
+      Game Cheetah ist ein schneller Speicherscanner und -editor für
+      Einzelspieler-Spiele, Fehlersuche, Reverse Engineering, Modding und
+      Lehrzwecke.
+    </p>
+    <p>Use it to:</p>
+    <p xml:lang="de">Damit können Sie:</p>
+    <ul>
+      <li>Search for integers, floating-point values, strings, and byte arrays</li>
+      <li xml:lang="de">Ganzzahlen, Fließkommawerte, Zeichenketten und Bytefolgen suchen</li>
+      <li>Narrow results by value changes, numeric comparisons, type, or stability</li>
+      <li xml:lang="de">Ergebnisse nach Wertänderung, Vergleich, Typ oder Stabilität eingrenzen</li>
+      <li>Edit and freeze values in a selected process</li>
+      <li xml:lang="de">Werte in einem ausgewählten Prozess bearbeiten und einfrieren</li>
+      <li>Inspect memory in hexadecimal and follow mapped pointers</li>
+      <li xml:lang="de">Speicher hexadezimal untersuchen und abgebildeten Zeigern folgen</li>
+    </ul>
+    <p>
+      Access to another process is controlled by the operating system and may
+      require adjusting Linux ptrace restrictions. Game Cheetah is intended for
+      offline use and must not be used to cheat in online or multiplayer games.
+    </p>
+    <p xml:lang="de">
+      Der Zugriff auf andere Prozesse wird vom Betriebssystem kontrolliert und
+      kann eine Anpassung der Linux-ptrace-Beschränkungen erfordern. Game Cheetah
+      ist für die Offline-Nutzung bestimmt und darf nicht zum Cheaten in Online-
+      oder Mehrspieler-Spielen verwendet werden.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">game-cheetah.desktop</launchable>
+  <provides>
+    <binary>game-cheetah</binary>
+  </provides>
+
+  <url type="homepage">https://github.com/mkrueger/game_cheetah</url>
+  <url type="bugtracker">https://github.com/mkrueger/game_cheetah/issues</url>
+  <url type="vcs-browser">https://github.com/mkrueger/game_cheetah</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/mkrueger/game_cheetah/v0.7.3/assets/search_results.png</image>
+      <caption>Search results with live values and freeze controls</caption>
+      <caption xml:lang="de">Suchergebnisse mit Live-Werten und Steuerelementen zum Einfrieren</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/mkrueger/game_cheetah/v0.7.3/assets/process_list.png</image>
+      <caption>Select a running process</caption>
+      <caption xml:lang="de">Einen laufenden Prozess auswählen</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/mkrueger/game_cheetah/v0.7.3/assets/memory_editor.png</image>
+      <caption>Inspect memory in hexadecimal with numeric interpretations</caption>
+      <caption xml:lang="de">Speicher hexadezimal mit numerischen Interpretationen untersuchen</caption>
+    </screenshot>
+  </screenshots>
+
+  <content_rating type="oars-1.1" />
+  <requires>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <display_length compare="ge">768</display_length>
+  </requires>
+
+  <releases>
+    <release version="0.7.3" date="2026-09-07">
+      <url type="details">https://github.com/mkrueger/game_cheetah/releases/tag/v0.7.3</url>
+      <description>
+        <p>Added result filters, cancellable searches, optional confirmed writes, and experimental pointer workflows.</p>
+      </description>
+    </release>
+    <release version="0.7.2" date="2026-09-06">
+      <url type="details">https://github.com/mkrueger/game_cheetah/releases/tag/v0.7.2</url>
+      <description>
+        <p>Improved process selection, result navigation, memory inspection, performance, and release packaging.</p>
+      </description>
+    </release>
+    <release version="0.7.1" date="2026-08-25">
+      <url type="details">https://github.com/mkrueger/game_cheetah/releases/tag/v0.7.1</url>
+      <description>
+        <p>Added adaptive memory-editor layouts and expanded keyboard navigation.</p>
+      </description>
+    </release>
+  </releases>
+</component>

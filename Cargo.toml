@@ -128,6 +128,11 @@ assets = [
         "644",
     ],
     [
+        "build/linux/io.github.mkrueger.game_cheetah.metainfo.xml",
+        "/usr/share/metainfo/",
+        "644",
+    ],
+    [
         "build/linux/128x128.png",
         "/usr/share/icons/hicolor/128x128/apps/game-cheetah.png",
         "644",
