@@ -1,3 +1,11 @@
+/// Accent tuned for text on the dark panels; the fill accent is too dark to
+/// read as a label colour.
+pub const ACCENT_TEXT: egui::Color32 = egui::Color32::from_rgb(96, 190, 228);
+
+/// Also the checkbox radius: egui draws the box with the widget radius, so
+/// anything near half of `icon_width` turns checkboxes into radio buttons.
+const WIDGET_RADIUS: egui::CornerRadius = egui::CornerRadius::same(6);
+
 /// Apply the application-wide egui theme.
 pub fn apply(ctx: &egui::Context) {
     let mut style = (*ctx.global_style()).clone();
@@ -75,32 +83,32 @@ fn dark_visuals() -> egui::Visuals {
     visuals.widgets.noninteractive.weak_bg_fill = egui::Color32::from_rgb(27, 30, 35);
     visuals.widgets.noninteractive.bg_stroke = stroke;
     visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(226, 229, 234));
-    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(10);
+    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(8);
 
     visuals.widgets.inactive.bg_fill = surface;
     visuals.widgets.inactive.weak_bg_fill = surface;
     visuals.widgets.inactive.bg_stroke = stroke;
     visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(228, 232, 238));
-    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(10);
+    visuals.widgets.inactive.corner_radius = WIDGET_RADIUS;
 
     visuals.widgets.hovered.bg_fill = surface_hover;
     visuals.widgets.hovered.weak_bg_fill = surface_hover;
     visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, accent_hover);
     visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(10);
+    visuals.widgets.hovered.corner_radius = WIDGET_RADIUS;
     visuals.widgets.hovered.expansion = 1.0;
 
     visuals.widgets.active.bg_fill = accent_active;
     visuals.widgets.active.weak_bg_fill = accent_active;
     visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, accent_hover);
     visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    visuals.widgets.active.corner_radius = egui::CornerRadius::same(10);
+    visuals.widgets.active.corner_radius = WIDGET_RADIUS;
 
     visuals.widgets.open.bg_fill = surface_hover;
     visuals.widgets.open.weak_bg_fill = surface_hover;
     visuals.widgets.open.bg_stroke = egui::Stroke::new(1.0, accent_hover);
     visuals.widgets.open.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    visuals.widgets.open.corner_radius = egui::CornerRadius::same(10);
+    visuals.widgets.open.corner_radius = WIDGET_RADIUS;
 
     visuals
 }

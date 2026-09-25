@@ -724,15 +724,13 @@ fn parse_kind(kind: InspectorKind, input: &str, endian: Endianness) -> Result<Ve
 /// Keep navigation/actions separate from location details so long region
 /// names cannot push the Close button out of the window.
 fn editor_header(editor: &mut MemoryEditor, pid: process_memory::Pid, ui: &mut egui::Ui) -> bool {
-    let accent = ui.visuals().selection.bg_fill;
     let mut close = false;
 
     egui::Panel::top("memory_editor_top")
         .frame(
             egui::Frame::new()
                 .fill(egui::Color32::from_rgb(22, 25, 29))
-                .inner_margin(egui::Margin::symmetric(20, 10))
-                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 50, 60))),
+                .inner_margin(egui::Margin::symmetric(20, 10)),
         )
         .show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -740,7 +738,7 @@ fn editor_header(editor: &mut MemoryEditor, pid: process_memory::Pid, ui: &mut e
                     egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "memory-editor-title"))
                         .size(15.0)
                         .strong()
-                        .color(accent),
+                        .color(crate::ui::theme::ACCENT_TEXT),
                 );
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new(format!("PID {pid}")).size(13.0).weak().monospace());
@@ -895,8 +893,7 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
             .frame(
                 egui::Frame::new()
                     .fill(egui::Color32::from_rgb(22, 25, 30))
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(55, 62, 72)))
-                    .inner_margin(egui::Margin::symmetric(16, 6)),
+                    .inner_margin(egui::Margin::symmetric(16, 8)),
             )
             .show(ui, |ui| {
                 requested_type = inspector_body(&mut app.memory_editor, ui);
@@ -985,7 +982,7 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
 /// entry is editable, Enter writes the value to the target.
 fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) -> Option<SearchType> {
     compact_spacing(ui);
-    let accent = ui.visuals().selection.bg_fill;
+    let accent = crate::ui::theme::ACCENT_TEXT;
     let highlight = editor.raw.highlighted_address();
     let endian = editor.raw.endianness();
     let collapsed = editor.data.inspector_collapsed;
@@ -1169,7 +1166,11 @@ fn inspector_pointer_row(editor: &mut MemoryEditor, ui: &mut egui::Ui, bytes: &[
         ui.add_sized(egui::vec2(30.0, 18.0), egui::Label::new(egui::RichText::new("ptr").monospace().weak()));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             follow = ui
-                .add_enabled(readable, egui::Button::new(fl!(crate::LANGUAGE_LOADER, "memory-editor-follow-pointer")))
+                // Sized to the compact inspector rows; body text overflows them.
+                .add_enabled(
+                    readable,
+                    egui::Button::new(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "memory-editor-follow-pointer")).size(13.0)),
+                )
                 .on_hover_text(if readable {
                     fl!(crate::LANGUAGE_LOADER, "memory-editor-follow-pointer-tooltip")
                 } else {
@@ -1207,7 +1208,7 @@ fn inspector_readonly_row(ui: &mut egui::Ui, label: &str, value: Option<String>)
 
 fn inspector_column(ui: &mut egui::Ui, data: &mut EditorData, ctx: &InspectorContext, kinds: &[InspectorKind]) {
     quiet_field_visuals(ui);
-    let accent = ui.visuals().selection.bg_fill;
+    let accent = crate::ui::theme::ACCENT_TEXT;
 
     for &kind in kinds {
         ui.horizontal(|ui| {

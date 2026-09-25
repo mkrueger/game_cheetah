@@ -34,6 +34,15 @@ fn header_label(ui: &mut egui::Ui, text: String) {
     ui.label(egui::RichText::new(text).text_style(egui::TextStyle::Button).strong().size(16.0));
 }
 
+/// Fixed-width, left-aligned slot. `Ui::add_sized` would centre the widget,
+/// which misaligns short entries with their column heading.
+fn left_aligned_cell(ui: &mut egui::Ui, width: f32, add_contents: impl FnOnce(&mut egui::Ui)) {
+    ui.allocate_ui_with_layout(egui::vec2(width, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_width(width);
+        add_contents(ui);
+    });
+}
+
 /// Row action rendered as a bare glyph. The slot is always reserved; the
 /// button only becomes visible and clickable while its row is hovered.
 fn icon_button(ui: &mut egui::Ui, visible: bool, glyph: &str, tooltip: String) -> egui::Response {
@@ -69,13 +78,16 @@ fn top_bar(app: &mut App, ui: &mut egui::Ui) {
         .frame(
             egui::Frame::new()
                 .fill(egui::Color32::from_rgb(22, 25, 29))
-                .inner_margin(egui::Margin::symmetric(20, 10))
-                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 50, 60))),
+                .inner_margin(egui::Margin::symmetric(20, 10)),
         )
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                let accent = ui.visuals().selection.bg_fill;
-                ui.label(egui::RichText::new(&app.state.process_name).size(15.0).strong().color(accent));
+                ui.label(
+                    egui::RichText::new(&app.state.process_name)
+                        .size(15.0)
+                        .strong()
+                        .color(crate::ui::theme::ACCENT_TEXT),
+                );
                 ui.label(egui::RichText::new("·").size(14.0).weak());
                 ui.label(egui::RichText::new(format!("PID {}", app.state.pid)).size(13.0).weak().monospace());
 
@@ -156,17 +168,12 @@ fn error_bar(app: &mut App, ui: &mut egui::Ui) {
 ///   stays usable.
 fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
     egui::Panel::top("search_tab_bar")
-        .frame(
-            egui::Frame::new()
-                .fill(egui::Color32::from_rgb(20, 23, 27))
-                .inner_margin(egui::Margin {
-                    left: 12,
-                    right: 12,
-                    top: 6,
-                    bottom: 0,
-                })
-                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 50, 60))),
-        )
+        .frame(egui::Frame::new().fill(egui::Color32::from_rgb(20, 23, 27)).inner_margin(egui::Margin {
+            left: 12,
+            right: 12,
+            top: 6,
+            bottom: 0,
+        }))
         .show(ui, |ui| {
             let accent = ui.visuals().selection.bg_fill;
             let count = app.state.searches.len();
@@ -569,8 +576,10 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
                     }
                     if search_results > 0 && !matches!(selected_type, SearchType::String | SearchType::StringUtf16) {
                         let show = &mut app.state.searches[search_index].show_numeric_filter;
+                        // Framed like its neighbours; a bare selectable label
+                        // reads as static text while the filter is closed.
                         if ui
-                            .selectable_label(*show, fl!(crate::LANGUAGE_LOADER, "numeric-filter-title"))
+                            .add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "numeric-filter-title")).selected(*show))
                             .on_hover_text(fl!(crate::LANGUAGE_LOADER, "result-filter-combined-hint"))
                             .clicked()
                         {
@@ -768,15 +777,16 @@ fn empty_results_panel(app: &mut App, ui: &mut egui::Ui, search_complete: bool) 
         ui.add_space(7.0);
         ui.add(egui::Label::new(egui::RichText::new(hint).size(15.0).weak()).wrap());
         if search_complete && app.state.current_error().is_none() {
-            ui.horizontal_wrapped(|ui| {
-                let can_undo = !app.state.searches[app.state.current_search].old_results.is_empty();
-                if can_undo && ui.button(fl!(crate::LANGUAGE_LOADER, "empty-results-undo")).clicked() {
-                    app.undo_search();
-                }
-                if ui.button(fl!(crate::LANGUAGE_LOADER, "error-new-search")).clicked() {
-                    app.new_search();
-                }
-            });
+            ui.add_space(14.0);
+            let can_undo = !app.state.searches[app.state.current_search].old_results.is_empty();
+            // Each action is its own centred row: a horizontal layout would
+            // snap to the left edge of the otherwise centred panel.
+            if can_undo && ui.button(fl!(crate::LANGUAGE_LOADER, "empty-results-undo")).clicked() {
+                app.undo_search();
+            }
+            if ui.button(fl!(crate::LANGUAGE_LOADER, "error-new-search")).clicked() {
+                app.new_search();
+            }
         }
     });
 }
@@ -868,7 +878,18 @@ fn type_picker(app: &mut App, ui: &mut egui::Ui, editable: bool, current: Search
         } else {
             current.get_description_text()
         };
-        ui.label(label).on_hover_text(hint);
+        // Locked after the first scan: shown as a chip so it doesn't read as
+        // a stray word between the value field and the primary action.
+        egui::Frame::new()
+            .fill(ui.visuals().faint_bg_color)
+            .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+            .corner_radius(egui::CornerRadius::same(6))
+            .inner_margin(egui::Margin::symmetric(10, 5))
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new(label).size(14.0).weak());
+            })
+            .response
+            .on_hover_text(hint);
     }
 }
 
@@ -1010,13 +1031,25 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     // Data columns stay compact. A final empty remainder column extends the
     // table's interaction area to the window edge, so wheel scrolling also
     // works over the otherwise-unused space on the right.
+    // Fit a full 48-bit user-space address plus the hover icon; a truncated
+    // address hides exactly the digits that tell neighbouring rows apart.
+    let address_text_width = ui
+        .painter()
+        .layout_no_wrap(
+            "0x000000000000".to_owned(),
+            egui::TextStyle::Monospace.resolve(ui.style()),
+            egui::Color32::WHITE,
+        )
+        .size()
+        .x;
+    let address_column_width = (address_text_width + ICON_SLOT_WIDTH + ui.spacing().item_spacing.x * 2.0 + 8.0).ceil();
     let mut builder = TableBuilder::new(ui)
         .id_salt(("search_results", app.state.searches[search_index].view_id))
         .striped(true)
         .resizable(true)
         .sense(egui::Sense::click())
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::initial(150.0).at_least(120.0)) // address + remove icon
+        .column(Column::initial(address_column_width).at_least(120.0)) // address + remove icon
         .column(Column::initial(190.0).at_least(140.0)); // value + edit icon
     if show_search_types {
         builder = builder.column(Column::initial(110.0).at_least(80.0));
@@ -1175,11 +1208,11 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     if is_selected {
                         ui.visuals_mut().override_text_color = Some(ui.visuals().selection.stroke.color);
                     }
-                    ui.add_sized(
-                        [(ui.available_width() - ICON_SLOT_WIDTH).max(24.0), 24.0],
-                        egui::Label::new(egui::RichText::new(&address_label).monospace()).selectable(false).truncate(),
-                    )
-                    .on_hover_text(format!("{address_label}\n{address_text}"));
+                    let label_width = (ui.available_width() - ICON_SLOT_WIDTH).max(24.0);
+                    left_aligned_cell(ui, label_width, |ui| {
+                        ui.add(egui::Label::new(egui::RichText::new(&address_label).monospace()).selectable(false).truncate())
+                            .on_hover_text(format!("{address_label}\n{address_text}"));
+                    });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if icon_button(ui, cell_hovered, REMOVE_ICON, fl!(crate::LANGUAGE_LOADER, "remove-button")).clicked() {
                             remove_result = Some(i);
@@ -1230,7 +1263,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     } else {
                         None
                     };
-                    let cell_width = (ui.available_width() - ICON_SLOT_WIDTH).clamp(60.0, 150.0);
+                    let cell_width = (ui.available_width() - ICON_SLOT_WIDTH).max(60.0);
 
                     let response = if !readable {
                         if is_edit_row {

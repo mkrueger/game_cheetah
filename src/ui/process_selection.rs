@@ -325,6 +325,10 @@ fn process_table(
                                     toggle = Some((process.executable.clone(), item.expanded));
                                     selection.selected = Some(item.key.clone());
                                 }
+                            } else {
+                                // Reserve the disclosure slot so every name
+                                // on a level starts at the same x.
+                                ui.add_space(18.0 + ui.spacing().item_spacing.x);
                             }
                             let badge = if item.is_group() {
                                 Some(if filter.is_empty() {
@@ -349,8 +353,13 @@ fn process_table(
                             });
                             let name_width = (ui.available_width() - badge_width).max(32.0);
                             let name = highlight_job(ui, &process.name, filter, text_color(ui, ui.visuals().strong_text_color()), false);
-                            ui.add_sized([name_width, 24.0], egui::Label::new(name).selectable(false).truncate())
-                                .on_hover_text(format!("{}\n{}", process.name, process.executable));
+                            // `add_sized` would centre the name; keep it flush
+                            // with the heading and the other columns.
+                            ui.allocate_ui_with_layout(egui::vec2(name_width, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                ui.set_width(name_width);
+                                ui.add(egui::Label::new(name).selectable(false).truncate())
+                                    .on_hover_text(format!("{}\n{}", process.name, process.executable));
+                            });
                             if let Some(badge) = badge {
                                 ui.label(egui::RichText::new(badge).size(11.0).color(text_color(ui, ui.visuals().weak_text_color())));
                             }
