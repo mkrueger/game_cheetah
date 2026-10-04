@@ -260,7 +260,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 }
             });
             if let Some(job) = &scanner.job {
-                ui.spinner();
+                crate::ui::refresh::spinner(ui);
                 let progress = &job.progress;
                 ui.label(fl!(
                     crate::LANGUAGE_LOADER,
@@ -270,7 +270,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     depth = progress.depth.load(Ordering::Relaxed).to_string(),
                     count = progress.candidates.load(Ordering::Relaxed).to_string()
                 ));
-                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+                ctx.request_repaint_after(crate::ui::refresh::poll_interval(ctx));
             }
             if current {
                 let target = scanner.target.as_ref().unwrap();

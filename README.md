@@ -37,6 +37,26 @@ Use it to search values in a running process, narrow down result sets, edit memo
 
 ## Numeric limits and result filters
 
+Live result tables and the memory editor refresh at roughly 30 Hz while focused.
+Unfocused or minimized windows use a 500 ms refresh interval; background memory
+sampling is throttled as well. Focused scan progress refreshes every 100 ms, and
+search views with no visible live results refresh every second. Input and focus
+events still wake the UI immediately. Pointer resolution continues in the
+background, with up to 500 ms UI polling latency. Value freezes run on their
+independent 125 ms worker cadence, unaffected by UI refresh rates.
+
+Running scans show elapsed time, average read throughput and the number of
+failed or partial reads. Each tab retains its last successful completion summary
+with the final match count; snapshot capture reports completion without a match
+count. Undo restores the previous summary, and Reset clears it. Cancelled or
+failed scans restore the previous state instead of displaying a success summary.
+
+Read volume counts successfully returned bytes, including chunk overlap, grouped
+reads and retries; it is not the unique address-space size. Failed/partial reads
+count read operations, not unique skipped regions or discarded matches: fallback
+reads can recover candidates. The average rate includes comparison work and, for
+stability filters, observation time. Hover over the statistics for this explanation.
+
 Result values are written live by default. Enable **Write values only on Enter**
 in **Settings** to buffer result-table edits until Enter; Escape or leaving the
 field discards unconfirmed input. This option is off for new and existing users.

@@ -269,6 +269,10 @@ command-heading = Kommando
 
 update-numbers-progress = Aktualisiere { $current }/{ $total }…
 search-memory-progress = Suche { $current }/{ $total }…
+search-scan-statistics = { $bytes } in { $elapsed } s gelesen ({ $rate }/s); fehlgeschlagene/unvollständige Lesevorgänge: { $incomplete }
+search-scan-summary = Letzte Suche abgeschlossen: { $statistics }; Treffer: { $matches }
+search-snapshot-summary = Momentaufnahme erfasst: { $statistics }
+search-scan-statistics-hint = Die erfolgreich gelesene Datenmenge enthält überlappende Blöcke, gruppierte Lesezugriffe und Wiederholungen. Fehlgeschlagene/unvollständige Lesevorgänge zählen Zugriffe, nicht eindeutige Speicherbereiche oder verworfene Ergebnisse; erneute Einzelzugriffe können Kandidaten erhalten. Der Durchsatz wird über den gesamten Vorgang gemittelt, einschließlich Vergleichen und Stabilitätsbeobachtung.
 
 tab-hover-text=Doppelklick zum Umbenennen
 close-tab-hover-text=Schließe aktive Suche

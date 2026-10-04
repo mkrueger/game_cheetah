@@ -13,7 +13,7 @@ const RESULT_ROW_HEIGHT: f32 = 32.0;
 
 /// Above this many hits the table is not worth browsing — narrowing the search
 /// is the only useful next step, so the list is collapsed behind a hint.
-const BROWSE_RESULT_LIMIT: usize = 1000;
+pub(crate) const BROWSE_RESULT_LIMIT: usize = 1000;
 
 /// A search value is a handful of characters; a full-width field only pushes
 /// the type picker to the far edge of the window.
@@ -421,6 +421,7 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
     let searching = search_context.searching;
     let current_bytes = search_context.current_bytes.load(Ordering::Acquire);
     let total_bytes = search_context.total_bytes;
+    let search_report = search_context.search_report();
     let has_pointers = search_context.has_pointer_addresses();
     if searching == SearchMode::None && search_results == 0 && app.selected_result.is_some() {
         app.clear_result_interaction();
@@ -588,6 +589,10 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
             }
+            if idle && let Some(report) = search_report {
+                ui.add_space(6.0);
+                scan_report(ui, report, false);
+            }
             if app.state.searches[search_index].show_numeric_filter
                 && search_results > 0
                 && !matches!(selected_type, SearchType::String | SearchType::StringUtf16)
@@ -633,6 +638,9 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
         .collect::<String>();
         ui.add(egui::ProgressBar::new(progress).desired_width(ui.available_width()).show_percentage());
         ui.label(egui::RichText::new(label).size(13.0).weak());
+        if let Some(report) = search_report {
+            scan_report(ui, report, true);
+        }
         if ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "result-filter-cancel"))).clicked() {
             app.cancel_search();
         }
@@ -656,6 +664,27 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
         ui.add_space(18.0);
         empty_results_panel(app, ui, is_search_complete);
     }
+}
+
+fn scan_report(ui: &mut egui::Ui, report: crate::SearchReport, running: bool) {
+    let bytes = gabi::BytesConfig::default();
+    let detail = fl!(
+        crate::LANGUAGE_LOADER,
+        "search-scan-statistics",
+        bytes = bytes.bytes(report.bytes_read as u64).to_string(),
+        elapsed = format!("{:.1}", report.elapsed.as_secs_f64()),
+        rate = bytes.bytes(report.bytes_per_second() as u64).to_string(),
+        incomplete = report.incomplete_reads
+    );
+    let label = if running {
+        detail
+    } else if let Some(matches) = report.matches {
+        fl!(crate::LANGUAGE_LOADER, "search-scan-summary", statistics = detail, matches = matches)
+    } else {
+        fl!(crate::LANGUAGE_LOADER, "search-snapshot-summary", statistics = detail)
+    };
+    ui.add(egui::Label::new(egui::RichText::new(label).size(13.0).weak()).wrap())
+        .on_hover_text(fl!(crate::LANGUAGE_LOADER, "search-scan-statistics-hint"));
 }
 
 fn numeric_filter_controls(app: &mut App, ui: &mut egui::Ui, remaining_height: f32) {

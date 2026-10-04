@@ -300,7 +300,7 @@ impl Default for GameCheetahEngine {
                 // Wait either for next tick or a new message
                 select! {
                     recv(ticker) -> _ => {
-                        if pid != 0
+                        if pid != 0 && !freezed_values.is_empty()
                             && let Ok(handle) = (pid as process_memory::Pid).try_into_process_handle() {
                                 let mut to_drop: Vec<usize> = Vec::new();
                                 let modules = if relative_freezes.is_empty() { None } else { crate::ModuleCatalog::for_process(pid as process_memory::Pid).ok() };
@@ -900,7 +900,7 @@ impl GameCheetahEngine {
                             buffer.resize(chunk.read_size, 0);
                             match reader.read_into(chunk.start, &mut buffer[..chunk.read_size]) {
                                 Ok(read_size) => {
-                                    worker.record_read(read_size > 0);
+                                    worker.record_read_bytes(chunk.read_size, read_size);
                                     if worker.stopped() {
                                         return;
                                     }
@@ -913,14 +913,14 @@ impl GameCheetahEngine {
                                     )
                                 }
                                 Err(_) => {
-                                    worker.record_read(false);
+                                    worker.record_read_bytes(chunk.read_size, 0);
                                     Vec::new()
                                 }
                             }
                         } else {
                             match fast_read_memory(pid, chunk.start, chunk.read_size) {
                                 Ok(memory) => {
-                                    worker.record_read(!memory.is_empty());
+                                    worker.record_read_bytes(chunk.read_size, memory.len());
                                     if worker.stopped() {
                                         return;
                                     }
@@ -933,7 +933,7 @@ impl GameCheetahEngine {
                                     )
                                 }
                                 Err(_) => {
-                                    worker.record_read(false);
+                                    worker.record_read_bytes(chunk.read_size, 0);
                                     Vec::new()
                                 }
                             }
@@ -948,7 +948,7 @@ impl GameCheetahEngine {
                 #[cfg(not(target_os = "linux"))]
                 {
                     let memory_result = fast_read_memory(pid, chunk.start, chunk.read_size);
-                    worker.record_read(memory_result.as_ref().is_ok_and(|bytes| !bytes.is_empty()));
+                    worker.record_read_bytes(chunk.read_size, memory_result.as_ref().map_or(0, Vec::len));
                     if worker.stopped() {
                         return;
                     }
@@ -1131,7 +1131,7 @@ impl GameCheetahEngine {
                     #[cfg(not(target_os = "linux"))]
                     let memory_result = fast_read_memory(pid, chunk_start, chunk_size);
 
-                    worker.record_read(memory_result.as_ref().is_ok_and(|bytes| !bytes.is_empty()));
+                    worker.record_read_bytes(chunk_size, memory_result.as_ref().map_or(0, Vec::len));
                     if worker.stopped() {
                         return;
                     }
@@ -1515,7 +1515,7 @@ impl GameCheetahEngine {
                 #[cfg(not(target_os = "linux"))]
                 let memory_result = fast_read_memory(pid, start, size);
 
-                worker.record_read(memory_result.as_ref().is_ok_and(|bytes| !bytes.is_empty()));
+                worker.record_read_bytes(size, memory_result.as_ref().map_or(0, Vec::len));
                 if worker.stopped() {
                     return;
                 }
@@ -1942,6 +1942,54 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn initial_scan_and_snapshot_reports_count_readable_and_unreadable_chunks() {
+        let memory = [0x00636261_i32; 16];
+        let address = memory.as_ptr() as usize;
+        let size = memory.len() * 4;
+        for kind in 0..3 {
+            let mut engine = GameCheetahEngine {
+                pid: std::process::id() as process_memory::Pid,
+                ..Default::default()
+            };
+            let regions = vec![(address, size), (1, size)];
+            match kind {
+                0 => {
+                    engine.searches[0].search_type = SearchType::Int;
+                    engine.spawn_parallel_search(SearchType::Int.from_string(&memory[0].to_string()).unwrap(), regions, 0);
+                }
+                1 => {
+                    engine.searches[0].search_type = SearchType::String;
+                    engine.spawn_string_search("abc".into(), regions, 0);
+                }
+                _ => {
+                    engine.searches[0].search_type = SearchType::Unknown;
+                    engine.spawn_snapshot_capture(0, regions);
+                }
+            }
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while engine.searches[0].searching != SearchMode::None {
+                assert!(Instant::now() < deadline, "scan kind {kind} did not finish");
+                engine.poll_searches();
+                thread::sleep(Duration::from_millis(1));
+            }
+            assert!(engine.current_error().is_none(), "kind {kind}");
+            let report = engine.searches[0].completed_report.unwrap();
+            assert_eq!(report.bytes_read, size, "kind {kind}");
+            assert_eq!(report.incomplete_reads, 1, "kind {kind}");
+            assert!(report.elapsed > Duration::ZERO);
+            assert!(report.bytes_per_second().is_finite());
+            if kind == 2 {
+                assert_eq!(report.matches, None);
+                assert_eq!(engine.searches[0].memory_snapshot.read().unwrap().len(), 1);
+            } else {
+                assert_eq!(report.matches, Some(engine.searches[0].get_result_count()));
+                assert!(report.matches.unwrap() > 0);
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn failed_reads_restore_results_but_readable_no_matches_are_successful() {
         let mut engine = GameCheetahEngine {
             pid: std::process::id() as process_memory::Pid,
@@ -1953,6 +2001,7 @@ mod tests {
         assert_eq!(engine.searches[0].get_result_count(), 1);
         assert!(matches!(engine.current_error(), Some(AppError::SearchReadFailed)));
         assert!(engine.searches[0].old_results.is_empty());
+        assert!(engine.searches[0].completed_report.is_none());
         let value = Box::new(43_i32);
         engine.clear_errors();
         engine.searches[0].set_cached_results(vec![SearchResult::new(&*value as *const i32 as usize, SearchType::Int)]);
@@ -1960,6 +2009,10 @@ mod tests {
         assert_eq!(engine.searches[0].get_result_count(), 0);
         assert!(engine.current_error().is_none());
         assert_eq!(engine.searches[0].old_results.len(), 1);
+        let report = engine.searches[0].completed_report.unwrap();
+        assert_eq!(report.matches, Some(0));
+        assert_eq!(report.bytes_read, 4);
+        assert_eq!(report.incomplete_reads, 0);
     }
 
     #[test]

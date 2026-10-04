@@ -268,6 +268,10 @@ command-heading = Command
 
 update-numbers-progress = Update { $current }/{ $total }…
 search-memory-progress = Search { $current }/{ $total }…
+search-scan-statistics = Read { $bytes } in { $elapsed } s ({ $rate }/s); failed/partial reads: { $incomplete }
+search-scan-summary = Last scan completed: { $statistics }; matches: { $matches }
+search-snapshot-summary = Snapshot captured: { $statistics }
+search-scan-statistics-hint = Successful read volume includes chunk overlap, grouped reads and retries. Failed/partial reads count read operations, not unique regions or discarded results; fallback reads may recover candidates. Throughput is averaged over the entire operation, including comparisons and stability observation.
 
 tab-hover-text=Double click for rename
 close-tab-hover-text=Close active search

@@ -16,6 +16,7 @@ use std::{
 use process_memory::{ProcessHandle, TryIntoProcessHandle, copy_address};
 
 use super::{App, AppState, CHANGE_HIGHLIGHT};
+use crate::ui::refresh;
 use crate::{SearchMode, SearchType};
 
 /// Cadence at which the bulk change tracker runs. The UI repaints at ~30 Hz
@@ -43,6 +44,7 @@ pub(super) fn idle_last_run() -> Instant {
 impl App {
     /// Periodic per-frame housekeeping run before the view code.
     pub(super) fn tick(&mut self, ctx: &egui::Context) {
+        let backgrounded = refresh::backgrounded(ctx);
         // Suppress egui's built-in debug paint overlays. Two of them are
         // enabled by default in debug builds and produce noisy red strokes
         // and orange "Unaligned" markers all over the result table during
@@ -89,6 +91,11 @@ impl App {
             Duration::from_millis(100)
         } else {
             Duration::from_secs(1)
+        };
+        let address_interval = if backgrounded {
+            address_interval.max(refresh::BACKGROUND_INTERVAL)
+        } else {
+            address_interval
         };
         if self.state.pid != 0 && self.address_editor.is_none() && self.last_address_refresh.elapsed() >= address_interval {
             self.last_address_refresh = Instant::now();
@@ -148,11 +155,14 @@ impl App {
 
                 let search_running = self.state.searches.iter().any(|s| !matches!(s.searching, SearchMode::None));
                 if !search_running && self.state.is_process_running() {
-                    self.update_change_tracker();
+                    self.update_change_tracker(if backgrounded { refresh::BACKGROUND_INTERVAL } else { TRACKER_INTERVAL });
                 }
 
-                // 30 Hz repaint for fluid live values.
-                ctx.request_repaint_after(Duration::from_millis(33));
+                let search = &self.state.searches[self.state.current_search];
+                let count = search.get_result_count();
+                let live_values =
+                    search.searching == SearchMode::None && count > 0 && (count <= crate::ui::in_process_view::BROWSE_RESULT_LIMIT || self.state.show_results);
+                ctx.request_repaint_after(refresh::interval(ctx, live_values, search_running));
             }
             AppState::MemoryEditor => {
                 if let Some(index) = self.memory_editor_result_index
@@ -163,8 +173,11 @@ impl App {
                     self.close_memory_editor();
                     return;
                 }
-                self.memory_editor.tick(self.state.pid as process_memory::Pid);
-                ctx.request_repaint_after(Duration::from_millis(33));
+                if !backgrounded || self.last_memory_editor_refresh.elapsed() >= refresh::BACKGROUND_INTERVAL {
+                    self.memory_editor.tick(self.state.pid as process_memory::Pid);
+                    self.last_memory_editor_refresh = Instant::now();
+                }
+                ctx.request_repaint_after(refresh::interval(ctx, true, false));
             }
             _ => {}
         }
@@ -181,8 +194,8 @@ impl App {
     /// The tracker has four important properties that together let it scale
     /// past the previous "give up over 4096 rows" behaviour:
     ///
-    /// * **Throttled** — it runs at most every `TRACKER_INTERVAL` (10 Hz),
-    ///   regardless of the UI repaint rate.
+    /// * **Throttled** — at most 10 Hz while focused or 2 Hz in the background,
+    ///   regardless of extra input-triggered repaints.
     /// * **Round-robin** — it scans `TRACKER_WINDOW` rows per invocation
     ///   starting from a wrapping cursor, so arbitrarily large result sets
     ///   eventually get covered.
@@ -191,8 +204,8 @@ impl App {
     ///   of-magnitude syscall reduction over per-address reads.
     /// * **Byte-diffed** — the cache stores raw process bytes; we never
     ///   format-then-string-compare just to detect a change.
-    fn update_change_tracker(&mut self) {
-        if self.last_change_tracker_run.elapsed() < TRACKER_INTERVAL {
+    fn update_change_tracker(&mut self, interval: Duration) {
+        if self.last_change_tracker_run.elapsed() < interval {
             return;
         }
         self.last_change_tracker_run = Instant::now();
@@ -318,10 +331,137 @@ impl App {
     }
 }
 
+#[cfg(test)]
+mod refresh_tests {
+    use super::*;
+
+    #[test]
+    fn background_tick_still_finalizes_search_results() {
+        let mut app = App {
+            app_state: AppState::InProcess,
+            ..Default::default()
+        };
+        let search = &mut app.state.searches[0];
+        search.search_type = SearchType::Int;
+        let worker = search.begin_search(SearchMode::Memory, std::process::id() as _, 0, "test".into());
+        worker.record_read_bytes(4, 4);
+        worker.send(&search.results_sender, vec![crate::SearchResult::new(0x1000, SearchType::Int)]);
+        worker.finish();
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                focused: false,
+                ..Default::default()
+            },
+            |ui| app.tick(ui.ctx()),
+        );
+        output.textures_delta.clear();
+        assert_eq!(app.state.searches[0].searching, SearchMode::None);
+        assert_eq!(app.state.searches[0].get_result_count(), 1);
+        assert_eq!(app.state.searches[0].completed_report.unwrap().matches, Some(1));
+    }
+
+    #[test]
+    fn real_tick_schedules_live_scan_idle_and_hidden_result_views() {
+        for (focused, count, searching, show_results, expected) in [
+            (true, 1, SearchMode::None, false, refresh::LIVE_INTERVAL),
+            (true, 0, SearchMode::Memory, false, Duration::from_millis(100)),
+            (true, 1, SearchMode::Memory, false, Duration::from_millis(100)),
+            (true, 0, SearchMode::None, false, refresh::IDLE_INTERVAL),
+            (true, 1001, SearchMode::None, false, refresh::IDLE_INTERVAL),
+            (true, 1001, SearchMode::None, true, refresh::LIVE_INTERVAL),
+            (false, 1, SearchMode::None, false, refresh::BACKGROUND_INTERVAL),
+            (false, 0, SearchMode::Memory, false, refresh::BACKGROUND_INTERVAL),
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = App {
+                app_state: AppState::InProcess,
+                ..Default::default()
+            };
+            app.state.show_results = show_results;
+            app.state.searches[0].searching = searching;
+            app.state.searches[0].set_cached_results((0..count).map(|i| crate::SearchResult::new(i * 8, SearchType::Int)).collect());
+            for frame in 0..4 {
+                let mut output = ctx.run_ui(egui::RawInput { focused, ..Default::default() }, |ui| app.tick(ui.ctx()));
+                if frame == 3 {
+                    let delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+                    assert!(
+                        delay <= expected && delay >= expected.saturating_sub(Duration::from_millis(34)),
+                        "{delay:?}, expected {expected:?}"
+                    );
+                }
+                output.textures_delta.clear();
+            }
+        }
+    }
+
+    #[test]
+    fn background_memory_refresh_is_throttled_but_focus_refreshes_immediately() {
+        let ctx = egui::Context::default();
+        let mut app = App {
+            app_state: AppState::MemoryEditor,
+            ..Default::default()
+        };
+        app.last_memory_editor_refresh = Instant::now();
+        let previous = app.last_memory_editor_refresh;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                focused: false,
+                ..Default::default()
+            },
+            |ui| app.tick(ui.ctx()),
+        );
+        output.textures_delta.clear();
+        assert_eq!(app.last_memory_editor_refresh, previous);
+        app.last_memory_editor_refresh = Instant::now() - refresh::BACKGROUND_INTERVAL;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                focused: false,
+                ..Default::default()
+            },
+            |ui| app.tick(ui.ctx()),
+        );
+        output.textures_delta.clear();
+        assert!(app.last_memory_editor_refresh > previous);
+        let background_refresh = app.last_memory_editor_refresh;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                focused: true,
+                ..Default::default()
+            },
+            |ui| app.tick(ui.ctx()),
+        );
+        output.textures_delta.clear();
+        assert!(app.last_memory_editor_refresh > background_refresh);
+    }
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     use crate::SearchResult;
+
+    #[test]
+    fn background_change_tracker_ignores_extra_frames_and_focus_catches_up() {
+        let memory = [42_i32];
+        let addr = memory.as_ptr() as usize;
+        let mut app = App::default();
+        app.state.pid = std::process::id() as _;
+        app.state.searches[0].set_cached_results(vec![SearchResult::new(addr, SearchType::Int)]);
+        app.last_change_tracker_run = Instant::now() - Duration::from_millis(200);
+        let previous = app.last_change_tracker_run;
+        app.update_change_tracker(refresh::BACKGROUND_INTERVAL);
+        assert_eq!(app.last_change_tracker_run, previous);
+        assert!(app.cached_process_handle.is_none());
+        app.update_change_tracker(TRACKER_INTERVAL);
+        assert!(app.last_change_tracker_run > previous);
+        assert!(app.cached_process_handle.is_some());
+        assert_eq!(app.value_change_tracker.put(addr, vec![]), Some(42_i32.to_ne_bytes().to_vec()));
+        app.last_change_tracker_run = Instant::now() - refresh::BACKGROUND_INTERVAL;
+        let previous = app.last_change_tracker_run;
+        app.update_change_tracker(refresh::BACKGROUND_INTERVAL);
+        assert!(app.last_change_tracker_run > previous);
+    }
 
     #[test]
     fn change_tracker_reads_and_detects_changes_in_utf16_surrogate_pairs() {
@@ -332,13 +472,13 @@ mod tests {
         app.state.searches[0].search_value_text = "😀".to_owned();
         app.state.searches[0].set_cached_results(vec![SearchResult::new(addr, SearchType::StringUtf16)]);
 
-        app.update_change_tracker();
+        app.update_change_tracker(TRACKER_INTERVAL);
         assert_eq!(app.value_change_tracker.put(addr, bytes.clone()), Some(bytes.clone()));
         assert!(!app.changed_addresses.contains_key(&addr));
 
         bytes[2] = 1; // 😀 -> 😁: only the low surrogate changes.
         app.last_change_tracker_run = idle_last_run();
-        app.update_change_tracker();
+        app.update_change_tracker(TRACKER_INTERVAL);
         assert!(app.changed_addresses.contains_key(&addr));
         assert_eq!(app.value_change_tracker.put(addr, bytes.clone()), Some(bytes));
     }

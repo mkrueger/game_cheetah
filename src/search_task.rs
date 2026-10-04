@@ -3,8 +3,9 @@ use std::{
     io,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
@@ -28,6 +29,10 @@ pub(crate) struct SearchWorker {
     read_any: Arc<AtomicBool>,
     attempted_read: Arc<AtomicBool>,
     access_error: Arc<Mutex<Option<AppError>>>,
+    bytes_read: Arc<AtomicUsize>,
+    incomplete_reads: Arc<AtomicUsize>,
+    started: Instant,
+    elapsed: Arc<Mutex<Option<Duration>>>,
     pid: process_memory::Pid,
     start_time: u64,
     name: String,
@@ -46,6 +51,10 @@ impl SearchTask {
                 read_any: Arc::new(AtomicBool::new(false)),
                 attempted_read: Arc::new(AtomicBool::new(false)),
                 access_error: Arc::new(Mutex::new(None)),
+                bytes_read: Arc::new(AtomicUsize::new(0)),
+                incomplete_reads: Arc::new(AtomicUsize::new(0)),
+                started: Instant::now(),
+                elapsed: Arc::new(Mutex::new(None)),
                 pid,
                 start_time,
                 name,
@@ -95,6 +104,23 @@ impl SearchWorker {
         }
     }
 
+    pub fn record_read_bytes(&self, requested: usize, read: usize) {
+        self.record_read(read > 0);
+        self.bytes_read.fetch_add(read, Ordering::Relaxed);
+        if read < requested {
+            self.incomplete_reads.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn report(&self) -> crate::SearchReport {
+        crate::SearchReport {
+            elapsed: self.elapsed.lock().unwrap().unwrap_or_else(|| self.started.elapsed()),
+            bytes_read: self.bytes_read.load(Ordering::Relaxed),
+            incomplete_reads: self.incomplete_reads.load(Ordering::Relaxed),
+            matches: None,
+        }
+    }
+
     /// Fresh, PID-specific lookup: never turn an exited/recycled process into
     /// a successful empty result due to a stale UI process cache.
     pub fn check_process(&self) -> bool {
@@ -124,6 +150,7 @@ impl SearchWorker {
             let access_error = self.access_error.lock().ok().and_then(|error| error.clone());
             self.fail(access_error.unwrap_or(AppError::SearchReadFailed));
         }
+        *self.elapsed.lock().unwrap() = Some(self.started.elapsed());
         self.complete.store(true, Ordering::Release);
     }
 
@@ -143,7 +170,7 @@ impl<T: CopyAddress> CopyAddress for SearchReader<'_, T> {
             return Err(io::Error::new(io::ErrorKind::Interrupted, "search cancelled"));
         }
         let result = self.inner.copy_address(addr, bytes);
-        self.worker.record_read(result.is_ok());
+        self.worker.record_read_bytes(bytes.len(), if result.is_ok() { bytes.len() } else { 0 });
         if let Err(error) = &result
             && let Some(error) = AppError::access_error(error)
             && let Ok(mut slot) = self.worker.access_error.lock()
@@ -162,6 +189,38 @@ impl<T: CopyAddress> CopyAddress for SearchReader<'_, T> {
 mod tests {
     use super::*;
     use std::{cell::Cell, time::Duration};
+
+    #[test]
+    fn read_statistics_are_shared_and_completion_freezes_elapsed_time() {
+        struct Reader;
+        impl CopyAddress for Reader {
+            fn copy_address(&self, addr: usize, bytes: &mut [u8]) -> io::Result<()> {
+                if addr == 0 {
+                    Err(io::ErrorKind::UnexpectedEof.into())
+                } else {
+                    bytes.fill(42);
+                    Ok(())
+                }
+            }
+            fn get_pointer_width(&self) -> process_memory::Architecture {
+                process_memory::Architecture::Arch64Bit
+            }
+        }
+        let complete = Arc::new(AtomicBool::new(false));
+        let task = SearchTask::new(std::process::id() as _, 0, "test".into(), complete.clone());
+        let worker = task.worker.clone();
+        let reader = worker.reader(Reader);
+        reader.copy_address(1, &mut [0; 8]).unwrap();
+        assert!(reader.copy_address(0, &mut [0; 4]).is_err());
+        worker.record_read_bytes(16, 6);
+        assert_eq!(task.worker.report().bytes_read, 14);
+        assert_eq!(task.worker.report().incomplete_reads, 2);
+        worker.finish();
+        assert!(complete.load(Ordering::Acquire));
+        let elapsed = task.worker.report().elapsed;
+        assert_eq!(task.worker.report().elapsed, elapsed);
+        assert!(elapsed > Duration::ZERO);
+    }
 
     #[test]
     fn permission_errors_are_reported_only_when_no_reads_succeed() {

@@ -9,6 +9,7 @@ pub mod main_window;
 pub mod mem_editor;
 pub(crate) mod notice;
 pub mod process_selection;
+pub(crate) mod refresh;
 pub mod theme;
 pub mod value_cache;
 

@@ -4,12 +4,34 @@ use std::{
         Arc, RwLock,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
+    time::Duration,
 };
 
 use crate::{SearchResult, SearchType, UnknownComparison};
 use crossbeam_channel::{Receiver, Sender, bounded};
 
 const RESULTS_CHANNEL_CAPACITY: usize = 128;
+
+/// Successful read volume, including overlap, grouped reads and retries.
+/// An incomplete read is a failed or short read operation, not a unique region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchReport {
+    pub elapsed: Duration,
+    pub bytes_read: usize,
+    pub incomplete_reads: usize,
+    /// Snapshot capture has no matches to count.
+    pub matches: Option<usize>,
+}
+
+impl SearchReport {
+    pub fn bytes_per_second(&self) -> f64 {
+        if self.elapsed.is_zero() {
+            0.0
+        } else {
+            self.bytes_read as f64 / self.elapsed.as_secs_f64()
+        }
+    }
+}
 
 /// Type alias for memory snapshot storage to reduce type complexity
 pub type MemorySnapshot = Arc<RwLock<Vec<(usize, Arc<[u8]>)>>>;
@@ -35,6 +57,7 @@ pub struct SearchHistoryEntry {
     search_complete: bool,
     total_bytes: usize,
     current_bytes: usize,
+    completed_report: Option<SearchReport>,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -74,6 +97,7 @@ pub struct SearchContext {
     /// Dropping a tab also drops the only cancellation sender for its workers.
     pub(crate) task: Option<crate::search_task::SearchTask>,
     pub(crate) pending_search_error: Option<crate::AppError>,
+    pub completed_report: Option<SearchReport>,
 
     pub searching: SearchMode,
     pub total_bytes: usize,
@@ -121,6 +145,7 @@ impl SearchContext {
             stable_filter_seconds: 3,
             task: None,
             pending_search_error: None,
+            completed_report: None,
             searching: SearchMode::None,
             results_sender: tx,
             results_receiver: rx,
@@ -193,6 +218,7 @@ impl SearchContext {
     pub(crate) fn begin_search(&mut self, mode: SearchMode, pid: process_memory::Pid, start_time: u64, name: String) -> crate::search_task::SearchWorker {
         self.task.take();
         self.push_undo_state(self.collect_results());
+        self.completed_report = None;
         self.search_complete = Arc::new(AtomicBool::new(false));
         self.current_bytes = Arc::new(AtomicUsize::new(0));
         self.cache_valid = Arc::new(AtomicBool::new(false));
@@ -232,6 +258,10 @@ impl SearchContext {
         self.collect_results().len()
     }
 
+    pub fn search_report(&self) -> Option<SearchReport> {
+        self.task.as_ref().map(|task| task.worker.report()).or(self.completed_report)
+    }
+
     pub fn store_memory_snapshot(&self, address: usize, data: Vec<u8>) {
         if let Ok(mut snapshot) = self.memory_snapshot.write() {
             snapshot.push((address, Arc::<[u8]>::from(data.into_boxed_slice())));
@@ -268,6 +298,7 @@ impl SearchContext {
         self.cached_results = Arc::new(RwLock::new(None));
         self.cache_valid = Arc::new(AtomicBool::new(false));
         self.pending_search_error = None;
+        self.completed_report = None;
         debug_assert!(self.freezed_addresses.is_empty());
         // Clear old results history
         self.old_results.clear();
@@ -302,6 +333,7 @@ impl SearchContext {
             search_complete: self.search_complete.load(Ordering::Acquire),
             total_bytes: self.total_bytes,
             current_bytes: self.current_bytes.load(Ordering::Acquire),
+            completed_report: self.completed_report,
         });
     }
 
@@ -325,6 +357,7 @@ impl SearchContext {
         self.search_complete = Arc::new(AtomicBool::new(old.search_complete));
         self.current_bytes = Arc::new(AtomicUsize::new(old.current_bytes));
         self.total_bytes = old.total_bytes;
+        self.completed_report = old.completed_report;
         self.searching = SearchMode::None;
     }
 
@@ -395,7 +428,15 @@ impl SearchContext {
                 self.pending_search_error = Some(error);
                 return;
             }
-            self.collect_results();
+            let results = self.collect_results();
+            if let Some(task) = &self.task {
+                let mut report = task.worker.report();
+                let snapshot = self.searching == SearchMode::Memory && self.search_type == SearchType::Unknown && self.unknown_comparison.is_none();
+                if !snapshot {
+                    report.matches = Some(results.len());
+                }
+                self.completed_report = Some(report);
+            }
             self.task.take();
             self.searching = SearchMode::None;
         }
@@ -432,6 +473,69 @@ fn merge_results(results: &mut Vec<SearchResult>, incoming: &[SearchResult]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scan_report_counts_final_results_and_survives_undo_and_rollback() {
+        let mut search = SearchContext::new("statistics".into());
+        search.search_type = SearchType::Int;
+        assert!(search.search_report().is_none());
+        let worker = search.begin_search(SearchMode::Memory, std::process::id() as _, 0, "test".into());
+        worker.record_read_bytes(100, 100);
+        worker.record_read_bytes(100, 40);
+        worker.record_read_bytes(100, 0);
+        let hit = SearchResult::new(0x1000, SearchType::Int);
+        worker.send(&search.results_sender, vec![hit, hit]);
+        worker.finish();
+        search.update_search_mode();
+        let report = search.completed_report.unwrap();
+        assert_eq!(report.bytes_read, 140);
+        assert_eq!(report.incomplete_reads, 2);
+        assert_eq!(report.matches, Some(1));
+        assert_eq!(search.search_report(), Some(report));
+
+        let next = search.begin_search(SearchMode::Percent, std::process::id() as _, 0, "next".into());
+        assert!(search.completed_report.is_none());
+        next.record_read_bytes(8, 8);
+        next.finish();
+        search.update_search_mode();
+        assert_eq!(search.completed_report.unwrap().matches, Some(0));
+        search.undo_last_search();
+        assert_eq!(search.completed_report, Some(report));
+
+        let cancelled = search.begin_search(SearchMode::Memory, std::process::id() as _, 0, "cancelled".into());
+        cancelled.record_read_bytes(20, 20);
+        search.cancel_search();
+        assert_eq!(search.completed_report, Some(report));
+        cancelled.record_read_bytes(20, 20);
+        assert_eq!(search.search_report(), Some(report), "late writes must not change the restored report");
+
+        let failed = search.begin_search(SearchMode::Memory, std::process::id() as _, 0, "failed".into());
+        failed.record_read_bytes(20, 0);
+        failed.finish();
+        search.update_search_mode();
+        assert_eq!(search.completed_report, Some(report));
+        assert!(matches!(search.pending_search_error, Some(crate::AppError::SearchReadFailed)));
+        search.clear_results();
+        assert!(search.search_report().is_none());
+    }
+
+    #[test]
+    fn snapshot_report_has_no_match_count_and_zero_duration_has_finite_rate() {
+        let mut search = SearchContext::new("snapshot".into());
+        search.search_type = SearchType::Unknown;
+        let worker = search.begin_search(SearchMode::Memory, std::process::id() as _, 0, "test".into());
+        worker.record_read_bytes(8, 8);
+        search.store_memory_snapshot(0x1000, vec![0; 8]);
+        worker.finish();
+        search.update_search_mode();
+        let mut report = search.completed_report.unwrap();
+        assert_eq!(report.matches, None);
+        assert_eq!(report.bytes_read, 8);
+        report.elapsed = Duration::ZERO;
+        assert_eq!(report.bytes_per_second(), 0.0);
+        report.elapsed = Duration::from_secs(2);
+        assert_eq!(report.bytes_per_second(), 4.0);
+    }
 
     #[test]
     fn cancel_restores_history_and_isolates_all_worker_owned_state() {

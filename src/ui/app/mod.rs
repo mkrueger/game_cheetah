@@ -129,6 +129,7 @@ pub struct App {
     /// `TRACKER_INTERVAL` this throttles its rate independent of the
     /// UI repaint rate.
     last_change_tracker_run: Instant,
+    last_memory_editor_refresh: Instant,
     /// Cached `(pid, ProcessHandle)` reused across bulk-tracker invocations.
     /// On Linux this is essentially free; on Windows it avoids re-opening
     /// the process handle every tick.
@@ -190,6 +191,7 @@ impl Default for App {
             changed_addresses: HashMap::new(),
             change_tracker_cursor: 0,
             last_change_tracker_run: tick::idle_last_run(),
+            last_memory_editor_refresh: Instant::now() - crate::ui::refresh::BACKGROUND_INTERVAL,
             cached_process_handle: None,
             last_process_refresh: Instant::now() - Duration::from_secs(10),
             last_reattach_attempt: Instant::now() - Duration::from_secs(10),

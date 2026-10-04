@@ -13,6 +13,47 @@ use i18n_embed_fl::fl;
 const LARGE: Vec2 = egui::vec2(1100.0, 720.0);
 const SIZES: [Vec2; 2] = [egui::vec2(640.0, 420.0), LARGE];
 
+#[test]
+fn scan_statistics_and_zero_match_summary_are_visible_at_both_window_sizes() {
+    for size in SIZES {
+        let mut app = app_with_results(0);
+        let ctx = context();
+        let report = game_cheetah::SearchReport {
+            elapsed: std::time::Duration::from_secs(2),
+            bytes_read: 1024,
+            incomplete_reads: 3,
+            matches: Some(0),
+        };
+        app.state.searches[0].completed_report = Some(report);
+        let bytes = gabi::BytesConfig::default();
+        let detail = fl!(
+            LANGUAGE_LOADER,
+            "search-scan-statistics",
+            bytes = bytes.bytes(1024_u64).to_string(),
+            elapsed = "2.0",
+            rate = bytes.bytes(512_u64).to_string(),
+            incomplete = 3_usize
+        );
+        let summary = fl!(LANGUAGE_LOADER, "search-scan-summary", statistics = detail.clone(), matches = 0_usize);
+        let output = settle(&mut app, &ctx, size);
+        text_rect(&output, &summary);
+
+        app.state.searches[0].searching = SearchMode::Memory;
+        let output = settle(&mut app, &ctx, size);
+        text_rect(&output, &detail);
+        assert_text_absent(&output, &summary);
+
+        app.state.searches[0].searching = SearchMode::None;
+        app.state.searches[0].completed_report.as_mut().unwrap().matches = None;
+        let output = settle(&mut app, &ctx, size);
+        text_rect(&output, &fl!(LANGUAGE_LOADER, "search-snapshot-summary", statistics = detail));
+        app.clear_results();
+        let output = settle(&mut app, &ctx, size);
+        assert_text_absent(&output, &summary);
+        assert!(app.state.searches[0].search_report().is_none());
+    }
+}
+
 fn app_with_results(count: usize) -> App {
     let mut app = App::default();
     app.app_state = AppState::InProcess;

@@ -250,7 +250,7 @@ pub(crate) fn show(app: &mut App, ui: &mut egui::Ui) {
         if let Some(save) = &app.automatic_save {
             let mib = save.job.as_ref().map_or(0, |job| job.progress.bytes.load(Ordering::Relaxed) / (1024 * 1024));
             ui.horizontal_wrapped(|ui| {
-                ui.spinner();
+                crate::ui::refresh::spinner(ui);
                 ui.label(fl!(
                     crate::LANGUAGE_LOADER,
                     "auto-save-progress",
@@ -262,7 +262,7 @@ pub(crate) fn show(app: &mut App, ui: &mut egui::Ui) {
             if ui.button(fl!(crate::LANGUAGE_LOADER, "auto-save-cancel")).clicked() {
                 app.cancel_cheat_table_save();
             }
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+            ui.ctx().request_repaint_after(crate::ui::refresh::poll_interval(ui.ctx()));
         } else if let Some(notice) = &app.automatic_save_notice
             && notice::show(ui, "automatic_save_notice", &notice.summary, &notice.details).dismissed
         {

@@ -970,7 +970,7 @@ pub fn view_memory_editor(app: &mut App, ui: &mut egui::Ui) {
             let now = Instant::now();
             let needs_repaint = data.change_tracker.values().any(|(_, ts)| now.duration_since(*ts) < CHANGE_FADE);
             if needs_repaint {
-                ui.ctx().request_repaint();
+                ui.ctx().request_repaint_after(crate::ui::refresh::interval(ui.ctx(), true, false));
             }
         });
 }
