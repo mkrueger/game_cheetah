@@ -2322,6 +2322,17 @@ fn float_results_explain_tolerance_and_show_deviation_only_for_approximate_hits(
     assert!(deviation.left() >= header.left() - 1.0, "Deviation sits in the rightmost column");
     assert_eq!(deviations(&output), ["Δ −0.125"], "Exact and integer hits have no deviation");
 
+    // Clicking the summary offers the tolerance for the next search.
+    let popup_hint = fl!(LANGUAGE_LOADER, "float-tolerance-popup-hint");
+    assert_text_absent(&output, &popup_hint);
+    click(&mut app, &ctx, LARGE, text_rect(&output, &summary("±1")).center());
+    let output = settle(&mut app, &ctx, LARGE);
+    let hint = text_rect(&output, &popup_hint);
+    let percent = text_rect(&output, &fl!(LANGUAGE_LOADER, "float-tolerance-percent"));
+    assert!(percent.top() > hint.bottom(), "Controls sit below the popup hint");
+    click(&mut app, &ctx, LARGE, egui::pos2(LARGE.x - 40.0, LARGE.y - 40.0));
+    assert_text_absent(&settle(&mut app, &ctx, LARGE), &popup_hint);
+
     // The summary reflects the tolerance used for the results, not the current setting.
     app.float_tolerance_mode = game_cheetah::FloatToleranceMode::Percent;
     app.state.searches[0].search_value_text = "7".to_owned();

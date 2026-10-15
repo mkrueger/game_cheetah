@@ -698,6 +698,18 @@ fn type_picker(app: &mut App, ui: &mut egui::Ui, editable: bool, current: Search
     }
 }
 
+/// Adjusts the global setting; the toolbar keeps showing the tolerance of the
+/// current results until the next search or update uses the new one.
+fn float_tolerance_popup(app: &mut App, ui: &mut egui::Ui) {
+    ui.set_max_width(320.0);
+    ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "float-tolerance-label")).strong());
+    ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "float-tolerance-popup-hint")).size(12.5).weak());
+    ui.add_space(6.0);
+    if crate::ui::main_window::float_tolerance_controls(ui, app) {
+        app.persist_settings();
+    }
+}
+
 fn format_tolerance(tolerance: crate::FloatTolerance) -> String {
     match tolerance.mode {
         crate::FloatToleranceMode::Absolute => format!("±{}", tolerance.value),
@@ -847,8 +859,18 @@ fn result_table(app: &mut App, ui: &mut egui::Ui, active: bool) {
         }
         if let Some(basis) = float_basis {
             let summary = format!("{} {}", fl!(crate::LANGUAGE_LOADER, "float-tolerance-chip"), format_tolerance(basis.tolerance));
-            ui.add(egui::Label::new(egui::RichText::new(summary).size(13.0)).wrap_mode(egui::TextWrapMode::Extend))
-                .on_hover_text(float_tolerance_hint(basis));
+            let response = ui
+                .add(
+                    egui::Button::new(egui::RichText::new(summary).size(13.0))
+                        .frame_when_inactive(false)
+                        .min_size(egui::vec2(0.0, 22.0)),
+                )
+                .on_hover_text(float_tolerance_hint(basis))
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            egui::Popup::from_toggle_button_response(&response)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .gap(4.0)
+                .show(|ui| float_tolerance_popup(app, ui));
             ui.separator();
         }
         let (edit_label, edit_hint) = if app.confirm_value_writes {

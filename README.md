@@ -118,8 +118,9 @@ of Guess.
 
 When the results contain Float32 or Float64 hits, the line above the result table
 shows the tolerance that produced them (for example **Float tolerance ±1**; hover it
-for the searched value). It reflects the last search or update, not later setting
-changes, and Undo restores it. The rightmost **Δ** column shows how far an inexact
+for the searched value). Click it to change the tolerance for the next search or
+update without opening Settings. The summary reflects the last search or update,
+not later setting changes, and Undo restores it. The rightmost **Δ** column shows how far an inexact
 float hit's current value differs from the searched value, for example `Δ −0.125`
 for `1.875` when searching `2`. Exact and integer hits leave it empty.
 

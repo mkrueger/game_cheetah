@@ -25,8 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entered value, either by a fixed **Number** or a **Percent** of the value
   (0–50 %), for both initial scans and updates. The default, Number ± 1, keeps
   the previous behavior. Integer matches stay exact. Results with float hits
-  show the tolerance that produced them above the table, and a **Δ** column
-  shows how far inexact float hits differ from the searched value.
+  show the tolerance that produced them above the table (click it to change the
+  tolerance for the next search), and a **Δ** column shows how far inexact float
+  hits differ from the searched value.
 - Scans show elapsed time, read throughput and failed or partial read counts.
   Each search keeps its last completion summary with the final match count;
   Undo restores the previous summary and Reset clears it.

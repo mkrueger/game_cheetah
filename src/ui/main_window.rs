@@ -320,9 +320,7 @@ const TOLERANCE_MODE_WIDTH: f32 = 150.0;
 /// Settings row with a number/percent switch and value field in place of the
 /// on/off switch. Persists after editing finishes, not on every drag step.
 fn float_tolerance_row(ui: &mut egui::Ui, app: &mut App) -> bool {
-    use crate::{FloatTolerance, FloatToleranceMode};
-
-    let text_width = (ui.available_width() - TOLERANCE_FIELD_WIDTH - TOLERANCE_MODE_WIDTH - 32.0).max(120.0);
+    let text_width = (ui.available_width() - TOLERANCE_CONTROLS_WIDTH - 32.0).max(120.0);
     let mut changed = false;
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
@@ -336,35 +334,44 @@ fn float_tolerance_row(ui: &mut egui::Ui, app: &mut App) -> bool {
             );
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let mode = app.float_tolerance_mode;
-            let (value, decimals, suffix) = match mode {
-                FloatToleranceMode::Absolute => (&mut app.float_tolerance_absolute, 3, ""),
-                FloatToleranceMode::Percent => (&mut app.float_tolerance_percent, 2, " %"),
-            };
-            let response = ui.add_sized(
-                egui::vec2(TOLERANCE_FIELD_WIDTH, TOGGLE_SIZE.y + 4.0),
-                egui::DragValue::new(value)
-                    .range(0.0..=FloatTolerance::max_value(mode))
-                    .speed(0.1)
-                    .max_decimals(decimals)
-                    .prefix("± ")
-                    .suffix(suffix),
-            );
-            changed = response.drag_stopped() || (response.changed() && !response.dragged());
-            *value = FloatTolerance { mode, value: *value }.sanitized().value;
-            ui.add_space(8.0);
-            let switch_size = egui::vec2(TOLERANCE_MODE_WIDTH, TOGGLE_SIZE.y + 4.0);
-            let switched = ui
-                .allocate_ui_with_layout(switch_size, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    tolerance_mode_switch(ui, &mut app.float_tolerance_mode)
-                })
-                .inner;
-            if switched {
-                changed = true;
-            }
+            changed = float_tolerance_controls(ui, app);
         });
     });
     changed
+}
+
+const TOLERANCE_CONTROLS_WIDTH: f32 = TOLERANCE_FIELD_WIDTH + 8.0 + TOLERANCE_MODE_WIDTH;
+
+/// Number/percent switch plus value field, shared by Settings and the result
+/// toolbar popup. Returns `true` once a change should be persisted.
+pub(crate) fn float_tolerance_controls(ui: &mut egui::Ui, app: &mut App) -> bool {
+    use crate::{FloatTolerance, FloatToleranceMode};
+
+    let size = egui::vec2(TOLERANCE_CONTROLS_WIDTH, TOGGLE_SIZE.y + 4.0);
+    ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let mode = app.float_tolerance_mode;
+        let (value, decimals, suffix) = match mode {
+            FloatToleranceMode::Absolute => (&mut app.float_tolerance_absolute, 3, ""),
+            FloatToleranceMode::Percent => (&mut app.float_tolerance_percent, 2, " %"),
+        };
+        let response = ui.add_sized(
+            egui::vec2(TOLERANCE_FIELD_WIDTH, TOGGLE_SIZE.y + 4.0),
+            egui::DragValue::new(value)
+                .range(0.0..=FloatTolerance::max_value(mode))
+                .speed(0.1)
+                .max_decimals(decimals)
+                .prefix("± ")
+                .suffix(suffix),
+        );
+        let mut changed = response.drag_stopped() || (response.changed() && !response.dragged());
+        *value = FloatTolerance { mode, value: *value }.sanitized().value;
+        ui.add_space(8.0);
+        if tolerance_mode_switch(ui, &mut app.float_tolerance_mode) {
+            changed = true;
+        }
+        changed
+    })
+    .inner
 }
 
 /// Two-segment switch; segments are laid out right-to-left by the caller.
@@ -374,11 +381,12 @@ fn tolerance_mode_switch(ui: &mut egui::Ui, mode: &mut crate::FloatToleranceMode
     let mut changed = false;
     egui::Frame::new()
         .fill(egui::Color32::from_rgb(20, 23, 27))
-        .stroke(ui.visuals().widgets.inactive.bg_stroke)
+        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(56, 62, 72)))
         .corner_radius(egui::CornerRadius::same(7))
         .inner_margin(egui::Margin::same(2))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
+            ui.spacing_mut().button_padding = egui::vec2(10.0, 3.0);
             for (segment, label) in [
                 (FloatToleranceMode::Percent, fl!(crate::LANGUAGE_LOADER, "float-tolerance-percent")),
                 (FloatToleranceMode::Absolute, fl!(crate::LANGUAGE_LOADER, "float-tolerance-absolute")),
