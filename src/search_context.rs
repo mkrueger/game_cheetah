@@ -54,6 +54,7 @@ pub struct SearchHistoryEntry {
     previous_unknown_values: HashMap<(usize, SearchType), [u8; 8]>,
     memory_snapshot: Vec<(usize, Arc<[u8]>)>,
     unknown_comparison: Option<UnknownComparison>,
+    float_search_basis: Option<FloatSearchBasis>,
     search_complete: bool,
     total_bytes: usize,
     current_bytes: usize,
@@ -156,6 +157,40 @@ impl FloatTolerance {
     }
 }
 
+/// Tolerance and searched value of a value scan/update, kept with its results.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FloatSearchBasis {
+    pub tolerance: FloatTolerance,
+    pub target_f32: f32,
+    pub target_f64: f64,
+}
+
+impl FloatSearchBasis {
+    /// `None` for search types that cannot produce Float/Double hits.
+    pub fn new(search_type: SearchType, text: &str, tolerance: FloatTolerance) -> Option<Self> {
+        if !matches!(search_type, SearchType::Guess | SearchType::Float | SearchType::Double) {
+            return None;
+        }
+        let target_f32 = f32::from_le_bytes(SearchType::Float.from_string(text).ok()?.1.get(..4)?.try_into().ok()?);
+        let target_f64 = f64::from_le_bytes(SearchType::Double.from_string(text).ok()?.1.get(..8)?.try_into().ok()?);
+        Some(Self {
+            tolerance: tolerance.sanitized(),
+            target_f32,
+            target_f64,
+        })
+    }
+
+    /// Current value minus the searched value, in the row's own precision.
+    pub fn deviation(&self, search_type: SearchType, bytes: &[u8]) -> Option<f64> {
+        let (current, target) = match search_type {
+            SearchType::Float => (f64::from(f32::from_le_bytes(bytes.get(..4)?.try_into().ok()?)), f64::from(self.target_f32)),
+            SearchType::Double => (f64::from_le_bytes(bytes.get(..8)?.try_into().ok()?), self.target_f64),
+            _ => return None,
+        };
+        (current.is_finite() && target.is_finite()).then_some(current - target)
+    }
+}
+
 pub struct SearchContext {
     /// Ephemeral UI identity: survives tab reordering, never saved to disk.
     pub(crate) view_id: u64,
@@ -207,6 +242,9 @@ pub struct SearchContext {
     /// Previous-value table for unknown-search subsequent passes.
     pub previous_unknown_values: UnknownPreviousValues,
     pub unknown_comparison: Option<UnknownComparison>,
+    /// Tolerance and value of the scan/update that produced the current
+    /// results. Explains approximate Float/Double hits in the result table.
+    pub float_search_basis: Option<FloatSearchBasis>,
 }
 
 impl SearchContext {
@@ -252,6 +290,7 @@ impl SearchContext {
             memory_snapshot: Arc::new(RwLock::new(Vec::new())),
             previous_unknown_values: Arc::new(RwLock::new(HashMap::new())),
             unknown_comparison: None,
+            float_search_basis: None,
         }
     }
 
@@ -395,6 +434,7 @@ impl SearchContext {
         self.clear_previous_unknown_values();
         self.clear_memory_snapshot();
         self.unknown_comparison = None;
+        self.float_search_basis = None;
 
         // Create new channel to clear all pending results
         let (tx, rx) = Self::result_channel();
@@ -420,6 +460,7 @@ impl SearchContext {
             previous_unknown_values: self.previous_unknown_values.read().map(|map| map.clone()).unwrap_or_default(),
             memory_snapshot: self.memory_snapshot.read().map(|pages| pages.clone()).unwrap_or_default(),
             unknown_comparison: self.unknown_comparison,
+            float_search_basis: self.float_search_basis,
             search_complete: self.search_complete.load(Ordering::Acquire),
             total_bytes: self.total_bytes,
             current_bytes: self.current_bytes.load(Ordering::Acquire),
@@ -444,6 +485,7 @@ impl SearchContext {
         self.previous_unknown_values = Arc::new(RwLock::new(old.previous_unknown_values));
         self.memory_snapshot = Arc::new(RwLock::new(old.memory_snapshot));
         self.unknown_comparison = old.unknown_comparison;
+        self.float_search_basis = old.float_search_basis;
         self.search_complete = Arc::new(AtomicBool::new(old.search_complete));
         self.current_bytes = Arc::new(AtomicUsize::new(old.current_bytes));
         self.total_bytes = old.total_bytes;
@@ -764,6 +806,8 @@ mod tests {
             .insert((result.addr, result.search_type), [1; 8]);
         search.store_memory_snapshot(result.addr, vec![2; 8]);
         search.unknown_comparison = Some(UnknownComparison::Increased);
+        let basis = FloatSearchBasis::new(SearchType::Float, "2", FloatTolerance::default());
+        search.float_search_basis = basis;
         search.search_complete.store(true, Ordering::Release);
         search.push_undo_state(search.collect_results());
 
@@ -771,6 +815,7 @@ mod tests {
         search.clear_previous_unknown_values();
         search.clear_memory_snapshot();
         search.unknown_comparison = Some(UnknownComparison::Changed);
+        search.float_search_basis = FloatSearchBasis::new(SearchType::Float, "3", FloatTolerance::percent(1.0));
         search.results_sender.send(vec![SearchResult::new(0xFFFF, SearchType::Int)]).unwrap();
         search.undo_last_search();
 
@@ -779,6 +824,7 @@ mod tests {
         assert_eq!(search.previous_unknown_values.read().unwrap()[&(result.addr, result.search_type)], [1; 8]);
         assert_eq!(&*search.memory_snapshot.read().unwrap()[0].1, &[2; 8]);
         assert_eq!(search.unknown_comparison, Some(UnknownComparison::Increased));
+        assert_eq!(search.float_search_basis, basis);
         assert!(search.search_complete.load(Ordering::Acquire));
         assert!(search.old_results.is_empty());
 
@@ -787,5 +833,27 @@ mod tests {
         assert!(search.memory_snapshot.read().unwrap().is_empty());
         assert!(search.previous_unknown_values.read().unwrap().is_empty());
         assert_eq!(search.unknown_comparison, None);
+        assert_eq!(search.float_search_basis, None);
+    }
+
+    #[test]
+    fn float_search_basis_explains_only_float_hits_in_their_own_precision() {
+        let tolerance = FloatTolerance::percent(2.0);
+        for ty in [SearchType::Byte, SearchType::Int, SearchType::Int64, SearchType::Unknown, SearchType::String] {
+            assert_eq!(FloatSearchBasis::new(ty, "2", tolerance), None);
+        }
+        assert_eq!(FloatSearchBasis::new(SearchType::Float, "abc", tolerance), None);
+        let basis = FloatSearchBasis::new(SearchType::Guess, "2", FloatTolerance::percent(500.0)).unwrap();
+        assert_eq!(basis.tolerance, FloatTolerance::percent(FloatTolerance::MAX_PERCENT), "Stored sanitized");
+        assert_eq!(basis.deviation(SearchType::Float, &1.875_f32.to_le_bytes()), Some(-0.125));
+        assert_eq!(basis.deviation(SearchType::Double, &2.5_f64.to_le_bytes()), Some(0.5));
+        assert_eq!(basis.deviation(SearchType::Float, &2.0_f32.to_le_bytes()), Some(0.0));
+        assert_eq!(basis.deviation(SearchType::Int, &2_i32.to_le_bytes()), None);
+        assert_eq!(basis.deviation(SearchType::Float, &f32::NAN.to_le_bytes()), None);
+        assert_eq!(basis.deviation(SearchType::Double, &[0; 4]), None, "Short reads have no deviation");
+        // 0.1 differs between Float32 and Float64; each row compares in its own precision.
+        let basis = FloatSearchBasis::new(SearchType::Float, "0.1", tolerance).unwrap();
+        assert_eq!(basis.deviation(SearchType::Float, &0.1_f32.to_le_bytes()), Some(0.0));
+        assert_eq!(basis.deviation(SearchType::Double, &0.1_f64.to_le_bytes()), Some(0.0));
     }
 }

@@ -116,6 +116,13 @@ applies to Float32, Float64 and the float interpretations of **Number / Guess** 
 a search or update starts. Integer matches stay exact, including the integer part
 of Guess.
 
+When the results contain Float32 or Float64 hits, the line above the result table
+shows the tolerance that produced them (for example **Float tolerance ±1**; hover it
+for the searched value). It reflects the last search or update, not later setting
+changes, and Undo restores it. The rightmost **Δ** column shows how far an inexact
+float hit's current value differs from the searched value, for example `Δ −0.125`
+for `1.875` when searching `2`. Exact and integer hits leave it empty.
+
 After a numeric search, expand **Filter results** beside **Undo** and **Reset search**.
 **Stable values only** is available for all numeric search modes. **Data types**
 is available only for **Number / Guess** and **Unknown**, not for a concrete type

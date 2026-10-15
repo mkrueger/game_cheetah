@@ -698,6 +698,38 @@ fn type_picker(app: &mut App, ui: &mut egui::Ui, editable: bool, current: Search
     }
 }
 
+fn format_tolerance(tolerance: crate::FloatTolerance) -> String {
+    match tolerance.mode {
+        crate::FloatToleranceMode::Absolute => format!("±{}", tolerance.value),
+        crate::FloatToleranceMode::Percent => format!("±{} %", tolerance.value),
+    }
+}
+
+// Built here rather than with Fluent placeables: the loader wraps
+// substitutions in isolate marks, which the bundled fonts draw as boxes.
+fn float_tolerance_hint(basis: crate::FloatSearchBasis) -> String {
+    let rule = match basis.tolerance.mode {
+        crate::FloatToleranceMode::Absolute => fl!(crate::LANGUAGE_LOADER, "float-tolerance-hint-absolute"),
+        crate::FloatToleranceMode::Percent => fl!(crate::LANGUAGE_LOADER, "float-tolerance-hint-percent"),
+    };
+    format!(
+        "{rule}\n{}: {}\n{}",
+        fl!(crate::LANGUAGE_LOADER, "float-tolerance-hint-target"),
+        basis.target_f64,
+        fl!(crate::LANGUAGE_LOADER, "float-tolerance-hint-settings")
+    )
+}
+
+/// Signed difference with at most four decimals; `None` when it rounds to zero.
+fn format_deviation(delta: f64) -> Option<String> {
+    let text = format!("{delta:+.4}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    if matches!(text, "+0" | "-0") {
+        return None;
+    }
+    Some(format!("Δ {}", text.replace('-', "−")))
+}
+
 fn compact_type_label(search_type: SearchType) -> String {
     match search_type {
         SearchType::Byte => "UInt8".to_owned(),
@@ -744,6 +776,10 @@ fn result_table(app: &mut App, ui: &mut egui::Ui, active: bool) {
     let freezed: std::collections::HashSet<usize> = search_context.freezed_addresses.iter().copied().collect();
     let all_frozen = !results.is_empty() && results.iter().all(|r| freezed.contains(&r.addr));
     let frozen_count = results.iter().filter(|r| freezed.contains(&r.addr)).count();
+    // Explain approximate hits only when the current results contain floats.
+    let float_basis = search_context
+        .float_search_basis
+        .filter(|_| results.iter().any(|r| matches!(r.search_type, SearchType::Float | SearchType::Double)));
 
     // Capture lookups we'll need inside the row closure. Borrow checker:
     // the row closure runs inside TableBuilder::body which holds `ui`, and
@@ -807,6 +843,12 @@ fn result_table(app: &mut App, ui: &mut egui::Ui, active: bool) {
         if !is_string {
             let text = format!("{frozen_count} {}", fl!(crate::LANGUAGE_LOADER, "result-frozen-count"));
             ui.add(egui::Label::new(egui::RichText::new(text).size(13.0)).wrap_mode(egui::TextWrapMode::Extend));
+            ui.separator();
+        }
+        if let Some(basis) = float_basis {
+            let summary = format!("{} {}", fl!(crate::LANGUAGE_LOADER, "float-tolerance-chip"), format_tolerance(basis.tolerance));
+            ui.add(egui::Label::new(egui::RichText::new(summary).size(13.0)).wrap_mode(egui::TextWrapMode::Extend))
+                .on_hover_text(float_tolerance_hint(basis));
             ui.separator();
         }
         let (edit_label, edit_hint) = if app.confirm_value_writes {
@@ -917,7 +959,12 @@ fn result_table(app: &mut App, ui: &mut egui::Ui, active: bool) {
                     });
                 });
             }
-            header.col(|_| {});
+            header.col(|ui| {
+                if float_basis.is_some() {
+                    ui.label(egui::RichText::new("Δ").text_style(egui::TextStyle::Button).strong().size(16.0))
+                        .on_hover_text(fl!(crate::LANGUAGE_LOADER, "result-deviation-tooltip"));
+                }
+            });
         })
         .body(|body| {
             body.rows(RESULT_ROW_HEIGHT, total_results, |mut row| {
@@ -978,6 +1025,9 @@ fn result_table(app: &mut App, ui: &mut egui::Ui, active: bool) {
                 // Format for display. Done after the diff so unchanged rows
                 // skip the alloc-and-decode entirely when bytes are empty.
                 let readable = !raw_bytes.is_empty();
+                let deviation = float_basis
+                    .and_then(|basis| basis.deviation(result.search_type, &raw_bytes))
+                    .and_then(format_deviation);
                 let value_text = if !readable {
                     fl!(crate::LANGUAGE_LOADER, "result-unreadable")
                 } else if matches!(result.search_type, SearchType::String | SearchType::StringUtf16) {
@@ -1205,7 +1255,12 @@ fn result_table(app: &mut App, ui: &mut egui::Ui, active: bool) {
                     });
                 }
 
-                row.col(|_| {});
+                row.col(|ui| {
+                    if let Some(text) = &deviation {
+                        ui.add(egui::Label::new(egui::RichText::new(text).size(13.0).weak()).selectable(false).truncate())
+                            .on_hover_text(fl!(crate::LANGUAGE_LOADER, "result-deviation-tooltip"));
+                    }
+                });
 
                 let row_response = row.response();
                 if row_response.clicked() || row_response.secondary_clicked() || address_response.double_clicked() {

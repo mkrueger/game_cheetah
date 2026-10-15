@@ -2283,6 +2283,69 @@ fn tab_actions_discard_real_uncommitted_edit_buffers_without_writing() {
 }
 
 #[cfg(target_os = "linux")]
+#[test]
+fn float_results_explain_tolerance_and_show_deviation_only_for_approximate_hits() {
+    use game_cheetah::{FloatSearchBasis, FloatTolerance};
+
+    let approximate = Box::new(1.875_f32);
+    let exact = Box::new(2.0_f32);
+    let integer = Box::new(2_i32);
+    let mut app = app_with_results(0);
+    app.state.pid = std::process::id() as _;
+    let search = &mut app.state.searches[0];
+    search.search_type = SearchType::Guess;
+    search.search_value_text = "2".to_owned();
+    search.set_cached_results(vec![
+        SearchResult::new(&*approximate as *const f32 as usize, SearchType::Float),
+        SearchResult::new(&*exact as *const f32 as usize, SearchType::Float),
+        SearchResult::new(&*integer as *const i32 as usize, SearchType::Int),
+    ]);
+    search.search_complete.store(true, Ordering::Release);
+    search.float_search_basis = FloatSearchBasis::new(SearchType::Guess, "2", FloatTolerance::default());
+    let ctx = context();
+    let deviations = |output: &FullOutput| {
+        shapes(output)
+            .into_iter()
+            .filter_map(|(_, shape)| match shape {
+                Shape::Text(text) if text.galley.job.text.starts_with("Δ ") => Some(text.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let summary = |tolerance: &str| format!("{} {tolerance}", fl!(LANGUAGE_LOADER, "float-tolerance-chip"));
+
+    let output = settle(&mut app, &ctx, LARGE);
+    text_rect(&output, "1.875");
+    text_rect(&output, &summary("±1"));
+    let header = text_rect(&output, "Δ");
+    let deviation = text_rect(&output, "Δ −0.125");
+    assert!(deviation.left() >= header.left() - 1.0, "Deviation sits in the rightmost column");
+    assert_eq!(deviations(&output), ["Δ −0.125"], "Exact and integer hits have no deviation");
+
+    // The summary reflects the tolerance used for the results, not the current setting.
+    app.float_tolerance_mode = game_cheetah::FloatToleranceMode::Percent;
+    app.state.searches[0].search_value_text = "7".to_owned();
+    let output = settle(&mut app, &ctx, LARGE);
+    text_rect(&output, &summary("±1"));
+    assert_eq!(deviations(&output), ["Δ −0.125"]);
+
+    app.state.searches[0].float_search_basis = FloatSearchBasis::new(SearchType::Guess, "2", FloatTolerance::percent(7.5));
+    text_rect(&settle(&mut app, &ctx, LARGE), &summary("±7.5 %"));
+
+    for basis in [None, FloatSearchBasis::new(SearchType::Guess, "2", FloatTolerance::default())] {
+        app.state.searches[0].float_search_basis = basis;
+        if basis.is_some() {
+            app.state.searches[0].set_cached_results(vec![SearchResult::new(&*integer as *const i32 as usize, SearchType::Int)]);
+        }
+        let output = settle(&mut app, &ctx, LARGE);
+        assert_text_absent(&output, &summary("±1"));
+        assert_text_absent(&output, "Δ");
+        assert!(deviations(&output).is_empty());
+    }
+    assert_eq!((*approximate, *exact, *integer), (1.875, 2.0, 2));
+}
+
+#[cfg(target_os = "linux")]
 fn own_value_app(value: &mut i32) -> App {
     let mut app = app_with_results(1);
     app.state.pid = std::process::id() as _;

@@ -488,6 +488,7 @@ impl GameCheetahEngine {
         };
         self.clear_errors();
         let worker = self.searches[search_index].begin_search(SearchMode::Memory, self.pid, self.attached_start_time, self.process_name.clone());
+        self.searches[search_index].float_search_basis = crate::FloatSearchBasis::new(search_type, &search_value_text, self.float_tolerance);
         if !worker.check_process() {
             worker.finish();
             self.poll_searches();
@@ -532,13 +533,14 @@ impl GameCheetahEngine {
             return;
         }
         let prepared = narrowing::PreparedSearch::with_float_tolerance(&search.collect_results(), &search.search_value_text, self.float_tolerance);
-        self.filter_prepared(search_index, prepared, None);
+        let basis = crate::FloatSearchBasis::new(search.search_type, &search.search_value_text, self.float_tolerance);
+        self.filter_prepared(search_index, prepared, None, Some(basis));
     }
 
     /// Narrow all existing numeric hits using current process memory. The
     /// previous unknown-search baseline stays intact; Undo restores the hit set.
     pub fn filter_numeric_results(&mut self, search_index: usize, filter: crate::NumericFilter) {
-        self.filter_prepared(search_index, narrowing::PreparedSearch::numeric(filter), None);
+        self.filter_prepared(search_index, narrowing::PreparedSearch::numeric(filter), None, None);
     }
 
     pub fn filter_results(&mut self, search_index: usize, filter: crate::ResultFilter) {
@@ -550,10 +552,19 @@ impl GameCheetahEngine {
             search_index,
             narrowing::PreparedSearch::filtered(filter.numeric, &filter.types),
             filter.stable_for,
+            None,
         );
     }
 
-    fn filter_prepared(&mut self, search_index: usize, prepared: narrowing::PreparedSearch, stable_for: Option<Duration>) {
+    /// `replace_float_basis` is `Some` for value updates, which explain their
+    /// results with a new tolerance/value; filters keep the previous basis.
+    fn filter_prepared(
+        &mut self,
+        search_index: usize,
+        prepared: narrowing::PreparedSearch,
+        stable_for: Option<Duration>,
+        replace_float_basis: Option<Option<crate::FloatSearchBasis>>,
+    ) {
         if self.reject_pointer_scan(search_index) {
             return;
         }
@@ -581,6 +592,9 @@ impl GameCheetahEngine {
         };
         let old_results = search_context.collect_results();
         let worker = search_context.begin_search(SearchMode::Percent, self.pid, self.attached_start_time, self.process_name.clone());
+        if let Some(basis) = replace_float_basis {
+            search_context.float_search_basis = basis;
+        }
         search_context.total_bytes = old_results.len();
 
         if let Some(duration) = stable_for {
@@ -1075,6 +1089,7 @@ impl GameCheetahEngine {
         search_context.clear_memory_snapshot();
         search_context.clear_previous_unknown_values();
         search_context.unknown_comparison = None;
+        search_context.float_search_basis = None;
         if !worker.check_process() {
             worker.finish();
             self.poll_searches();
@@ -2136,9 +2151,15 @@ mod tests {
         engine.float_tolerance = crate::FloatTolerance::percent(1.0);
         engine.filter_searches(0);
         assert_eq!(wait(&engine.searches[0]), vec![(address, SearchType::Float)]);
+        let percent_basis = crate::FloatSearchBasis::new(SearchType::Float, "10150", crate::FloatTolerance::percent(1.0));
+        assert!(percent_basis.is_some());
+        assert_eq!(engine.searches[0].float_search_basis, percent_basis, "Results remember their tolerance");
         engine.float_tolerance = crate::FloatTolerance::default();
         engine.filter_searches(0);
         assert!(wait(&engine.searches[0]).is_empty());
+        assert_eq!(engine.searches[0].float_search_basis.unwrap().tolerance, crate::FloatTolerance::default());
+        engine.searches[0].undo_last_search();
+        assert_eq!(engine.searches[0].float_search_basis, percent_basis, "Undo restores the explanation");
         assert_eq!(f32::from_le_bytes(bytes[..4].try_into().unwrap()), 10_080.0);
     }
 
