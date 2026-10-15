@@ -144,6 +144,13 @@ first-search-label = First search
 searches-heading = Searches
 rename-search-hint = F2 or right-click to rename
 rename-search-menu = Rename
+search-layout = Layout
+search-layout-tabs = All searches as tabs
+search-layout-horizontal = Side by side
+search-layout-vertical = Stacked
+search-layout-grid = Grid
+search-layout-hint = Drag a search tab to an edge to split, or onto another tab bar to group. Drag dividers to resize.
+search-tab-drag-hint = Drag to another position, an edge or another tab bar to rearrange
 close-search-menu = Close
 close-other-searches-menu = Close others
 

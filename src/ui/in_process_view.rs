@@ -62,11 +62,14 @@ pub fn view_in_process(app: &mut App, ui: &mut egui::Ui) {
     top_bar(app, ui);
     crate::ui::auto_save::show(app, ui);
     error_bar(app, ui);
-    tab_bar(app, ui);
     egui::CentralPanel::default()
-        .frame(egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::symmetric(20, 16)))
+        .frame(
+            egui::Frame::central_panel(ui.style())
+                .fill(crate::ui::search_workspace::WORKSPACE_BG)
+                .inner_margin(egui::Margin::same(8)),
+        )
         .show(ui, |ui| {
-            search_area(app, ui);
+            crate::ui::search_workspace::show(app, ui);
         });
     cheat_table_toast(app, ui.ctx());
     crate::ui::address_editor::show(app, ui.ctx());
@@ -116,6 +119,10 @@ fn top_bar(app: &mut App, ui: &mut egui::Ui) {
                             app.save_cheat_table();
                         }
                     }
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    crate::ui::search_workspace::layout_picker(app, ui);
                 });
             });
         });
@@ -157,241 +164,10 @@ fn error_bar(app: &mut App, ui: &mut egui::Ui) {
     crate::ui::error_notice::show(app, ui);
 }
 
-/// Browser-style horizontal tab bar listing all active searches.
-///
-/// Layout:
-/// * One row of tabs with rounded top corners.
-/// * Active tab is filled with the accent colour; inactive tabs are muted.
-/// * A small `×` close button is shown only while its tab is hovered.
-/// * A trailing tab-height `+` icon button creates a new search.
-/// * The bar is horizontally scrollable so a large number of searches still
-///   stays usable.
-fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
-    egui::Panel::top("search_tab_bar")
-        .frame(egui::Frame::new().fill(egui::Color32::from_rgb(20, 23, 27)).inner_margin(egui::Margin {
-            left: 12,
-            right: 12,
-            top: 6,
-            bottom: 0,
-        }))
-        .show(ui, |ui| {
-            let accent = ui.visuals().selection.bg_fill;
-            let count = app.state.searches.len();
-            let mut switch_to: Option<usize> = None;
-            let mut close: Option<usize> = None;
-            let mut close_others: Option<usize> = None;
-            let mut rename: Option<usize> = None;
-            let mut new_search = false;
-
-            // F2 starts renaming the active tab when nothing else has
-            // focus (so the user can't trigger it while typing in the
-            // value-input or any other text field).
-            if app.renaming_search_index.is_none()
-                && app.selected_result.is_none()
-                && !ui.memory(|m| m.focused().is_some())
-                && ui.input(|i| i.key_pressed(egui::Key::F2))
-            {
-                rename = Some(app.state.current_search);
-            }
-
-            egui::ScrollArea::horizontal()
-                .id_salt("tab_bar_scroll")
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        const TAB_HEIGHT: f32 = 32.0;
-                        const TAB_RADIUS: u8 = 8;
-
-                        for i in 0..count {
-                            let is_active = i == app.state.current_search;
-                            let name = app.state.searches[i].description.clone();
-
-                            // Inline rename: a TextEdit replaces the tab so the
-                            // bar height stays stable.
-                            if app.renaming_search_index == Some(i) {
-                                let response = ui.add(
-                                    egui::TextEdit::singleline(&mut app.rename_search_text)
-                                        .id(egui::Id::new(("rename_search", i)))
-                                        .desired_width(140.0)
-                                        .margin(egui::Margin::symmetric(8, 6)),
-                                );
-                                if app.rename_request_focus {
-                                    response.request_focus();
-                                    app.rename_request_focus = false;
-                                }
-                                let escape_pressed = ui.input(|input| input.key_pressed(egui::Key::Escape));
-                                if escape_pressed {
-                                    app.cancel_rename_search();
-                                } else if response.lost_focus() {
-                                    app.commit_rename_search();
-                                }
-                                continue;
-                            }
-
-                            // Measure the label to compute the tab width.
-                            let font = egui::FontId::proportional(14.0);
-                            let galley = ui.painter().layout_no_wrap(name.clone(), font.clone(), egui::Color32::WHITE);
-                            let label_w = galley.size().x.ceil();
-                            let show_close = count > 1;
-                            let close_w = if show_close { 18.0 } else { 0.0 };
-                            let tab_w = label_w + 24.0 + close_w + if show_close { 4.0 } else { 0.0 };
-
-                            let (full_rect, _) = ui.allocate_exact_size(egui::vec2(tab_w, TAB_HEIGHT), egui::Sense::hover());
-                            let tab_hovered = ui.ctx().pointer_hover_pos().is_some_and(|pos| full_rect.contains(pos));
-
-                            // Reserve the close button area; the rest is the
-                            // clickable tab body.
-                            let close_rect = if show_close {
-                                Some(egui::Rect::from_center_size(
-                                    egui::pos2(full_rect.right() - 11.0, full_rect.center().y),
-                                    egui::vec2(16.0, 16.0),
-                                ))
-                            } else {
-                                None
-                            };
-                            let body_max_x = close_rect.map(|r| r.left() - 2.0).unwrap_or(full_rect.max.x);
-                            let body_rect = egui::Rect::from_min_max(full_rect.min, egui::pos2(body_max_x, full_rect.max.y));
-                            // `click_and_drag()` covers primary, secondary
-                            // (for the context menu) and double click.
-                            let body_response = ui.interact(body_rect, egui::Id::new(("tab_body", i)), egui::Sense::click_and_drag());
-
-                            let corners = egui::CornerRadius {
-                                nw: TAB_RADIUS,
-                                ne: TAB_RADIUS,
-                                sw: 0,
-                                se: 0,
-                            };
-                            let (bg, text_color) = if is_active {
-                                (accent, egui::Color32::WHITE)
-                            } else if tab_hovered {
-                                (egui::Color32::from_rgb(36, 40, 46), egui::Color32::from_rgb(225, 228, 232))
-                            } else {
-                                (egui::Color32::from_rgb(28, 31, 36), egui::Color32::from_rgb(180, 184, 190))
-                            };
-                            ui.painter().rect_filled(full_rect, corners, bg);
-
-                            let label_pos = egui::pos2(full_rect.left() + 12.0, full_rect.center().y);
-                            let label_font = if is_active {
-                                egui::FontId::new(14.0, egui::FontFamily::Proportional)
-                            } else {
-                                font.clone()
-                            };
-                            ui.painter().text(label_pos, egui::Align2::LEFT_CENTER, &name, label_font, text_color);
-
-                            if let Some(rect) = close_rect
-                                && tab_hovered
-                            {
-                                let close_response = ui
-                                    .interact(rect, egui::Id::new(("close_tab", i)), egui::Sense::click())
-                                    .on_hover_text(fl!(crate::LANGUAGE_LOADER, "close-tab-hover-text"));
-                                let hovered = close_response.hovered();
-                                let close_bg = if hovered {
-                                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, 40)
-                                } else {
-                                    egui::Color32::TRANSPARENT
-                                };
-                                ui.painter().rect_filled(rect, egui::CornerRadius::same(3), close_bg);
-                                let glyph_color = if hovered { egui::Color32::WHITE } else { text_color };
-                                ui.painter().text(
-                                    rect.center(),
-                                    egui::Align2::CENTER_CENTER,
-                                    "\u{00D7}",
-                                    egui::FontId::proportional(14.0),
-                                    glyph_color,
-                                );
-                                if close_response.clicked() {
-                                    close = Some(i);
-                                }
-                            }
-
-                            if body_response.clicked() {
-                                switch_to = Some(i);
-                            }
-                            // Double-click only renames when the tab is
-                            // already active — otherwise it would be too
-                            // easy to start a rename during a quick
-                            // tab switch.
-                            if is_active && body_response.double_clicked() {
-                                rename = Some(i);
-                            }
-                            body_response.clone().on_hover_text(fl!(crate::LANGUAGE_LOADER, "rename-search-hint"));
-
-                            // Right-click context menu: Rename / Close /
-                            // Close others. "Close" and "Close others"
-                            // are only enabled when more than one search
-                            // exists.
-                            body_response.context_menu(|ui| {
-                                if ui.button(fl!(crate::LANGUAGE_LOADER, "rename-search-menu")).clicked() {
-                                    rename = Some(i);
-                                    ui.close();
-                                }
-                                ui.separator();
-                                let many = count > 1;
-                                if ui
-                                    .add_enabled(many, egui::Button::new(fl!(crate::LANGUAGE_LOADER, "close-search-menu")))
-                                    .clicked()
-                                {
-                                    close = Some(i);
-                                    ui.close();
-                                }
-                                if ui
-                                    .add_enabled(many, egui::Button::new(fl!(crate::LANGUAGE_LOADER, "close-other-searches-menu")))
-                                    .clicked()
-                                {
-                                    close_others = Some(i);
-                                    ui.close();
-                                }
-                            });
-                        }
-
-                        ui.add_space(6.0);
-
-                        // Trailing "+" icon action: visually quiet, but the
-                        // same height and hit target as a search tab.
-                        let plus_size = egui::vec2(TAB_HEIGHT, TAB_HEIGHT);
-                        let (plus_rect, _) = ui.allocate_exact_size(plus_size, egui::Sense::hover());
-                        let plus_response = ui.interact(plus_rect, egui::Id::new("new_search_tab"), egui::Sense::click());
-                        let plus_bg = if plus_response.hovered() {
-                            egui::Color32::from_rgb(36, 40, 46)
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        };
-                        ui.painter().rect_filled(plus_rect, egui::CornerRadius::same(6), plus_bg);
-                        ui.painter().text(
-                            plus_rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "+",
-                            egui::FontId::proportional(18.0),
-                            egui::Color32::from_rgb(200, 205, 212),
-                        );
-                        if plus_response.clicked() {
-                            new_search = true;
-                        }
-                        plus_response.on_hover_text(fl!(crate::LANGUAGE_LOADER, "open-tab-hover-text"));
-                    });
-                });
-
-            if let Some(i) = switch_to {
-                app.switch_search(i);
-            }
-            if let Some(i) = rename {
-                app.begin_rename_search(i);
-            }
-            if let Some(i) = close {
-                app.close_search(i);
-            }
-            if let Some(i) = close_others {
-                app.close_other_searches(i);
-            }
-            if new_search {
-                app.new_search();
-            }
-        });
-}
-
-fn search_area(app: &mut App, ui: &mut egui::Ui) {
-    let undo_shortcut = ui.memory(|memory| memory.focused().is_none() || memory.has_focus(result_table_focus_id()))
+pub(crate) fn search_area(app: &mut App, ui: &mut egui::Ui, active: bool) {
+    let focus_id = result_table_focus_id(&app.state.searches[app.state.current_search]);
+    let undo_shortcut = active
+        && ui.memory(|memory| memory.focused().is_none() || memory.has_focus(focus_id))
         && !egui::Popup::is_any_open(ui.ctx())
         && ui.input(|input| input.modifiers.command && !input.modifiers.shift && input.key_pressed(egui::Key::Z));
     if undo_shortcut
@@ -658,7 +434,7 @@ fn search_area(app: &mut App, ui: &mut egui::Ui) {
                 }
                 ui.add_space(8.0);
             }
-            result_table(app, ui);
+            result_table(app, ui, active);
         }
     } else if matches!(searching, SearchMode::None) && (!is_search_complete || selected_type != SearchType::Unknown || unknown_comparison.is_some()) {
         ui.add_space(18.0);
@@ -936,8 +712,8 @@ fn compact_type_label(search_type: SearchType) -> String {
     }
 }
 
-fn result_table_focus_id() -> egui::Id {
-    egui::Id::new("result_table_focus")
+pub(crate) fn result_table_focus_id(search: &crate::SearchContext) -> egui::Id {
+    egui::Id::new(("result_table_focus", search.view_id))
 }
 
 // Result caches are sorted by (address, type). Resolve identity, not a stale
@@ -949,12 +725,14 @@ fn selected_result_index(results: &[SearchResult], selected: Option<SearchResult
         .ok()
 }
 
-fn result_table(app: &mut App, ui: &mut egui::Ui) {
+fn result_table(app: &mut App, ui: &mut egui::Ui, active: bool) {
     let search_index = app.state.current_search;
     let Some(search_context) = app.state.searches.get(search_index) else {
         return;
     };
     let results = search_context.collect_results();
+    let view_id = search_context.view_id;
+    let focus_id = result_table_focus_id(search_context);
     let total_results = results.len();
     let is_string = matches!(search_context.search_type, SearchType::String | SearchType::StringUtf16);
     let show_search_types = matches!(search_context.search_type, SearchType::Guess | SearchType::Unknown);
@@ -991,9 +769,10 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     if app.selected_result.is_some() && selected_index.is_none() {
         app.clear_result_interaction();
     }
-    let keyboard_allowed = app.editing_result.is_none()
+    let keyboard_allowed = active
+        && app.editing_result.is_none()
         && !egui::Popup::is_any_open(ui.ctx())
-        && ui.memory(|memory| memory.focused().is_none() || memory.has_focus(result_table_focus_id()));
+        && ui.memory(|memory| memory.focused().is_none() || memory.has_focus(focus_id));
     if keyboard_allowed && !results.is_empty() {
         for key in [egui::Key::ArrowDown, egui::Key::ArrowUp, egui::Key::Home, egui::Key::End] {
             if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, key)) {
@@ -1006,7 +785,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                 selected_index = Some(index);
                 app.selected_result = Some(results[index]);
                 app.result_selection_request_scroll = true;
-                ui.memory_mut(|memory| memory.request_focus(result_table_focus_id()));
+                ui.memory_mut(|memory| memory.request_focus(focus_id));
             }
         }
         if let Some(index) = selected_index {
@@ -1049,11 +828,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
     });
     ui.add_space(6.0);
     // A stable focus target shared by all rows, independent of virtualization.
-    ui.interact(
-        ui.available_rect_before_wrap(),
-        result_table_focus_id(),
-        egui::Sense::focusable_noninteractive(),
-    );
+    ui.interact(ui.available_rect_before_wrap(), focus_id, egui::Sense::focusable_noninteractive());
 
     use egui_extras::{Column, TableBuilder};
 
@@ -1265,7 +1040,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                     // display/edit swap and stops one row's editor state
                     // from bleeding into another when results are re-sorted
                     // or scrolled.
-                    let value_id = egui::Id::new(("result-value", result.addr, result.search_type));
+                    let value_id = egui::Id::new(("result-value", view_id, result.addr, result.search_type));
                     let has_focus = ui.memory(|mem| mem.has_focus(value_id));
                     let request_focus = is_selected && app.result_edit_request_focus;
                     if request_focus {
@@ -1435,7 +1210,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
                 let row_response = row.response();
                 if row_response.clicked() || row_response.secondary_clicked() || address_response.double_clicked() {
                     app.selected_result = Some(result);
-                    ctx.memory_mut(|memory| memory.request_focus(result_table_focus_id()));
+                    ctx.memory_mut(|memory| memory.request_focus(focus_id));
                 }
                 row_response.context_menu(|ui| {
                     if app.enable_persistence {
@@ -1538,7 +1313,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui) {
             // Enter surrenders TextEdit focus. Keep failed input available for
             // correction rather than discarding it on the next frame.
             if let Some(result) = app.state.searches[search_index].collect_results().get(i) {
-                ctx.memory_mut(|memory| memory.request_focus(egui::Id::new(("result-value", result.addr, result.search_type))));
+                ctx.memory_mut(|memory| memory.request_focus(egui::Id::new(("result-value", view_id, result.addr, result.search_type))));
             }
             cancel_edit = false;
         }

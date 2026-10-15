@@ -22,7 +22,7 @@ Use it to search values in a running process, narrow down result sets, edit memo
   - Edit search results directly in the result table
   - Freeze individual values or the complete result set
   - Changed-value highlighting for live rows
-  - Multiple search tabs for independent searches
+  - Dockable search tabs with resizable side-by-side, stacked, and grid layouts
 - **Memory editor**
   - Adaptive hex and ASCII view that fills the available width
   - Direct byte inspection and editing with keyboard navigation
@@ -34,6 +34,35 @@ Use it to search values in a running process, narrow down result sets, edit memo
   - Rename, close, and manage searches
   - Auto-reconnect to a process with the same name after restart
   - Optional update checks against GitHub releases
+
+## Dockable search workspace
+
+Each search remains independent: use one for health, another for money, and so on.
+Tabs are the default. Drag a search tab to a pane's edge to split the workspace,
+or onto another tab bar to group searches again. Drag dividers to resize panes.
+The **Layout** menu in the top bar offers **All searches as tabs**, **Side by side**,
+**Stacked**, and **Grid** presets and marks the current one. The **+** after the
+last tab adds a search to that tab group.
+
+Each tab group is shown as a card. When several searches are visible, the active
+pane's card has an accent outline. Click inside a pane to activate it. Result
+navigation, F2 editing, Delete, and search Undo act on the active pane, while
+other visible panes continue displaying live values and scan progress. Tabs show
+the result count or a spinner while scanning; hover a tab to reveal its close
+button, or middle-click it. Switching panes discards unconfirmed result edits
+without writing them. Right-click a tab to rename it, close it, or close other
+searches; double-click an active tab to rename it in place (Enter saves, Escape
+cancels). Closing a search stops only its own scans and freezes (a freeze shared
+with another search remains active).
+
+Narrow panes scroll horizontally to keep all result columns and freeze controls
+reachable. Resizing preserves the result-table scroll position. Scan spinners
+pause when the application is unfocused or minimized to preserve background
+refresh throttling.
+
+Layouts stay in memory during the current workspace, including game reconnects
+and visits to the memory editor. They are not saved across application restarts
+or included in cheat-table files. Docking does not require experimental persistence.
 
 ## Numeric limits and result filters
 

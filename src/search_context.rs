@@ -75,6 +75,7 @@ pub struct SearchContext {
     pub(crate) refinement_pending: bool,
     pub(crate) search_input_id: Option<egui::Id>,
     pub(crate) reset_result_scroll: bool,
+    pub(crate) show_results: bool,
     /// Metadata stays out of the compact scan result. Only edited/loaded
     /// entries need it; unresolved entries must never enter a memory scan.
     pub address_overrides: HashMap<(usize, SearchType), crate::AddressSpec>,
@@ -130,6 +131,7 @@ impl SearchContext {
             refinement_pending: false,
             search_input_id: None,
             reset_result_scroll: false,
+            show_results: false,
             address_overrides: HashMap::new(),
             unresolved_addresses: Vec::new(),
             description,

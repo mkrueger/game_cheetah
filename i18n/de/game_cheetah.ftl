@@ -144,6 +144,13 @@ first-search-label = Erste Suche
 searches-heading = Laufende Suchen
 rename-search-hint = F2 oder Rechtsklick zum Umbenennen
 rename-search-menu = Umbenennen
+search-layout = Anordnung
+search-layout-tabs = Alle Suchen als Tabs
+search-layout-horizontal = Nebeneinander
+search-layout-vertical = Untereinander
+search-layout-grid = Raster
+search-layout-hint = Einen Such-Tab an einen Rand ziehen, um die Ansicht zu teilen, oder auf eine andere Tableiste, um Tabs zu gruppieren. Trennlinien zum Vergrößern oder Verkleinern ziehen.
+search-tab-drag-hint = Ziehen, um umzuordnen: an einen Rand oder in eine andere Tableiste
 close-search-menu = Schließen
 close-other-searches-menu = Andere schließen
 

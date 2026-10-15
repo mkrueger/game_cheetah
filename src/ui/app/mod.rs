@@ -57,6 +57,7 @@ pub struct App {
     last_address_refresh: Instant,
     pub app_state: AppState,
     pub state: GameCheetahEngine,
+    pub(crate) search_workspace: crate::ui::search_workspace::SearchWorkspace,
 
     pub renaming_search_index: Option<usize>,
     pub rename_search_text: String,
@@ -165,6 +166,7 @@ impl Default for App {
             last_address_refresh: Instant::now(),
             app_state: AppState::default(),
             state: GameCheetahEngine::default(),
+            search_workspace: Default::default(),
             renaming_search_index: None,
             rename_search_text: String::new(),
             rename_request_focus: false,
@@ -280,6 +282,7 @@ impl App {
         self.clear_result_interaction();
         if let Some(search) = self.state.searches.get_mut(self.state.current_search) {
             search.selected_result = selected;
+            search.show_results = self.state.show_results;
         }
         self.search_value_request_focus = false;
         self.search_value_select_all = false;
@@ -287,6 +290,7 @@ impl App {
 
     pub(crate) fn restore_search_view(&mut self) {
         self.selected_result = self.state.searches[self.state.current_search].selected_result;
+        self.state.show_results = self.state.searches[self.state.current_search].show_results;
         // Scroll is held by egui under the context's stable view_id, not its index.
         self.result_selection_request_scroll = false;
         self.clear_change_tracker();
@@ -329,7 +333,7 @@ impl App {
                     && !egui::Popup::is_any_open(ctx)
                     && ctx.memory(|memory| {
                         let focused = memory.focused();
-                        focused.is_none() || focused == search.search_input_id || focused == Some(egui::Id::new("result_table_focus"))
+                        focused.is_none() || focused == search.search_input_id || focused == Some(in_process_view::result_table_focus_id(search))
                     })
                 {
                     self.search_value_request_focus = true;

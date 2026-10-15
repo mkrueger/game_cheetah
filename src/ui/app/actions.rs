@@ -31,6 +31,8 @@ impl App {
         self.clear_change_tracker();
         self.cached_process_handle = None;
         self.state.select_process(process);
+        self.search_workspace.clear_cached_values();
+        self.cancel_rename_search();
         self.app_state = AppState::InProcess;
         self.state.process_filter.clear();
     }
@@ -41,6 +43,8 @@ impl App {
         self.pointer_scanner.cancel();
         self.app_state = AppState::MainWindow;
         self.state = GameCheetahEngine::default();
+        self.search_workspace = Default::default();
+        self.cancel_rename_search();
         self.clear_change_tracker();
         self.cached_process_handle = None;
         self.clear_result_interaction();
@@ -63,6 +67,7 @@ impl App {
         if index >= self.state.searches.len() {
             return;
         }
+        self.cancel_rename_search();
         self.remember_search_view();
         self.state.remove_freezes(index);
         self.state.searches.remove(index);
@@ -83,6 +88,7 @@ impl App {
         if keep_index >= self.state.searches.len() {
             return;
         }
+        self.cancel_rename_search();
         self.remember_search_view();
         // Walk from the end so indices stay valid as we remove.
         for i in (0..self.state.searches.len()).rev() {
@@ -559,6 +565,9 @@ impl App {
                 }
                 self.state.searches = searches;
                 self.state.current_search = 0;
+                self.search_workspace = Default::default();
+                self.state.show_results = false;
+                self.cancel_rename_search();
                 self.clear_result_interaction();
                 self.clear_change_tracker();
                 let count: usize = self.state.searches.iter().map(|search| search.get_result_count()).sum();

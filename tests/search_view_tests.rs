@@ -210,6 +210,484 @@ fn press_key(app: &mut App, ctx: &Context, key: Key) {
     }
 }
 
+fn arrange_searches(app: &mut App, ctx: &Context, size: Vec2, label: &str) {
+    let output = settle(app, ctx, size);
+    click(app, ctx, size, text_rect(&output, &fl!(LANGUAGE_LOADER, "search-layout")).center());
+    let output = settle(app, ctx, size);
+    click(app, ctx, size, text_rect(&output, label).center());
+    settle(app, ctx, size);
+}
+
+fn two_searches() -> App {
+    let mut app = app_with_results(1);
+    app.state.searches[0].description = "Health".to_owned();
+    app.new_search();
+    let search = &mut app.state.searches[1];
+    search.description = "Money".to_owned();
+    search.search_type = SearchType::Int;
+    search.search_value_text = "67890".to_owned();
+    search.set_cached_results(vec![SearchResult::new(0x2000, SearchType::Int)]);
+    search.search_complete.store(true, Ordering::Release);
+    app.search_value_request_focus = false;
+    app
+}
+
+#[test]
+fn layout_presets_show_independent_searches_and_tabs_can_be_restored() {
+    for label in [
+        fl!(LANGUAGE_LOADER, "search-layout-horizontal"),
+        fl!(LANGUAGE_LOADER, "search-layout-vertical"),
+        fl!(LANGUAGE_LOADER, "search-layout-grid"),
+    ] {
+        let mut app = two_searches();
+        let ctx = context();
+        arrange_searches(&mut app, &ctx, LARGE, &label);
+        let output = settle(&mut app, &ctx, LARGE);
+        let health = text_rect(&output, "0x1000");
+        let money = text_rect(&output, "0x2000");
+        assert!(!health.intersects(money));
+        assert_eq!(app.state.current_search, 1, "Rendering Health must not change the active search");
+        click(&mut app, &ctx, LARGE, health.center());
+        assert_eq!(app.state.current_search, 0);
+        assert_eq!(identity(app.selected_result), Some((0x1000, SearchType::Int)));
+        press_key(&mut app, &ctx, Key::Delete);
+        assert_eq!(app.state.searches[0].get_result_count(), 0);
+        assert_eq!(app.state.searches[1].get_result_count(), 1);
+
+        arrange_searches(&mut app, &ctx, LARGE, &fl!(LANGUAGE_LOADER, "search-layout-tabs"));
+        let output = settle(&mut app, &ctx, LARGE);
+        assert_text_absent(&output, "0x2000");
+        click(&mut app, &ctx, LARGE, text_rect(&output, "Money").center());
+        let output = settle(&mut app, &ctx, LARGE);
+        text_rect(&output, "0x2000");
+        assert_eq!(app.state.current_search, 1);
+    }
+}
+
+#[test]
+fn docked_search_controls_do_not_share_inputs_or_hidden_result_visibility() {
+    let mut app = two_searches();
+    let ctx = context();
+    for search in &mut app.state.searches {
+        search.set_cached_results((1..=1001).map(|i| SearchResult::new(i * 0x1000, SearchType::Int)).collect());
+    }
+    arrange_searches(&mut app, &ctx, LARGE, &fl!(LANGUAGE_LOADER, "search-layout-horizontal"));
+    let output = settle(&mut app, &ctx, LARGE);
+    let show = fl!(LANGUAGE_LOADER, "show-results-button");
+    click(&mut app, &ctx, LARGE, text_rect(&output, &show).center());
+    let output = settle(&mut app, &ctx, LARGE);
+    assert!(app.state.show_results);
+    text_rect(&output, &fl!(LANGUAGE_LOADER, "hide-results-button"));
+    text_rect(&output, &show);
+    assert_eq!(app.state.current_search, 0);
+    app.switch_search(1);
+    assert!(!app.state.show_results, "Showing Health results must not expand Money");
+    app.switch_search(0);
+    assert!(app.state.show_results);
+    assert_eq!(app.state.searches[0].search_value_text, "12345");
+    assert_eq!(app.state.searches[1].search_value_text, "67890");
+}
+
+#[test]
+fn docked_plus_adds_a_tab_to_its_own_group_and_closing_does_not_hide_other_searches() {
+    let mut app = two_searches();
+    let ctx = context();
+    arrange_searches(&mut app, &ctx, LARGE, &fl!(LANGUAGE_LOADER, "search-layout-horizontal"));
+    let output = settle(&mut app, &ctx, LARGE);
+    click(&mut app, &ctx, LARGE, text_rect(&output, "+").center());
+    assert_eq!(app.state.searches.len(), 3);
+    assert_eq!(app.state.current_search, 2);
+    let output = settle(&mut app, &ctx, LARGE);
+    text_rect(&output, "0x2000");
+    assert_text_absent(&output, "0x1000");
+    app.close_search(2);
+    let output = settle(&mut app, &ctx, LARGE);
+    text_rect(&output, "0x1000");
+    text_rect(&output, "0x2000");
+    app.close_search(0);
+    let output = settle(&mut app, &ctx, LARGE);
+    text_rect(&output, "0x2000");
+    assert_text_absent(&output, "Health");
+    assert_eq!(app.state.current_search, 0);
+    assert_eq!(app.state.searches.len(), 1);
+}
+
+#[test]
+fn keyboard_focus_can_move_between_docked_search_inputs() {
+    let mut app = two_searches();
+    let ctx = context();
+    arrange_searches(&mut app, &ctx, LARGE, &fl!(LANGUAGE_LOADER, "search-layout-horizontal"));
+    let output = settle(&mut app, &ctx, LARGE);
+    click(&mut app, &ctx, LARGE, text_rect(&output, "12345").center());
+    assert_eq!(app.state.current_search, 0);
+    for _ in 0..30 {
+        press_key(&mut app, &ctx, Key::Tab);
+        if app.state.current_search == 1 {
+            break;
+        }
+    }
+    assert_eq!(app.state.current_search, 1, "Keyboard traversal should activate the pane receiving focus");
+    assert_eq!(app.state.searches[0].search_value_text, "12345");
+    assert_eq!(app.state.searches[1].search_value_text, "67890");
+}
+
+#[test]
+fn short_and_narrow_docked_panes_keep_controls_scrollable_and_clipped() {
+    for (size, layout) in [
+        (egui::vec2(640.0, 420.0), fl!(LANGUAGE_LOADER, "search-layout-horizontal")),
+        (LARGE, fl!(LANGUAGE_LOADER, "search-layout-vertical")),
+    ] {
+        let mut app = two_searches();
+        let ctx = context();
+        arrange_searches(&mut app, &ctx, size, &layout);
+        let output = settle(&mut app, &ctx, size);
+        text_rect(&output, "Health");
+        text_rect(&output, "Money");
+        let input = text_rect(&output, "12345");
+        click(&mut app, &ctx, size, input.center());
+        assert_eq!(app.state.current_search, 0);
+        let health_clip = shapes(&output)
+            .into_iter()
+            .find_map(|(clip, shape)| matches!(shape, Shape::Text(text) if text.galley.job.text == "12345").then_some(clip))
+            .unwrap();
+        assert!(health_clip.contains(input.center()));
+        assert!(
+            !health_clip.contains(text_rect(&output, "67890").center()),
+            "A pane must not paint over the other search"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn docked_same_address_editors_have_distinct_focus_and_never_commit_on_pane_switch() {
+    let mut value = Box::new(24680_i32);
+    let mut app = own_value_app(&mut value);
+    app.confirm_value_writes = true;
+    let result = app.state.searches[0].collect_results()[0];
+    app.state.searches[0].description = "Health".to_owned();
+    app.new_search();
+    app.state.searches[1].description = "Money".to_owned();
+    app.state.searches[1].search_type = SearchType::Int;
+    app.state.searches[1].set_cached_results(vec![result]);
+    app.state.searches[1].search_complete.store(true, Ordering::Release);
+    app.search_value_request_focus = false;
+    let ctx = context();
+    arrange_searches(&mut app, &ctx, LARGE, &fl!(LANGUAGE_LOADER, "search-layout-horizontal"));
+    let address_rects = |output: &FullOutput| {
+        let mut rects: Vec<_> = shapes(output)
+            .into_iter()
+            .filter_map(|(clip, shape)| match shape {
+                Shape::Text(text) if text.galley.job.text == format!("0x{:X}", result.addr) => {
+                    let rect = text.galley.rect.translate(text.pos.to_vec2());
+                    clip.contains(rect.center()).then_some(rect)
+                }
+
+                _ => None,
+            })
+            .collect();
+        rects.sort_by(|left, right| left.left().total_cmp(&right.left()));
+        assert_eq!(rects.len(), 2);
+        rects
+    };
+    let output = settle(&mut app, &ctx, LARGE);
+    click(&mut app, &ctx, LARGE, address_rects(&output)[0].center());
+    press_key(&mut app, &ctx, Key::F2);
+    let health_focus = ctx.memory(|memory| memory.focused()).unwrap();
+    press_key(&mut app, &ctx, Key::End);
+    frame(&mut app, &ctx, LARGE, vec![Event::Text("9".to_owned())]);
+    assert_eq!(app.editing_result.as_ref().unwrap().1, "246809");
+    assert_eq!(*value, 24680);
+    let output = settle(&mut app, &ctx, LARGE);
+    click(&mut app, &ctx, LARGE, address_rects(&output)[1].center());
+    assert_eq!(app.state.current_search, 1);
+    assert!(app.editing_result.is_none());
+    assert_eq!(*value, 24680);
+    press_key(&mut app, &ctx, Key::F2);
+    let money_focus = ctx.memory(|memory| memory.focused()).unwrap();
+    assert_ne!(health_focus, money_focus);
+    assert_eq!(app.editing_result.as_ref().unwrap().1, "24680");
+    press_key(&mut app, &ctx, Key::End);
+    frame(&mut app, &ctx, LARGE, vec![Event::Text("1".to_owned())]);
+    press_key(&mut app, &ctx, Key::Enter);
+    assert_eq!(*value, 246801);
+    assert!(app.editing_result.is_none());
+}
+
+#[test]
+fn docked_freeze_controls_are_reachable_by_horizontal_scrolling() {
+    for search_type in [SearchType::Int, SearchType::Guess] {
+        let size = egui::vec2(1280.0, 760.0);
+        let mut app = two_searches();
+        app.new_search();
+        app.state.searches[2].set_cached_results(vec![SearchResult::new(0x3000, SearchType::Int)]);
+        app.state.searches[2].search_complete.store(true, Ordering::Release);
+        for search in &mut app.state.searches {
+            search.search_type = search_type;
+        }
+        let ctx = context();
+        arrange_searches(&mut app, &ctx, size, &fl!(LANGUAGE_LOADER, "search-layout-horizontal"));
+        let output = settle(&mut app, &ctx, size);
+        let positions: Vec<_> = [0x1000, 0x2000, 0x3000]
+            .into_iter()
+            .map(|address| text_rect(&output, &format!("0x{address:X}")).center())
+            .collect();
+        for pos in positions {
+            frame(&mut app, &ctx, size, vec![Event::PointerMoved(pos)]);
+            frame(
+                &mut app,
+                &ctx,
+                size,
+                vec![Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(-1000.0, 0.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: Modifiers::NONE,
+                }],
+            );
+            for _ in 0..120 {
+                frame(&mut app, &ctx, size, vec![]);
+            }
+        }
+        let output = frame(&mut app, &ctx, size, vec![Event::PointerGone]);
+        let visible_freeze_buttons = shapes(&output)
+            .into_iter()
+            .filter(|(clip, shape)| {
+                matches!(shape, Shape::Text(text) if text.galley.job.text == "\u{2744}"
+                                    && clip.contains_rect(text.galley.rect.translate(text.pos.to_vec2())))
+            })
+            .count();
+        assert_eq!(
+            visible_freeze_buttons, 6,
+            "Every pane must expose its header and row freeze buttons for {search_type:?}"
+        );
+    }
+}
+
+#[test]
+fn docked_scan_spinner_respects_unfocused_and_minimized_repaint_throttling() {
+    for (focused, minimized) in [(false, false), (true, true), (true, false)] {
+        let mut app = two_searches();
+        app.state.searches[0].searching = SearchMode::Memory;
+        let ctx = context();
+        let mut delay = std::time::Duration::ZERO;
+        for _ in 0..30 {
+            let mut input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, LARGE)),
+                focused,
+                ..Default::default()
+            };
+            input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().minimized = Some(minimized);
+            let mut output = ctx.run_ui(input, |ui| {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+                game_cheetah::ui::in_process_view::view_in_process(&mut app, ui);
+            });
+            delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+            output.textures_delta.clear();
+        }
+        if !focused || minimized {
+            assert!(delay >= std::time::Duration::from_millis(400), "Background repaint delay: {delay:?}");
+        } else {
+            assert_eq!(delay, std::time::Duration::ZERO, "Foreground scan spinner should animate");
+        }
+    }
+}
+
+#[test]
+fn docked_result_scroll_survives_narrowing_and_widening_a_pane() {
+    let mut app = app_with_results(300);
+    let ctx = context();
+    let output = wheel_table(&mut app, &ctx, -1300.0);
+    let first = visible_address_rows(&output)[0].0;
+    assert!(first > 0x1000);
+    for size in [egui::vec2(410.0, 720.0), LARGE] {
+        let output = settle(&mut app, &ctx, size);
+        assert_eq!(visible_address_rows(&output)[0].0, first, "Resizing must preserve table scroll");
+    }
+    settle(&mut app, &ctx, egui::vec2(640.0, 350.0));
+    let output = settle(&mut app, &ctx, LARGE);
+    assert_eq!(visible_address_rows(&output)[0].0, first, "Short-pane scrolling must preserve table scroll");
+}
+#[test]
+fn hovering_a_tab_swaps_its_count_for_close_without_resizing_and_middle_click_closes() {
+    let mut app = two_searches();
+    app.new_search();
+    app.state.searches[2].description = "Ammo".to_owned();
+    app.search_value_request_focus = false;
+    let ctx = context();
+    let output = settle(&mut app, &ctx, LARGE);
+    let health = text_rect(&output, "Health");
+    let money = text_rect(&output, "Money");
+    text_rect(&output, "1");
+    frame(&mut app, &ctx, LARGE, vec![Event::PointerMoved(health.center())]);
+    let hovered = frame(&mut app, &ctx, LARGE, vec![]);
+    assert_eq!(text_rect(&hovered, "Money"), money, "Hover must not change tab widths");
+    assert_eq!(app.state.searches.len(), 3);
+
+    let pos = money.center();
+    frame(&mut app, &ctx, LARGE, vec![Event::PointerMoved(pos)]);
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            &ctx,
+            LARGE,
+            vec![Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Middle,
+                pressed,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+    }
+    assert_eq!(app.state.searches.len(), 2);
+    assert!(app.state.searches.iter().all(|search| search.description != "Money"));
+    let output = settle(&mut app, &ctx, LARGE);
+    assert_text_absent(&output, "Money");
+    text_rect(&output, "Health");
+}
+
+#[test]
+fn inline_tab_rename_commits_on_enter_and_escape_keeps_the_old_name() {
+    for (key, expected) in [(Key::Enter, "Gold"), (Key::Escape, "Money")] {
+        let mut app = two_searches();
+        let ctx = context();
+        let output = settle(&mut app, &ctx, LARGE);
+        let tab = text_rect(&output, "Money");
+        for _ in 0..2 {
+            frame(&mut app, &ctx, LARGE, vec![Event::PointerMoved(tab.center())]);
+            for pressed in [true, false] {
+                frame(
+                    &mut app,
+                    &ctx,
+                    LARGE,
+                    vec![Event::PointerButton {
+                        pos: tab.center(),
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    }],
+                );
+            }
+        }
+        assert_eq!(app.renaming_search_index, Some(1), "Double-clicking the active tab starts renaming");
+        settle(&mut app, &ctx, LARGE);
+        assert!(ctx.memory(|memory| memory.focused()).is_some(), "The inline editor must take focus");
+        frame(
+            &mut app,
+            &ctx,
+            LARGE,
+            vec![Event::Key {
+                key: Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            }],
+        );
+        frame(&mut app, &ctx, LARGE, vec![Event::Text("Gold".to_owned())]);
+        press_key(&mut app, &ctx, key);
+        settle(&mut app, &ctx, LARGE);
+        assert!(app.renaming_search_index.is_none());
+        assert_eq!(app.state.searches[1].description, expected, "{key:?}");
+        assert_eq!(app.state.searches[0].description, "Health");
+        text_rect(&settle(&mut app, &ctx, LARGE), expected);
+    }
+}
+
+#[test]
+fn layout_menu_marks_the_active_preset() {
+    let mut app = two_searches();
+    let ctx = context();
+    let output = settle(&mut app, &ctx, LARGE);
+    click(&mut app, &ctx, LARGE, text_rect(&output, &fl!(LANGUAGE_LOADER, "search-layout")).center());
+    for _ in 0..30 {
+        frame(&mut app, &ctx, LARGE, vec![]);
+    }
+    let output = settle(&mut app, &ctx, LARGE);
+    let tabs = text_rect(&output, &fl!(LANGUAGE_LOADER, "search-layout-tabs"));
+    let side = text_rect(&output, &fl!(LANGUAGE_LOADER, "search-layout-horizontal"));
+    let accent = game_cheetah::ui::theme::ACCENT_TEXT;
+    let color_of = |rect: Rect| {
+        shapes(&output)
+            .into_iter()
+            .find_map(|(_, shape)| match shape {
+                Shape::Text(text) if text.galley.rect.translate(text.pos.to_vec2()) == rect => Some(text.fallback_color),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert_eq!(color_of(tabs), accent);
+    assert_ne!(color_of(side), accent);
+}
+
+fn drag_pointer(app: &mut App, ctx: &Context, from: Pos2, to: Pos2) {
+    frame(app, ctx, LARGE, vec![Event::PointerMoved(from)]);
+    frame(
+        app,
+        ctx,
+        LARGE,
+        vec![Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        }],
+    );
+    for step in 1..=8 {
+        frame(app, ctx, LARGE, vec![Event::PointerMoved(from.lerp(to, step as f32 / 8.0))]);
+    }
+    frame(
+        app,
+        ctx,
+        LARGE,
+        vec![Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        }],
+    );
+    frame(app, ctx, LARGE, vec![Event::PointerGone]);
+}
+
+#[test]
+fn dragging_a_tab_splits_the_workspace_and_dividers_resize_both_panes() {
+    let mut app = two_searches();
+    let ctx = context();
+    let output = settle(&mut app, &ctx, LARGE);
+    let tab = text_rect(&output, "Health");
+    drag_pointer(&mut app, &ctx, tab.center(), egui::pos2(LARGE.x - 20.0, 440.0));
+    let output = settle(&mut app, &ctx, LARGE);
+    let health = text_rect(&output, "0x1000");
+    let money = text_rect(&output, "0x2000");
+    assert!(health.left() > money.right(), "Health should be docked to the right");
+    let divider_x = (health.left() - 22.0 + LARGE.x * 0.5) * 0.5;
+    drag_pointer(&mut app, &ctx, egui::pos2(divider_x, 440.0), egui::pos2(divider_x - 100.0, 440.0));
+    let output = settle(&mut app, &ctx, LARGE);
+    assert!(
+        text_rect(&output, "0x1000").left() < health.left() - 50.0,
+        "The divider must actually resize the panes"
+    );
+    assert_eq!(app.state.searches[0].get_result_count(), 1);
+    assert_eq!(app.state.searches[1].get_result_count(), 1);
+    let output = settle(&mut app, &ctx, LARGE);
+    let health_tab = text_rect(&output, "Health");
+    let money_tab = text_rect(&output, "Money");
+    drag_pointer(&mut app, &ctx, health_tab.center(), money_tab.right_center() + egui::vec2(10.0, 0.0));
+    let output = settle(&mut app, &ctx, LARGE);
+    text_rect(&output, "Health");
+    text_rect(&output, "Money");
+    let visible_addresses = ["0x1000", "0x2000"]
+        .into_iter()
+        .filter(|address| {
+            shapes(&output)
+                .iter()
+                .any(|(_, shape)| matches!(shape, Shape::Text(text) if text.galley.job.text == *address))
+        })
+        .count();
+    assert_eq!(visible_addresses, 1, "Dragging onto another tab bar must regroup the searches");
+}
+
 fn right_click(app: &mut App, ctx: &Context, size: Vec2, pos: Pos2) {
     frame(app, ctx, size, vec![Event::PointerMoved(pos)]);
     for pressed in [true, false] {
@@ -1224,10 +1702,10 @@ fn overflow_offers_manual_type_inspection_without_widening_or_writing() {
     let mut value = Box::new(24680_i32);
     let mut app = own_value_app(&mut value);
     let address = &*value as *const i32 as usize;
-    app.selected_result = Some(SearchResult::new(address, SearchType::Int));
-    app.editing_result = Some((0, "3000000000".to_owned()));
     let ctx = context();
-    ctx.memory_mut(|memory| memory.request_focus(egui::Id::new(("result-value", address, SearchType::Int))));
+    click_address(&mut app, &ctx, address);
+    press_key(&mut app, &ctx, Key::F2);
+    app.editing_result = Some((0, "3000000000".to_owned()));
     let output = settle(&mut app, &ctx, LARGE);
     let inspect = text_rect(&output, &fl!(LANGUAGE_LOADER, "check-result-type"));
     assert_eq!(*value, 24680);
@@ -1818,11 +2296,12 @@ fn opt_in_invalid_enter_preserves_input_and_focus_for_correction() {
     press_key(&mut app, &ctx, Key::F2);
     press_key(&mut app, &ctx, Key::End);
     frame(&mut app, &ctx, LARGE, vec![Event::Text("x".to_owned())]);
+    let edit_focus = ctx.memory(|memory| memory.focused()).expect("value editor focus");
     press_key(&mut app, &ctx, Key::Enter);
     settle(&mut app, &ctx, LARGE);
     assert_eq!(*value, 24680);
     assert_eq!(app.editing_result.as_ref().unwrap().1, "24680x");
-    assert!(ctx.memory(|memory| memory.has_focus(egui::Id::new(("result-value", address, SearchType::Int)))));
+    assert!(ctx.memory(|memory| memory.has_focus(edit_focus)));
     assert!(app.state.current_error().is_some());
     press_key(&mut app, &ctx, Key::Backspace);
     press_key(&mut app, &ctx, Key::Backspace);

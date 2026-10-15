@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Dockable search panes powered by `egui_tiles`: drag tabs into resizable splits
+  or tab groups, or use side-by-side, stacked, grid, and all-tabs layout presets
+  from a single **Layout** menu in the top bar that marks the current preset.
+  Each tab group is a card with a **+** after its last tab; the active pane is
+  outlined when several are visible. Tabs show result counts or a scan spinner,
+  reveal their close button on hover and close on middle-click. Resize handles
+  and drop targets are highlighted while dragging. Visible searches display live
+  values and progress together; keyboard actions and edits stay with the active
+  pane. Layouts are session-only and do not require persistence.
+
+### Changed
+
+- Search result visibility is now per search. Result editors and keyboard-focus
+  targets use stable search identities, including when two panes show the same
+  address. Searches are renamed in place on their tab.
+- Narrow panes provide horizontal scrolling for all result columns, resizing
+  preserves result-table scroll positions, and tab scan spinners respect
+  background repaint throttling.
+
 ## [0.7.3] - 2026-09-07
 
 ### Added

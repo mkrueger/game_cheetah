@@ -158,10 +158,7 @@ impl App {
                     self.update_change_tracker(if backgrounded { refresh::BACKGROUND_INTERVAL } else { TRACKER_INTERVAL });
                 }
 
-                let search = &self.state.searches[self.state.current_search];
-                let count = search.get_result_count();
-                let live_values =
-                    search.searching == SearchMode::None && count > 0 && (count <= crate::ui::in_process_view::BROWSE_RESULT_LIMIT || self.state.show_results);
+                let live_values = self.search_workspace.has_live_values(&self.state);
                 ctx.request_repaint_after(refresh::interval(ctx, live_values, search_running));
             }
             AppState::MemoryEditor => {

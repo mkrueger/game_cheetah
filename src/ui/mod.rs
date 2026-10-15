@@ -10,6 +10,7 @@ pub mod mem_editor;
 pub(crate) mod notice;
 pub mod process_selection;
 pub(crate) mod refresh;
+pub(crate) mod search_workspace;
 pub mod theme;
 pub mod value_cache;
 
