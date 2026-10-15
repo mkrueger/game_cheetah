@@ -83,6 +83,12 @@
   </requires>
 
   <releases>
+    <release version="0.7.4" date="2026-10-15">
+      <url type="details">https://github.com/mkrueger/game_cheetah/releases/tag/v0.7.4</url>
+      <description>
+        <p>Added dockable split-view search panes, per-search float tolerance, scan summaries, and a refreshed interface.</p>
+      </description>
+    </release>
     <release version="0.7.3" date="2026-09-07">
       <url type="details">https://github.com/mkrueger/game_cheetah/releases/tag/v0.7.3</url>
       <description>

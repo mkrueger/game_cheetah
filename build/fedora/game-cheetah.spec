@@ -5,14 +5,14 @@
 %global crate game-cheetah
 
 Name:           rust-game-cheetah
-Version:        0.7.3
+Version:        0.7.4
 Release:        1%{?dist}
 Summary:        Memory scanner, editor, and game trainer
 
 License:        Apache-2.0
 URL:            https://crates.io/crates/game-cheetah
 Source0:        %{crates_source}
-Source1:        game-cheetah-0.7.3-vendor.tar.xz
+Source1:        game-cheetah-0.7.4-vendor.tar.xz
 Source2:        io.github.mkrueger.game_cheetah.metainfo.xml
 
 BuildRequires:  cargo-rpm-macros >= 26
@@ -75,5 +75,8 @@ appstreamcli validate --no-net %{SOURCE2}
 %endif
 
 %changelog
+* Thu Oct 15 2026 Mike Krüger <mkrueger@posteo.de> - 0.7.4-1
+- Update to 0.7.4
+
 * Mon Sep 07 2026 Mike Krüger <mkrueger@posteo.de> - 0.7.3-1
 - Initial COPR package

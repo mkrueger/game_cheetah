@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-10-15
+
 ### Added
 
 - Dockable search panes powered by `egui_tiles`: drag tabs into resizable splits
@@ -22,9 +24,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Number / Guess, Float32 and Float64 searches widens float matches by a
   percentage of the entered value (0–50 %, never narrower than the existing ±1
   window) for both initial scans and updates. Integer matches stay exact.
+- Scans show elapsed time, read throughput and failed or partial read counts.
+  Each search keeps its last completion summary with the final match count;
+  Undo restores the previous summary and Reset clears it.
+- Fedora packaging and AppStream metadata.
 
 ### Changed
 
+- Idle and background UI refresh is adaptive: live values refresh at about
+  30 Hz while focused, unfocused or minimized windows use a 500 ms interval,
+  and value freezes keep their independent cadence.
+- Refreshed interface across all screens, including grouped Settings with
+  toggle switches, consistent card layouts, a locked data-type chip, wider
+  result columns and cleaner memory-editor and process-list layouts.
+- Updated dependencies.
 - Search result visibility is now per search. Result editors and keyboard-focus
   targets use stable search identities, including when two panes show the same
   address. Searches are renamed in place on their tab.
