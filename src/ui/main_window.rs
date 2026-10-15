@@ -165,12 +165,7 @@ pub fn view_settings(app: &mut App, ui: &mut egui::Ui) {
                         app.persist_settings();
                     }
                     row_divider(ui);
-                    if percent_row(
-                        ui,
-                        &mut app.float_tolerance_percent,
-                        fl!(crate::LANGUAGE_LOADER, "float-tolerance-label"),
-                        fl!(crate::LANGUAGE_LOADER, "float-tolerance-description"),
-                    ) {
+                    if float_tolerance_row(ui, app) {
                         app.persist_settings();
                     }
                     row_divider(ui);
@@ -319,33 +314,95 @@ fn toggle_row(ui: &mut egui::Ui, value: &mut bool, title: String, description: S
 }
 
 const TOGGLE_SIZE: egui::Vec2 = egui::vec2(44.0, 24.0);
-const PERCENT_FIELD_WIDTH: f32 = 72.0;
+const TOLERANCE_FIELD_WIDTH: f32 = 84.0;
+const TOLERANCE_MODE_WIDTH: f32 = 150.0;
 
-/// Settings row with a compact percentage field in place of the switch.
-/// Persist only after editing finishes, not on every drag step.
-fn percent_row(ui: &mut egui::Ui, value: &mut f32, title: String, description: String) -> bool {
-    let text_width = (ui.available_width() - PERCENT_FIELD_WIDTH - 24.0).max(120.0);
+/// Settings row with a number/percent switch and value field in place of the
+/// on/off switch. Persists after editing finishes, not on every drag step.
+fn float_tolerance_row(ui: &mut egui::Ui, app: &mut App) -> bool {
+    use crate::{FloatTolerance, FloatToleranceMode};
+
+    let text_width = (ui.available_width() - TOLERANCE_FIELD_WIDTH - TOLERANCE_MODE_WIDTH - 32.0).max(120.0);
     let mut changed = false;
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.set_width(text_width);
-            ui.label(egui::RichText::new(&title).size(16.0).strong());
+            ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "float-tolerance-label")).size(16.0).strong());
             ui.add_space(4.0);
-            ui.label(egui::RichText::new(description).size(13.5).weak());
+            ui.label(
+                egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "float-tolerance-description"))
+                    .size(13.5)
+                    .weak(),
+            );
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let mode = app.float_tolerance_mode;
+            let (value, decimals, suffix) = match mode {
+                FloatToleranceMode::Absolute => (&mut app.float_tolerance_absolute, 3, ""),
+                FloatToleranceMode::Percent => (&mut app.float_tolerance_percent, 2, " %"),
+            };
             let response = ui.add_sized(
-                egui::vec2(PERCENT_FIELD_WIDTH, TOGGLE_SIZE.y),
+                egui::vec2(TOLERANCE_FIELD_WIDTH, TOGGLE_SIZE.y + 4.0),
                 egui::DragValue::new(value)
-                    .range(0.0..=crate::MAX_FLOAT_TOLERANCE_PERCENT)
+                    .range(0.0..=FloatTolerance::max_value(mode))
                     .speed(0.1)
-                    .max_decimals(1)
-                    .suffix(" %"),
+                    .max_decimals(decimals)
+                    .prefix("± ")
+                    .suffix(suffix),
             );
             changed = response.drag_stopped() || (response.changed() && !response.dragged());
+            *value = FloatTolerance { mode, value: *value }.sanitized().value;
+            ui.add_space(8.0);
+            let switch_size = egui::vec2(TOLERANCE_MODE_WIDTH, TOGGLE_SIZE.y + 4.0);
+            let switched = ui
+                .allocate_ui_with_layout(switch_size, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    tolerance_mode_switch(ui, &mut app.float_tolerance_mode)
+                })
+                .inner;
+            if switched {
+                changed = true;
+            }
         });
     });
-    *value = crate::sanitize_float_tolerance_percent(*value);
+    changed
+}
+
+/// Two-segment switch; segments are laid out right-to-left by the caller.
+fn tolerance_mode_switch(ui: &mut egui::Ui, mode: &mut crate::FloatToleranceMode) -> bool {
+    use crate::FloatToleranceMode;
+
+    let mut changed = false;
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgb(20, 23, 27))
+        .stroke(ui.visuals().widgets.inactive.bg_stroke)
+        .corner_radius(egui::CornerRadius::same(7))
+        .inner_margin(egui::Margin::same(2))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for (segment, label) in [
+                (FloatToleranceMode::Percent, fl!(crate::LANGUAGE_LOADER, "float-tolerance-percent")),
+                (FloatToleranceMode::Absolute, fl!(crate::LANGUAGE_LOADER, "float-tolerance-absolute")),
+            ] {
+                let selected = *mode == segment;
+                let text = egui::RichText::new(&label).size(13.5);
+                let text = if selected { text.strong().color(egui::Color32::WHITE) } else { text };
+                let button = egui::Button::new(text)
+                    .fill(if selected {
+                        ui.visuals().selection.bg_fill
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    })
+                    .stroke(egui::Stroke::NONE)
+                    .corner_radius(egui::CornerRadius::same(5))
+                    .min_size(egui::vec2(0.0, TOGGLE_SIZE.y));
+                let response = ui.add(button);
+                response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, ui.is_enabled(), selected, &label));
+                if response.clicked() && !selected {
+                    *mode = segment;
+                    changed = true;
+                }
+            }
+        });
     changed
 }
 

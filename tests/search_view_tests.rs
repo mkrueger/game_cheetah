@@ -510,35 +510,60 @@ fn docked_result_scroll_survives_narrowing_and_widening_a_pane() {
 }
 #[test]
 fn float_tolerance_lives_in_settings_and_is_applied_when_a_search_starts() {
+    use game_cheetah::{FloatTolerance, FloatToleranceMode};
+
     let mut app = two_searches();
-    app.float_tolerance_percent = 2.5;
+    assert_eq!(app.float_tolerance(), FloatTolerance::default(), "Default is the historic ±1 window");
     let ctx = context();
     for search_type in [SearchType::Guess, SearchType::Float, SearchType::Double] {
         app.state.searches[1].search_type = search_type;
         let output = settle(&mut app, &ctx, LARGE);
         text_rect(&output, "67890");
-        assert_text_absent(&output, " %");
+        assert_text_absent(&output, "± ");
     }
 
-    let mut output = ctx.run_ui(
-        egui::RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, LARGE)),
-            ..Default::default()
-        },
-        |ui| game_cheetah::ui::main_window::view_settings(&mut app, ui),
-    );
-    output.textures_delta.clear();
-    let label = text_rect(&output, &fl!(LANGUAGE_LOADER, "float-tolerance-label"));
-    let value = text_rect(&output, "2.5");
-    assert!(value.left() > label.right(), "Value belongs to the right side of its settings row");
-    text_rect(&output, " %");
+    let render_settings = |app: &mut App| {
+        let mut output = None;
+        for _ in 0..2 {
+            let mut frame = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, LARGE)),
+                    ..Default::default()
+                },
+                |ui| game_cheetah::ui::main_window::view_settings(app, ui),
+            );
+            frame.textures_delta.clear();
+            output = Some(frame);
+        }
+        output.unwrap()
+    };
+    app.float_tolerance_percent = 2.5;
+    for (mode, value, suffix) in [(FloatToleranceMode::Absolute, "1.0", false), (FloatToleranceMode::Percent, "2.5", true)] {
+        app.float_tolerance_mode = mode;
+        let output = render_settings(&mut app);
+        let label = text_rect(&output, &fl!(LANGUAGE_LOADER, "float-tolerance-label"));
+        let number = text_rect(&output, &fl!(LANGUAGE_LOADER, "float-tolerance-absolute"));
+        let percent = text_rect(&output, &fl!(LANGUAGE_LOADER, "float-tolerance-percent"));
+        let field = text_rect(&output, value);
+        assert!(label.right() < number.left() && number.right() < percent.left() && percent.right() < field.left());
+        text_rect(&output, "± ");
+        if suffix {
+            text_rect(&output, " %");
+        } else {
+            assert_text_absent(&output, " %");
+        }
+    }
 
     // pid 0 cannot be scanned; the engine still receives the clamped setting.
-    app.float_tolerance_percent = 500.0;
     app.state.searches[1].search_type = SearchType::Float;
     app.state.searches[1].set_cached_results(Vec::new());
+    app.float_tolerance_percent = 500.0;
     app.start_search();
-    assert_eq!(app.state.float_tolerance_percent, game_cheetah::MAX_FLOAT_TOLERANCE_PERCENT);
+    assert_eq!(app.state.float_tolerance, FloatTolerance::percent(FloatTolerance::MAX_PERCENT));
+    app.float_tolerance_mode = FloatToleranceMode::Absolute;
+    app.float_tolerance_absolute = 0.5;
+    app.start_search();
+    assert_eq!(app.state.float_tolerance, FloatTolerance::absolute(0.5));
 }
 
 #[test]

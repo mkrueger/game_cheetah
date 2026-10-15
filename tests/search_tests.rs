@@ -1,4 +1,4 @@
-use game_cheetah::{SearchType, SearchValue, search_memory, search_memory_with_tolerance};
+use game_cheetah::{FloatTolerance, SearchType, SearchValue, search_memory, search_memory_with_tolerance};
 
 #[test]
 fn guess_uses_int64_only_outside_the_signed_int32_range() {
@@ -154,40 +154,39 @@ fn test_search_float_values() {
 }
 
 #[test]
-fn float_tolerance_widens_initial_float_and_double_scans_only() {
+fn float_tolerance_modes_apply_to_initial_float_and_double_scans_only() {
     let mut memory = vec![0; 48];
-    for (offset, value) in [(0, 10_000.0_f32), (4, 10_099.0), (8, 10_150.0)] {
+    for (offset, value) in [(0, 10_000.0_f32), (4, 10_099.0), (8, 10_150.0), (12, 10_000.5)] {
         memory[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
     for (offset, value) in [(16, 10_000.0_f64), (24, 9_901.0), (32, 10_250.0)] {
         memory[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
     }
     memory[40..44].copy_from_slice(&10_050_i32.to_le_bytes());
-    let addresses = |search_type: SearchType, needle: &[u8], percent| {
-        search_memory_with_tolerance(&memory, needle, search_type, 0x7000, percent)
+    let addresses = |search_type: SearchType, needle: &[u8], tolerance| {
+        search_memory_with_tolerance(&memory, needle, search_type, 0x7000, tolerance)
             .into_iter()
-            .map(|result| (result.addr, result.search_type))
+            .map(|result| result.addr)
             .collect::<Vec<_>>()
     };
     let float = 10_000.0_f32.to_le_bytes();
     let double = 10_000.0_f64.to_le_bytes();
-    assert_eq!(addresses(SearchType::Float, &float, 0.0), [(0x7000, SearchType::Float)]);
-    assert_eq!(
-        search_memory(&memory, &float, SearchType::Float, 0x7000).len(),
-        1,
-        "The tolerance-free API keeps its behavior"
-    );
-    assert_eq!(
-        addresses(SearchType::Float, &float, 1.0),
-        [(0x7000, SearchType::Float), (0x7004, SearchType::Float)]
-    );
-    assert_eq!(addresses(SearchType::Float, &float, 1.5).len(), 3);
-    assert_eq!(
-        addresses(SearchType::Double, &double, 1.0),
-        [(0x7010, SearchType::Double), (0x7018, SearchType::Double)]
-    );
-    assert_eq!(addresses(SearchType::Double, &double, 2.5).len(), 3);
-    assert!(addresses(SearchType::Int, &10_000_i32.to_le_bytes(), 50.0).is_empty(), "Integers stay exact");
+    let historic: Vec<_> = search_memory(&memory, &float, SearchType::Float, 0x7000).iter().map(|r| r.addr).collect();
+    assert_eq!(historic, [0x7000, 0x700C]);
+    assert_eq!(addresses(SearchType::Float, &float, FloatTolerance::default()), historic);
+    assert_eq!(addresses(SearchType::Float, &float, FloatTolerance::absolute(0.0)), [0x7000]);
+    assert_eq!(addresses(SearchType::Float, &float, FloatTolerance::absolute(150.0)), [0x7000, 0x7004, 0x700C]);
+    assert_eq!(addresses(SearchType::Float, &float, FloatTolerance::absolute(151.0)).len(), 4);
+    assert_eq!(addresses(SearchType::Float, &float, FloatTolerance::percent(1.0)), [0x7000, 0x7004, 0x700C]);
+    assert_eq!(addresses(SearchType::Float, &float, FloatTolerance::percent(1.5)).len(), 4);
+    assert_eq!(addresses(SearchType::Double, &double, FloatTolerance::percent(1.0)), [0x7010, 0x7018]);
+    assert_eq!(addresses(SearchType::Double, &double, FloatTolerance::percent(2.5)).len(), 3);
+    for tolerance in [FloatTolerance::percent(50.0), FloatTolerance::absolute(1e6)] {
+        assert!(
+            addresses(SearchType::Int, &10_000_i32.to_le_bytes(), tolerance).is_empty(),
+            "Integers stay exact"
+        );
+    }
 }
 
 #[test]

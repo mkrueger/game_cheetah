@@ -3,41 +3,6 @@ use bytemuck::pod_read_unaligned;
 use memchr::memmem;
 use wide::{f32x8, f64x4};
 
-// Float search tolerance.
-//
-// This is intentionally a coarse tolerance just under 1.0 (rather than a
-// small relative epsilon). The tool is primarily used with games whose
-// floating-point values drift slightly between frames or are stored in a
-// scaled/quantized form that does not round-trip exactly to the user's
-// typed value. The motivating example is "Warhammer 40,000: Dawn of War",
-// where matching a typed integer like resource amounts against the in-game
-// f32/f64 storage requires accepting differences well above machine
-// epsilon. Tightening this would make those values impossible to find.
-//
-// A per-search percentage widens this window for large values that the game
-// displays rounded or abbreviated; it never narrows the fixed minimum.
-pub(super) fn get_epsilon_f32(target: f32, tolerance_percent: f32) -> f32 {
-    let relative = (f64::from(target).abs() * tolerance_fraction(tolerance_percent)) as f32;
-    if relative.is_finite() {
-        relative.max(1.0 - f32::EPSILON)
-    } else {
-        1.0 - f32::EPSILON
-    }
-}
-
-pub(super) fn get_epsilon_f64(target: f64, tolerance_percent: f32) -> f64 {
-    let relative = target.abs() * tolerance_fraction(tolerance_percent);
-    if relative.is_finite() {
-        relative.max(1.0 - f64::EPSILON)
-    } else {
-        1.0 - f64::EPSILON
-    }
-}
-
-fn tolerance_fraction(percent: f32) -> f64 {
-    f64::from(crate::sanitize_float_tolerance_percent(percent)) / 100.0
-}
-
 // Substring scan for fixed-width little-endian integer needles.
 //
 // Historically this function had two parallel implementations: a hand-rolled

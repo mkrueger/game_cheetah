@@ -21,7 +21,9 @@ pub struct UserSettings {
     pub check_for_updates: bool,
     pub confirm_value_writes: bool,
     pub enable_persistence: bool,
-    /// Extra Float/Double match window in percent (0 keeps the fixed ±1 window).
+    /// Float/Double match window; each mode keeps its own value.
+    pub float_tolerance_mode: crate::FloatToleranceMode,
+    pub float_tolerance_absolute: f32,
     pub float_tolerance_percent: f32,
 }
 
@@ -32,7 +34,9 @@ impl Default for UserSettings {
             check_for_updates: true,
             confirm_value_writes: false,
             enable_persistence: false,
-            float_tolerance_percent: 0.0,
+            float_tolerance_mode: crate::FloatToleranceMode::default(),
+            float_tolerance_absolute: crate::FloatTolerance::DEFAULT_ABSOLUTE,
+            float_tolerance_percent: crate::FloatTolerance::DEFAULT_PERCENT,
         }
     }
 }
@@ -74,6 +78,8 @@ mod tests {
             check_for_updates: false,
             confirm_value_writes: true,
             enable_persistence: true,
+            float_tolerance_mode: crate::FloatToleranceMode::Percent,
+            float_tolerance_absolute: 0.25,
             float_tolerance_percent: 2.5,
         };
         let text = toml::to_string_pretty(&original).unwrap();
@@ -82,7 +88,10 @@ mod tests {
         assert!(!parsed.check_for_updates);
         assert!(parsed.confirm_value_writes);
         assert!(parsed.enable_persistence);
+        assert_eq!(parsed.float_tolerance_mode, crate::FloatToleranceMode::Percent);
+        assert_eq!(parsed.float_tolerance_absolute, 0.25);
         assert_eq!(parsed.float_tolerance_percent, 2.5);
+        assert!(text.contains("float_tolerance_mode = \"percent\""));
     }
 
     #[test]
@@ -94,6 +103,7 @@ mod tests {
         assert!(!UserSettings::default().confirm_value_writes);
         assert!(!parsed.enable_persistence);
         assert!(!UserSettings::default().enable_persistence);
-        assert_eq!(parsed.float_tolerance_percent, 0.0);
+        assert_eq!(parsed.float_tolerance_mode, crate::FloatToleranceMode::Absolute);
+        assert_eq!(parsed.float_tolerance_absolute, 1.0, "Default is the historic ±1 window");
     }
 }

@@ -1,7 +1,7 @@
 use crate::{SearchResult, SearchType};
 use process_memory::CopyAddress;
 
-use super::simd::{get_epsilon_f32, get_epsilon_f64};
+use crate::FloatTolerance;
 
 // Small, bounded reads: nearby hits share one call, sparse hits do not cause
 // entire pages to be read. This is a grouping limit, not an OS page-size claim.
@@ -77,10 +77,10 @@ impl PreparedSearch {
     }
 
     pub(super) fn new(results: &[SearchResult], text: &str) -> Self {
-        Self::with_float_tolerance(results, text, 0.0)
+        Self::with_float_tolerance(results, text, FloatTolerance::default())
     }
 
-    pub(super) fn with_float_tolerance(results: &[SearchResult], text: &str, tolerance_percent: f32) -> Self {
+    pub(super) fn with_float_tolerance(results: &[SearchResult], text: &str, tolerance: FloatTolerance) -> Self {
         let mut needles = std::array::from_fn(|_| None);
         let mut seen = [false; TYPE_COUNT];
         for result in results {
@@ -105,14 +105,14 @@ impl PreparedSearch {
                     let target = f32::from_le_bytes(value.1[..4].try_into().unwrap());
                     Needle::Float {
                         target,
-                        epsilon: get_epsilon_f32(target, tolerance_percent),
+                        epsilon: tolerance.epsilon_f32(target),
                     }
                 }
                 SearchType::Double => {
                     let target = f64::from_le_bytes(value.1[..8].try_into().unwrap());
                     Needle::Double {
                         target,
-                        epsilon: get_epsilon_f64(target, tolerance_percent),
+                        epsilon: tolerance.epsilon_f64(target),
                     }
                 }
                 _ => {

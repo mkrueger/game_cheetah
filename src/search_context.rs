@@ -68,16 +68,91 @@ pub enum SearchMode {
     Stability,
 }
 
-/// Upper bound for the per-search float tolerance; wider windows mostly
-/// produce noise instead of useful candidates.
-pub const MAX_FLOAT_TOLERANCE_PERCENT: f32 = 50.0;
+/// How Float32/Float64 search values may deviate from the entered value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FloatToleranceMode {
+    /// Fixed difference; values must differ by less than it.
+    #[default]
+    Absolute,
+    /// Percentage of the entered value.
+    Percent,
+}
 
-/// Clamp user-provided tolerance; non-finite input disables the percentage.
-pub fn sanitize_float_tolerance_percent(percent: f32) -> f32 {
-    if percent.is_finite() {
-        percent.clamp(0.0, MAX_FLOAT_TOLERANCE_PERCENT)
-    } else {
-        0.0
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FloatTolerance {
+    pub mode: FloatToleranceMode,
+    pub value: f32,
+}
+
+impl Default for FloatTolerance {
+    /// `Absolute(1)` reproduces the historic coarse "just under ±1" window
+    /// rather than a small machine epsilon. Games often store values that
+    /// drift between frames or are scaled/quantized so they don't round-trip
+    /// to the typed value. The motivating example is "Warhammer 40,000: Dawn
+    /// of War", whose resource amounts only match typed integers this way.
+    fn default() -> Self {
+        Self::absolute(Self::DEFAULT_ABSOLUTE)
+    }
+}
+
+impl FloatTolerance {
+    pub const DEFAULT_ABSOLUTE: f32 = 1.0;
+    pub const DEFAULT_PERCENT: f32 = 1.0;
+    pub const MAX_ABSOLUTE: f32 = 1_000_000_000.0;
+    /// Wider windows mostly produce noise instead of useful candidates.
+    pub const MAX_PERCENT: f32 = 50.0;
+
+    pub const fn absolute(value: f32) -> Self {
+        Self {
+            mode: FloatToleranceMode::Absolute,
+            value,
+        }
+    }
+
+    pub const fn percent(value: f32) -> Self {
+        Self {
+            mode: FloatToleranceMode::Percent,
+            value,
+        }
+    }
+
+    pub fn max_value(mode: FloatToleranceMode) -> f32 {
+        match mode {
+            FloatToleranceMode::Absolute => Self::MAX_ABSOLUTE,
+            FloatToleranceMode::Percent => Self::MAX_PERCENT,
+        }
+    }
+
+    /// Clamp to the mode's range; non-finite input becomes an exact match.
+    pub fn sanitized(self) -> Self {
+        let value = if self.value.is_finite() {
+            self.value.clamp(0.0, Self::max_value(self.mode))
+        } else {
+            0.0
+        };
+        Self { value, ..self }
+    }
+
+    pub fn epsilon_f32(self, target: f32) -> f32 {
+        let tolerance = self.sanitized();
+        match tolerance.mode {
+            // Scaling by (1 - ε) keeps the bound exclusive: 100 ± 1 must not match 101.
+            FloatToleranceMode::Absolute => tolerance.value * (1.0 - f32::EPSILON),
+            FloatToleranceMode::Percent => {
+                let epsilon = (f64::from(target).abs() * f64::from(tolerance.value) / 100.0) as f32;
+                if epsilon.is_finite() { epsilon } else { 0.0 }
+            }
+        }
+    }
+
+    pub fn epsilon_f64(self, target: f64) -> f64 {
+        let tolerance = self.sanitized();
+        let epsilon = match tolerance.mode {
+            FloatToleranceMode::Absolute => f64::from(tolerance.value) * (1.0 - f64::EPSILON),
+            FloatToleranceMode::Percent => target.abs() * f64::from(tolerance.value) / 100.0,
+        };
+        if epsilon.is_finite() { epsilon } else { 0.0 }
     }
 }
 

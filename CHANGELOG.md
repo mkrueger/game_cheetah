@@ -20,10 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and drop targets are highlighted while dragging. Visible searches display live
   values and progress together; keyboard actions and edits stay with the active
   pane. Layouts are session-only and do not require persistence.
-- Float search tolerance setting: **Settings → Float search tolerance** widens
-  Float32/Float64 matches (including Number / Guess) by a percentage of the
-  entered value (0–50 %, never narrower than the existing ±1 window) for both
-  initial scans and updates. Integer matches stay exact.
+- Float search tolerance setting: **Settings → Float search tolerance** sets how
+  far Float32/Float64 matches (including Number / Guess) may differ from the
+  entered value, either by a fixed **Number** or a **Percent** of the value
+  (0–50 %), for both initial scans and updates. The default, Number ± 1, keeps
+  the previous behavior. Integer matches stay exact.
 - Scans show elapsed time, read throughput and failed or partial read counts.
   Each search keeps its last completion summary with the final match count;
   Undo restores the previous summary and Reset clears it.

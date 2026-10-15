@@ -158,7 +158,7 @@ impl App {
         match search_type.from_string(&current_search.search_value_text) {
             Ok(_) => {
                 let has_results = current_search.get_result_count() > 0;
-                self.state.float_tolerance_percent = crate::sanitize_float_tolerance_percent(self.float_tolerance_percent);
+                self.state.float_tolerance = self.float_tolerance();
                 if !has_results || search_type == SearchType::String {
                     self.clear_result_interaction();
                     self.state.initial_search(search_index);

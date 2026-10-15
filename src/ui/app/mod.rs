@@ -109,8 +109,10 @@ pub struct App {
     /// Experimental address persistence; hidden unless explicitly enabled.
     pub enable_persistence: bool,
 
-    /// Extra Float/Double search tolerance in percent; applied when a scan
-    /// or update starts.
+    /// Float/Double search tolerance, applied when a scan or update starts.
+    /// Each mode keeps its own value so switching modes is lossless.
+    pub float_tolerance_mode: crate::FloatToleranceMode,
+    pub float_tolerance_absolute: f32,
     pub float_tolerance_percent: f32,
 
     update_check_rx: Option<UpdateCheckRx>,
@@ -191,7 +193,9 @@ impl Default for App {
             check_for_updates: false,
             confirm_value_writes: false,
             enable_persistence: false,
-            float_tolerance_percent: 0.0,
+            float_tolerance_mode: crate::FloatToleranceMode::default(),
+            float_tolerance_absolute: crate::FloatTolerance::DEFAULT_ABSOLUTE,
+            float_tolerance_percent: crate::FloatTolerance::DEFAULT_PERCENT,
             update_check_rx: None,
             latest_version: None,
             value_change_tracker: ValueCache::new(VALUE_CACHE_CAPACITY),
@@ -217,13 +221,27 @@ impl App {
             check_for_updates: settings.check_for_updates,
             confirm_value_writes: settings.confirm_value_writes,
             enable_persistence: settings.enable_persistence,
-            float_tolerance_percent: crate::sanitize_float_tolerance_percent(settings.float_tolerance_percent),
+            float_tolerance_mode: settings.float_tolerance_mode,
+            float_tolerance_absolute: crate::FloatTolerance::absolute(settings.float_tolerance_absolute).sanitized().value,
+            float_tolerance_percent: crate::FloatTolerance::percent(settings.float_tolerance_percent).sanitized().value,
             ..Self::default()
         }
     }
 
     pub fn title(&self) -> String {
         format!("{} {}", crate::APP_NAME, crate::VERSION)
+    }
+
+    pub fn float_tolerance(&self) -> crate::FloatTolerance {
+        let value = match self.float_tolerance_mode {
+            crate::FloatToleranceMode::Absolute => self.float_tolerance_absolute,
+            crate::FloatToleranceMode::Percent => self.float_tolerance_percent,
+        };
+        crate::FloatTolerance {
+            mode: self.float_tolerance_mode,
+            value,
+        }
+        .sanitized()
     }
 
     /// Persist user-settings to disk; logs an error into the in-app error
@@ -234,6 +252,8 @@ impl App {
             check_for_updates: self.check_for_updates,
             confirm_value_writes: self.confirm_value_writes,
             enable_persistence: self.enable_persistence,
+            float_tolerance_mode: self.float_tolerance_mode,
+            float_tolerance_absolute: self.float_tolerance_absolute,
             float_tolerance_percent: self.float_tolerance_percent,
         };
         if let Err(e) = settings.save() {

@@ -29,7 +29,7 @@ mod unknown;
 #[cfg(target_os = "linux")]
 pub use memory_reader::ProcessMemReader;
 use memory_reader::fast_read_memory;
-use simd::{get_epsilon_f32, get_epsilon_f64, search_f32_simd, search_f64_simd, search_integers};
+use simd::{search_f32_simd, search_f64_simd, search_integers};
 pub use string_search::search_string_in_memory;
 pub use unknown::compare_values;
 
@@ -90,19 +90,19 @@ fn search_loaded_memory(
     logical_end: usize,
     search_data: &SearchValue,
     guess_needles: Option<&[(SearchType, Vec<u8>)]>,
-    tolerance_percent: f32,
+    tolerance: crate::FloatTolerance,
 ) -> Vec<SearchResult> {
     let mut results = if let Some(needles) = guess_needles {
         // Guess mode: scan the buffer for each precomputed typed needle
         // (Int / Int64 / Float / Double).
         let mut all_results = Vec::new();
         for (search_type, bytes) in needles {
-            let typed_results: Vec<SearchResult> = search_memory_with_tolerance(memory, bytes, *search_type, base_address, tolerance_percent);
+            let typed_results: Vec<SearchResult> = search_memory_with_tolerance(memory, bytes, *search_type, base_address, tolerance);
             all_results.extend(typed_results);
         }
         all_results
     } else {
-        search_memory_with_tolerance(memory, &search_data.1, search_data.0, base_address, tolerance_percent)
+        search_memory_with_tolerance(memory, &search_data.1, search_data.0, base_address, tolerance)
     };
 
     // Chunked reads include a small overlap after the logical chunk end so
@@ -248,9 +248,8 @@ pub struct GameCheetahEngine {
 
     pub current_search: usize,
     pub searches: Vec<Box<SearchContext>>,
-    /// Extra relative Float/Double match window for new scans and updates,
-    /// in percent of the entered value. Mirrors the user setting.
-    pub float_tolerance_percent: f32,
+    /// Float/Double match window for new scans and updates. Mirrors the user setting.
+    pub float_tolerance: crate::FloatTolerance,
     // Removed: pub search_threads: ThreadPool,
     pub freeze_sender: crossbeam_channel::Sender<FreezeMessage>,
     freeze_stopped: crossbeam_channel::Receiver<(process_memory::Pid, usize)>,
@@ -385,7 +384,7 @@ impl Default for GameCheetahEngine {
             process_system: System::new(),
             current_search: 0,
             searches: vec![Box::new(SearchContext::new(fl!(crate::LANGUAGE_LOADER, "first-search-label")))],
-            float_tolerance_percent: 0.0,
+            float_tolerance: crate::FloatTolerance::default(),
             // Removed: search_threads: ThreadPool::new(16),
             freeze_sender: tx,
             freeze_stopped: stopped_rx,
@@ -532,7 +531,7 @@ impl GameCheetahEngine {
         if search.searching != SearchMode::None {
             return;
         }
-        let prepared = narrowing::PreparedSearch::with_float_tolerance(&search.collect_results(), &search.search_value_text, self.float_tolerance_percent);
+        let prepared = narrowing::PreparedSearch::with_float_tolerance(&search.collect_results(), &search.search_value_text, self.float_tolerance);
         self.filter_prepared(search_index, prepared, None);
     }
 
@@ -819,7 +818,7 @@ impl GameCheetahEngine {
     }
 
     fn spawn_parallel_search(&mut self, search_data: SearchValue, regions: Vec<(usize, usize)>, search_index: usize) {
-        let tolerance_percent = self.float_tolerance_percent;
+        let tolerance = self.float_tolerance;
         let Some(search_context) = self.searches.get_mut(search_index) else {
             self.push_error(AppError::InvalidSearchIndex { index: search_index });
             return;
@@ -916,7 +915,7 @@ impl GameCheetahEngine {
                                         logical_end,
                                         &search_data,
                                         guess_needles.as_ref().map(|needles| needles.as_slice()),
-                                        tolerance_percent,
+                                        tolerance,
                                     )
                                 }
                                 Err(_) => {
@@ -937,7 +936,7 @@ impl GameCheetahEngine {
                                         logical_end,
                                         &search_data,
                                         guess_needles.as_ref().map(|needles| needles.as_slice()),
-                                        tolerance_percent,
+                                        tolerance,
                                     )
                                 }
                                 Err(_) => {
@@ -970,7 +969,7 @@ impl GameCheetahEngine {
                                 logical_end,
                                 &search_data,
                                 guess_needles.as_ref().map(|needles| needles.as_slice()),
-                                tolerance_percent,
+                                tolerance,
                             );
                             if !results.is_empty() {
                                 worker.send(&results_sender, results);
@@ -1736,17 +1735,17 @@ pub fn update_results(old_results: &[SearchResult], value_text: &str, handle: &p
 }
 
 pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: SearchType, start: usize) -> Vec<SearchResult> {
-    search_memory_with_tolerance(memory_data, search_data, search_type, start, 0.0)
+    search_memory_with_tolerance(memory_data, search_data, search_type, start, crate::FloatTolerance::default())
 }
 
-/// Like [`search_memory`], widening Float/Double matches by a percentage of the
-/// target. Integer and string matches stay exact.
+/// Like [`search_memory`] with a custom Float/Double match window; [`search_memory`]
+/// uses [`crate::FloatTolerance::default`]. Integer and string matches stay exact.
 pub fn search_memory_with_tolerance(
     memory_data: &[u8],
     search_data: &[u8],
     search_type: SearchType,
     start: usize,
-    tolerance_percent: f32,
+    tolerance: crate::FloatTolerance,
 ) -> Vec<SearchResult> {
     let mut result = Vec::new();
 
@@ -1769,7 +1768,7 @@ pub fn search_memory_with_tolerance(
         SearchType::Float => {
             if search_data.len() == 4 {
                 let target = f32::from_le_bytes([search_data[0], search_data[1], search_data[2], search_data[3]]);
-                let epsilon = get_epsilon_f32(target, tolerance_percent);
+                let epsilon = tolerance.epsilon_f32(target);
                 result = search_f32_simd(memory_data, target, epsilon, start);
             }
         }
@@ -1788,7 +1787,7 @@ pub fn search_memory_with_tolerance(
                 ]);
 
                 // Similar epsilon strategy for doubles
-                let epsilon = get_epsilon_f64(target, tolerance_percent);
+                let epsilon = tolerance.epsilon_f64(target);
                 result = search_f64_simd(memory_data, target, epsilon, start);
             }
         }
@@ -2111,10 +2110,13 @@ mod tests {
         bytes[..4].copy_from_slice(&10_080.0_f32.to_le_bytes());
         bytes[8..12].copy_from_slice(&10_080_i32.to_le_bytes());
         let address = bytes.as_ptr() as usize;
-        for (percent, expected) in [(0.0, vec![]), (1.0, vec![(address, SearchType::Float)])] {
+        for (tolerance, expected) in [
+            (crate::FloatTolerance::default(), vec![]),
+            (crate::FloatTolerance::percent(1.0), vec![(address, SearchType::Float)]),
+        ] {
             let mut engine = GameCheetahEngine {
                 pid: std::process::id() as process_memory::Pid,
-                float_tolerance_percent: percent,
+                float_tolerance: tolerance,
                 ..Default::default()
             };
             engine.searches[0].search_value_text = "10000".to_owned();
@@ -2131,10 +2133,10 @@ mod tests {
         search.set_cached_results(vec![SearchResult::new(address, SearchType::Float)]);
         search.search_complete.store(true, Ordering::Release);
         search.search_value_text = "10150".to_owned();
-        engine.float_tolerance_percent = 1.0;
+        engine.float_tolerance = crate::FloatTolerance::percent(1.0);
         engine.filter_searches(0);
         assert_eq!(wait(&engine.searches[0]), vec![(address, SearchType::Float)]);
-        engine.float_tolerance_percent = 0.0;
+        engine.float_tolerance = crate::FloatTolerance::default();
         engine.filter_searches(0);
         assert!(wait(&engine.searches[0]).is_empty());
         assert_eq!(f32::from_le_bytes(bytes[..4].try_into().unwrap()), 10_080.0);
