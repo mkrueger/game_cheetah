@@ -21,6 +21,8 @@ pub struct UserSettings {
     pub check_for_updates: bool,
     pub confirm_value_writes: bool,
     pub enable_persistence: bool,
+    /// Extra Float/Double match window in percent (0 keeps the fixed ±1 window).
+    pub float_tolerance_percent: f32,
 }
 
 impl Default for UserSettings {
@@ -30,6 +32,7 @@ impl Default for UserSettings {
             check_for_updates: true,
             confirm_value_writes: false,
             enable_persistence: false,
+            float_tolerance_percent: 0.0,
         }
     }
 }
@@ -71,6 +74,7 @@ mod tests {
             check_for_updates: false,
             confirm_value_writes: true,
             enable_persistence: true,
+            float_tolerance_percent: 2.5,
         };
         let text = toml::to_string_pretty(&original).unwrap();
         let parsed: UserSettings = toml::from_str(&text).unwrap();
@@ -78,6 +82,7 @@ mod tests {
         assert!(!parsed.check_for_updates);
         assert!(parsed.confirm_value_writes);
         assert!(parsed.enable_persistence);
+        assert_eq!(parsed.float_tolerance_percent, 2.5);
     }
 
     #[test]
@@ -89,5 +94,6 @@ mod tests {
         assert!(!UserSettings::default().confirm_value_writes);
         assert!(!parsed.enable_persistence);
         assert!(!UserSettings::default().enable_persistence);
+        assert_eq!(parsed.float_tolerance_percent, 0.0);
     }
 }

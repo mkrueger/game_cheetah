@@ -159,7 +159,6 @@ name-label = Name:
 value-label = Wert:
 search-description-label = Suchbeschreibung
 search-value-label = Suche nach { $valuetype }
-float-tolerance-tooltip = Gleitkomma-Toleranz: Float- und Double-Treffer dürfen um diesen Prozentsatz vom eingegebenen Wert abweichen (immer mindestens ±1). Hilfreich, wenn das Spiel gerundete oder abgekürzte Zahlen anzeigt. Gilt für neue Suchen und Aktualisierungen; Ganzzahlen bleiben exakt.
 
 found-results-label =
     { $results ->
@@ -323,6 +322,8 @@ back-to-main-button = Zurück zum Hauptmenü
 settings-title = Einstellungen
 confirm-value-writes-label = Werte erst mit Enter schreiben
 confirm-value-writes-description = In der Trefferliste schreibt Enter den bearbeiteten Wert; Escape oder Verlassen des Feldes verwirft die Eingabe. Standardmäßig aus: Gültige Eingaben werden sofort geschrieben. Der Speicherinspektor behält sein bisheriges Schreiben mit Enter bei.
+float-tolerance-label = Toleranz für Gleitkommasuche
+float-tolerance-description = Float32- und Float64-Treffer (auch bei der Suche nach „Zahl“) dürfen um diesen Prozentsatz vom eingegebenen Wert abweichen. Hilfreich, wenn ein Spiel gerundete oder abgekürzte Zahlen anzeigt. 0 % behält das Standardfenster von knapp ±1; Ganzzahlen werden immer exakt gesucht.
 result-confirm-edit-label = Mit Enter bestätigen
 result-confirm-edit-tooltip = Wert bearbeiten (F2). Enter schreibt; Escape oder Verlassen des Feldes verwirft die Eingabe. Fehlgeschlagene Schreibversuche behalten die Eingabe zur Korrektur.
 automatic-reconnect-label = Automatische Wiederverbindung

@@ -159,7 +159,6 @@ name-label = Name:
 value-label = Value:
 search-description-label = Search description
 search-value-label = Search for { $valuetype } value
-float-tolerance-tooltip = Float tolerance: Float and Double matches may differ from the entered value by this percentage (always at least ±1). Useful when the game shows rounded or abbreviated numbers. Applies to new searches and updates; integers stay exact.
 
 found-results-label =
     { $results ->
@@ -319,6 +318,8 @@ back-to-main-button = Back to main menu
 # Settings
 confirm-value-writes-label = Write values only on Enter
 confirm-value-writes-description = In the result table, Enter writes the edited value; Escape or leaving the field discards the input. Off by default: valid input is written immediately. The memory inspector keeps its existing Enter-to-write behavior.
+float-tolerance-label = Float search tolerance
+float-tolerance-description = Float32 and Float64 matches (including Number / Guess) may differ from the entered value by this percentage. Useful when a game shows rounded or abbreviated numbers. 0 % keeps the default window of just under ±1; integers always match exactly.
 result-confirm-edit-label = Confirm with Enter
 result-confirm-edit-tooltip = Edit value (F2). Enter writes; Escape or leaving the field discards the input. Failed writes keep the input for correction.
 settings-title = Settings

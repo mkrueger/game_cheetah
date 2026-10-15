@@ -165,6 +165,15 @@ pub fn view_settings(app: &mut App, ui: &mut egui::Ui) {
                         app.persist_settings();
                     }
                     row_divider(ui);
+                    if percent_row(
+                        ui,
+                        &mut app.float_tolerance_percent,
+                        fl!(crate::LANGUAGE_LOADER, "float-tolerance-label"),
+                        fl!(crate::LANGUAGE_LOADER, "float-tolerance-description"),
+                    ) {
+                        app.persist_settings();
+                    }
+                    row_divider(ui);
                     let mut persistence = app.enable_persistence;
                     if toggle_row(
                         ui,
@@ -310,6 +319,35 @@ fn toggle_row(ui: &mut egui::Ui, value: &mut bool, title: String, description: S
 }
 
 const TOGGLE_SIZE: egui::Vec2 = egui::vec2(44.0, 24.0);
+const PERCENT_FIELD_WIDTH: f32 = 72.0;
+
+/// Settings row with a compact percentage field in place of the switch.
+/// Persist only after editing finishes, not on every drag step.
+fn percent_row(ui: &mut egui::Ui, value: &mut f32, title: String, description: String) -> bool {
+    let text_width = (ui.available_width() - PERCENT_FIELD_WIDTH - 24.0).max(120.0);
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(text_width);
+            ui.label(egui::RichText::new(&title).size(16.0).strong());
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(description).size(13.5).weak());
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let response = ui.add_sized(
+                egui::vec2(PERCENT_FIELD_WIDTH, TOGGLE_SIZE.y),
+                egui::DragValue::new(value)
+                    .range(0.0..=crate::MAX_FLOAT_TOLERANCE_PERCENT)
+                    .speed(0.1)
+                    .max_decimals(1)
+                    .suffix(" %"),
+            );
+            changed = response.drag_stopped() || (response.changed() && !response.dragged());
+        });
+    });
+    *value = crate::sanitize_float_tolerance_percent(*value);
+    changed
+}
 
 /// iOS-style switch; reads as an on/off setting at a glance, unlike egui's
 /// small checkbox box.

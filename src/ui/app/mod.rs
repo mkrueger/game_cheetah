@@ -109,6 +109,10 @@ pub struct App {
     /// Experimental address persistence; hidden unless explicitly enabled.
     pub enable_persistence: bool,
 
+    /// Extra Float/Double search tolerance in percent; applied when a scan
+    /// or update starts.
+    pub float_tolerance_percent: f32,
+
     update_check_rx: Option<UpdateCheckRx>,
     /// Tag of the latest release if it is newer than [`crate::VERSION`].
     pub latest_version: Option<String>,
@@ -187,6 +191,7 @@ impl Default for App {
             check_for_updates: false,
             confirm_value_writes: false,
             enable_persistence: false,
+            float_tolerance_percent: 0.0,
             update_check_rx: None,
             latest_version: None,
             value_change_tracker: ValueCache::new(VALUE_CACHE_CAPACITY),
@@ -212,6 +217,7 @@ impl App {
             check_for_updates: settings.check_for_updates,
             confirm_value_writes: settings.confirm_value_writes,
             enable_persistence: settings.enable_persistence,
+            float_tolerance_percent: crate::sanitize_float_tolerance_percent(settings.float_tolerance_percent),
             ..Self::default()
         }
     }
@@ -228,6 +234,7 @@ impl App {
             check_for_updates: self.check_for_updates,
             confirm_value_writes: self.confirm_value_writes,
             enable_persistence: self.enable_persistence,
+            float_tolerance_percent: self.float_tolerance_percent,
         };
         if let Err(e) = settings.save() {
             self.state.push_error(AppError::Generic { message: e });

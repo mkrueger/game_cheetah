@@ -107,12 +107,12 @@ a heuristic, not reliable identification of the game's variable type; floating-p
 interpretations can still match the same address (for example for zero).
 
 Float32 and Float64 matches always accept values within just under ±1 of the entered
-value. For values that a game displays rounded or abbreviated, use the **± %** field
-beside the value input of **Number / Guess**, **Float32**, and **Float64** searches
-to widen this window by a percentage of the entered value (0–50 %, never narrower
-than ±1). For example, `10000` with `± 1 %` matches 9900–10100. The tolerance is
-stored per search, applies to the initial scan and later updates, and can be changed
-between updates. Integer matches stay exact, including the integer part of Guess.
+value. For values that a game displays rounded or abbreviated, set **Float search
+tolerance** in **Settings** to widen this window by a percentage of the entered value
+(0–50 %, never narrower than ±1). For example, `10000` with `1 %` matches 9900–10100.
+The setting applies to Float32, Float64 and the float interpretations of
+**Number / Guess** when a search or update starts; it is saved with the other
+settings. Integer matches stay exact, including the integer part of Guess.
 
 After a numeric search, expand **Filter results** beside **Undo** and **Reset search**.
 **Stable values only** is available for all numeric search modes. **Data types**

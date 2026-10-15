@@ -248,6 +248,9 @@ pub struct GameCheetahEngine {
 
     pub current_search: usize,
     pub searches: Vec<Box<SearchContext>>,
+    /// Extra relative Float/Double match window for new scans and updates,
+    /// in percent of the entered value. Mirrors the user setting.
+    pub float_tolerance_percent: f32,
     // Removed: pub search_threads: ThreadPool,
     pub freeze_sender: crossbeam_channel::Sender<FreezeMessage>,
     freeze_stopped: crossbeam_channel::Receiver<(process_memory::Pid, usize)>,
@@ -382,6 +385,7 @@ impl Default for GameCheetahEngine {
             process_system: System::new(),
             current_search: 0,
             searches: vec![Box::new(SearchContext::new(fl!(crate::LANGUAGE_LOADER, "first-search-label")))],
+            float_tolerance_percent: 0.0,
             // Removed: search_threads: ThreadPool::new(16),
             freeze_sender: tx,
             freeze_stopped: stopped_rx,
@@ -528,7 +532,7 @@ impl GameCheetahEngine {
         if search.searching != SearchMode::None {
             return;
         }
-        let prepared = narrowing::PreparedSearch::with_float_tolerance(&search.collect_results(), &search.search_value_text, search.float_tolerance_percent);
+        let prepared = narrowing::PreparedSearch::with_float_tolerance(&search.collect_results(), &search.search_value_text, self.float_tolerance_percent);
         self.filter_prepared(search_index, prepared, None);
     }
 
@@ -815,13 +819,13 @@ impl GameCheetahEngine {
     }
 
     fn spawn_parallel_search(&mut self, search_data: SearchValue, regions: Vec<(usize, usize)>, search_index: usize) {
+        let tolerance_percent = self.float_tolerance_percent;
         let Some(search_context) = self.searches.get_mut(search_index) else {
             self.push_error(AppError::InvalidSearchIndex { index: search_index });
             return;
         };
 
         let worker = search_context.search_worker(SearchMode::Memory, self.pid, self.attached_start_time, self.process_name.clone());
-        let tolerance_percent = search_context.float_tolerance_percent;
         let current_bytes = search_context.current_bytes.clone();
         let pid = self.pid;
         let results_sender = search_context.results_sender.clone();
@@ -2092,7 +2096,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn guess_scan_and_update_use_the_search_float_tolerance() {
+    fn guess_scan_and_update_use_the_float_tolerance_setting() {
         fn wait(search: &SearchContext) -> Vec<(usize, SearchType)> {
             let deadline = Instant::now() + Duration::from_secs(10);
             while !search.search_complete.load(Ordering::Acquire) {
@@ -2110,9 +2114,9 @@ mod tests {
         for (percent, expected) in [(0.0, vec![]), (1.0, vec![(address, SearchType::Float)])] {
             let mut engine = GameCheetahEngine {
                 pid: std::process::id() as process_memory::Pid,
+                float_tolerance_percent: percent,
                 ..Default::default()
             };
-            engine.searches[0].float_tolerance_percent = percent;
             engine.searches[0].search_value_text = "10000".to_owned();
             engine.spawn_parallel_search(SearchType::Guess.from_string("10000").unwrap(), vec![(address, 16)], 0);
             assert_eq!(wait(&engine.searches[0]), expected);
@@ -2127,10 +2131,10 @@ mod tests {
         search.set_cached_results(vec![SearchResult::new(address, SearchType::Float)]);
         search.search_complete.store(true, Ordering::Release);
         search.search_value_text = "10150".to_owned();
-        search.float_tolerance_percent = 1.0;
+        engine.float_tolerance_percent = 1.0;
         engine.filter_searches(0);
         assert_eq!(wait(&engine.searches[0]), vec![(address, SearchType::Float)]);
-        engine.searches[0].float_tolerance_percent = 0.0;
+        engine.float_tolerance_percent = 0.0;
         engine.filter_searches(0);
         assert!(wait(&engine.searches[0]).is_empty());
         assert_eq!(f32::from_le_bytes(bytes[..4].try_into().unwrap()), 10_080.0);

@@ -97,8 +97,6 @@ pub struct SearchContext {
 
     pub search_value_text: String,
     pub search_type: SearchType,
-    /// Extra relative float/double match window, in percent of the entered value.
-    pub float_tolerance_percent: f32,
 
     /// Per-tab input state; predicates are applied explicitly, never live.
     pub show_numeric_filter: bool,
@@ -170,7 +168,6 @@ impl SearchContext {
             current_bytes: Arc::new(AtomicUsize::new(0)),
             freezed_addresses: HashSet::new(),
             search_type: SearchType::Guess,
-            float_tolerance_percent: 0.0,
             old_results: Vec::new(),
             search_complete: Arc::new(AtomicBool::new(false)),
 

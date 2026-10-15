@@ -509,45 +509,36 @@ fn docked_result_scroll_survives_narrowing_and_widening_a_pane() {
     assert_eq!(visible_address_rows(&output)[0].0, first, "Short-pane scrolling must preserve table scroll");
 }
 #[test]
-fn float_tolerance_is_per_search_clamped_and_only_offered_for_float_capable_types() {
+fn float_tolerance_lives_in_settings_and_is_applied_when_a_search_starts() {
     let mut app = two_searches();
-    app.state.searches[0].search_type = SearchType::Float;
-    app.switch_search(0);
+    app.float_tolerance_percent = 2.5;
     let ctx = context();
-    let edit_tolerance = |app: &mut App, ctx: &Context, current: &str, text: &str| {
-        let output = settle(app, ctx, LARGE);
-        text_rect(&output, "± ");
-        click(app, ctx, LARGE, text_rect(&output, current).center());
-        frame(app, ctx, LARGE, vec![Event::Text(text.to_owned())]);
-        press_key(app, ctx, Key::Enter);
-        settle(app, ctx, LARGE)
-    };
-    let output = edit_tolerance(&mut app, &ctx, "0.0", "2.5");
-    text_rect(&output, "2.5");
-    let compact = settle(&mut app, &ctx, SIZES[0]);
-    let tolerance = text_rect(&compact, " %");
-    let update = text_rect(&compact, &fl!(LANGUAGE_LOADER, "update-button"));
-    assert!(
-        !tolerance.intersects(update),
-        "Tolerance must not overlap the primary action in compact windows"
-    );
-    assert_eq!(app.state.searches[0].float_tolerance_percent, 2.5);
-    assert_eq!(app.state.searches[1].float_tolerance_percent, 0.0, "Tolerance is per search");
-
-    app.switch_search(1);
-    let output = settle(&mut app, &ctx, LARGE);
-    assert_text_absent(&output, "± ");
-    for search_type in [SearchType::Guess, SearchType::Double] {
+    for search_type in [SearchType::Guess, SearchType::Float, SearchType::Double] {
         app.state.searches[1].search_type = search_type;
         let output = settle(&mut app, &ctx, LARGE);
-        text_rect(&output, "± ");
-        text_rect(&output, "0.0");
+        text_rect(&output, "67890");
+        assert_text_absent(&output, " %");
     }
 
-    app.switch_search(0);
-    let output = edit_tolerance(&mut app, &ctx, "2.5", "500");
-    text_rect(&output, "50.0");
-    assert_eq!(app.state.searches[0].float_tolerance_percent, game_cheetah::MAX_FLOAT_TOLERANCE_PERCENT);
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, LARGE)),
+            ..Default::default()
+        },
+        |ui| game_cheetah::ui::main_window::view_settings(&mut app, ui),
+    );
+    output.textures_delta.clear();
+    let label = text_rect(&output, &fl!(LANGUAGE_LOADER, "float-tolerance-label"));
+    let value = text_rect(&output, "2.5");
+    assert!(value.left() > label.right(), "Value belongs to the right side of its settings row");
+    text_rect(&output, " %");
+
+    // pid 0 cannot be scanned; the engine still receives the clamped setting.
+    app.float_tolerance_percent = 500.0;
+    app.state.searches[1].search_type = SearchType::Float;
+    app.state.searches[1].set_cached_results(Vec::new());
+    app.start_search();
+    assert_eq!(app.state.float_tolerance_percent, game_cheetah::MAX_FLOAT_TOLERANCE_PERCENT);
 }
 
 #[test]
