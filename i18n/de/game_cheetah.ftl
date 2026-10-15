@@ -159,6 +159,7 @@ name-label = Name:
 value-label = Wert:
 search-description-label = Suchbeschreibung
 search-value-label = Suche nach { $valuetype }
+float-tolerance-tooltip = Gleitkomma-Toleranz: Float- und Double-Treffer dürfen um diesen Prozentsatz vom eingegebenen Wert abweichen (immer mindestens ±1). Hilfreich, wenn das Spiel gerundete oder abgekürzte Zahlen anzeigt. Gilt für neue Suchen und Aktualisierungen; Ganzzahlen bleiben exakt.
 
 found-results-label =
     { $results ->

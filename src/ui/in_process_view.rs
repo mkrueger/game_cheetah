@@ -18,6 +18,7 @@ pub(crate) const BROWSE_RESULT_LIMIT: usize = 1000;
 /// A search value is a handful of characters; a full-width field only pushes
 /// the type picker to the far edge of the window.
 const SEARCH_FIELD_WIDTH: f32 = 220.0;
+const FLOAT_TOLERANCE_WIDTH: f32 = 72.0;
 
 const FREEZE_ICON: &str = "\u{2744}";
 const MEMORY_ICON: &str = "…";
@@ -238,6 +239,7 @@ pub(crate) fn search_area(app: &mut App, ui: &mut egui::Ui, active: bool) {
             ui.horizontal_wrapped(|ui| {
                 ui.add_enabled_ui(idle, |ui| {
                     ui.horizontal(|ui| {
+                        let tolerance_width = if uses_float_tolerance(selected_type) { FLOAT_TOLERANCE_WIDTH } else { 0.0 };
                         if selected_type == SearchType::Unknown {
                             ui.label(fl!(crate::LANGUAGE_LOADER, "search-type-label"));
                         } else {
@@ -249,7 +251,7 @@ pub(crate) fn search_area(app: &mut App, ui: &mut egui::Ui, active: bool) {
                                     "search-value-label",
                                     valuetype = selected_type.get_short_description_text()
                                 ))
-                                .desired_width(SEARCH_FIELD_WIDTH.min((card_width - 360.0).max(120.0)))
+                                .desired_width(SEARCH_FIELD_WIDTH.min((card_width - 360.0 - tolerance_width).max(120.0)))
                                 .margin(egui::Margin::symmetric(10, 8))
                                 .show(ui);
                             let response = output.response;
@@ -274,6 +276,7 @@ pub(crate) fn search_area(app: &mut App, ui: &mut egui::Ui, active: bool) {
                                 !restoring_focus && (response.has_focus() || response.lost_focus()) && ui.input(|input| input.key_pressed(egui::Key::Enter));
                         }
                         type_picker(app, ui, show_type_picker, selected_type);
+                        float_tolerance_input(app, ui, search_index);
                     });
                 });
                 // Read the edited values in this frame, so validation and the
@@ -642,6 +645,26 @@ fn too_many_results_panel(app: &mut App, ui: &mut egui::Ui) {
                 });
             });
         });
+}
+
+fn uses_float_tolerance(search_type: SearchType) -> bool {
+    matches!(search_type, SearchType::Guess | SearchType::Float | SearchType::Double)
+}
+
+fn float_tolerance_input(app: &mut App, ui: &mut egui::Ui, search_index: usize) {
+    let search = &mut app.state.searches[search_index];
+    if !uses_float_tolerance(search.search_type) {
+        return;
+    }
+    ui.add(
+        egui::DragValue::new(&mut search.float_tolerance_percent)
+            .range(0.0..=crate::MAX_FLOAT_TOLERANCE_PERCENT)
+            .speed(0.1)
+            .max_decimals(1)
+            .prefix("± ")
+            .suffix(" %"),
+    )
+    .on_hover_text(fl!(crate::LANGUAGE_LOADER, "float-tolerance-tooltip"));
 }
 
 fn type_picker(app: &mut App, ui: &mut egui::Ui, editable: bool, current: SearchType) {

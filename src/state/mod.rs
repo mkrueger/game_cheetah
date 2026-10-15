@@ -90,18 +90,19 @@ fn search_loaded_memory(
     logical_end: usize,
     search_data: &SearchValue,
     guess_needles: Option<&[(SearchType, Vec<u8>)]>,
+    tolerance_percent: f32,
 ) -> Vec<SearchResult> {
     let mut results = if let Some(needles) = guess_needles {
         // Guess mode: scan the buffer for each precomputed typed needle
         // (Int / Int64 / Float / Double).
         let mut all_results = Vec::new();
         for (search_type, bytes) in needles {
-            let typed_results: Vec<SearchResult> = search_memory(memory, bytes, *search_type, base_address);
+            let typed_results: Vec<SearchResult> = search_memory_with_tolerance(memory, bytes, *search_type, base_address, tolerance_percent);
             all_results.extend(typed_results);
         }
         all_results
     } else {
-        search_memory(memory, &search_data.1, search_data.0, base_address)
+        search_memory_with_tolerance(memory, &search_data.1, search_data.0, base_address, tolerance_percent)
     };
 
     // Chunked reads include a small overlap after the logical chunk end so
@@ -527,7 +528,7 @@ impl GameCheetahEngine {
         if search.searching != SearchMode::None {
             return;
         }
-        let prepared = narrowing::PreparedSearch::new(&search.collect_results(), &search.search_value_text);
+        let prepared = narrowing::PreparedSearch::with_float_tolerance(&search.collect_results(), &search.search_value_text, search.float_tolerance_percent);
         self.filter_prepared(search_index, prepared, None);
     }
 
@@ -820,6 +821,7 @@ impl GameCheetahEngine {
         };
 
         let worker = search_context.search_worker(SearchMode::Memory, self.pid, self.attached_start_time, self.process_name.clone());
+        let tolerance_percent = search_context.float_tolerance_percent;
         let current_bytes = search_context.current_bytes.clone();
         let pid = self.pid;
         let results_sender = search_context.results_sender.clone();
@@ -910,6 +912,7 @@ impl GameCheetahEngine {
                                         logical_end,
                                         &search_data,
                                         guess_needles.as_ref().map(|needles| needles.as_slice()),
+                                        tolerance_percent,
                                     )
                                 }
                                 Err(_) => {
@@ -930,6 +933,7 @@ impl GameCheetahEngine {
                                         logical_end,
                                         &search_data,
                                         guess_needles.as_ref().map(|needles| needles.as_slice()),
+                                        tolerance_percent,
                                     )
                                 }
                                 Err(_) => {
@@ -962,6 +966,7 @@ impl GameCheetahEngine {
                                 logical_end,
                                 &search_data,
                                 guess_needles.as_ref().map(|needles| needles.as_slice()),
+                                tolerance_percent,
                             );
                             if !results.is_empty() {
                                 worker.send(&results_sender, results);
@@ -1727,6 +1732,18 @@ pub fn update_results(old_results: &[SearchResult], value_text: &str, handle: &p
 }
 
 pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: SearchType, start: usize) -> Vec<SearchResult> {
+    search_memory_with_tolerance(memory_data, search_data, search_type, start, 0.0)
+}
+
+/// Like [`search_memory`], widening Float/Double matches by a percentage of the
+/// target. Integer and string matches stay exact.
+pub fn search_memory_with_tolerance(
+    memory_data: &[u8],
+    search_data: &[u8],
+    search_type: SearchType,
+    start: usize,
+    tolerance_percent: f32,
+) -> Vec<SearchResult> {
     let mut result = Vec::new();
 
     match search_type {
@@ -1748,7 +1765,7 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
         SearchType::Float => {
             if search_data.len() == 4 {
                 let target = f32::from_le_bytes([search_data[0], search_data[1], search_data[2], search_data[3]]);
-                let epsilon = get_epsilon_f32(target);
+                let epsilon = get_epsilon_f32(target, tolerance_percent);
                 result = search_f32_simd(memory_data, target, epsilon, start);
             }
         }
@@ -1767,7 +1784,7 @@ pub fn search_memory(memory_data: &[u8], search_data: &[u8], search_type: Search
                 ]);
 
                 // Similar epsilon strategy for doubles
-                let epsilon = get_epsilon_f64(target);
+                let epsilon = get_epsilon_f64(target, tolerance_percent);
                 result = search_f64_simd(memory_data, target, epsilon, start);
             }
         }
@@ -2071,6 +2088,52 @@ mod tests {
             );
             assert_eq!(i64::from_le_bytes(*bytes), value);
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn guess_scan_and_update_use_the_search_float_tolerance() {
+        fn wait(search: &SearchContext) -> Vec<(usize, SearchType)> {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !search.search_complete.load(Ordering::Acquire) {
+                search.collect_results();
+                assert!(Instant::now() < deadline, "Search worker did not finish");
+                std::thread::yield_now();
+            }
+            search.collect_results().iter().map(|r| (r.addr, r.search_type)).collect()
+        }
+
+        let mut bytes = Box::new([0_u8; 16]);
+        bytes[..4].copy_from_slice(&10_080.0_f32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&10_080_i32.to_le_bytes());
+        let address = bytes.as_ptr() as usize;
+        for (percent, expected) in [(0.0, vec![]), (1.0, vec![(address, SearchType::Float)])] {
+            let mut engine = GameCheetahEngine {
+                pid: std::process::id() as process_memory::Pid,
+                ..Default::default()
+            };
+            engine.searches[0].float_tolerance_percent = percent;
+            engine.searches[0].search_value_text = "10000".to_owned();
+            engine.spawn_parallel_search(SearchType::Guess.from_string("10000").unwrap(), vec![(address, 16)], 0);
+            assert_eq!(wait(&engine.searches[0]), expected);
+        }
+
+        let mut engine = GameCheetahEngine {
+            pid: std::process::id() as process_memory::Pid,
+            ..Default::default()
+        };
+        let search = &mut engine.searches[0];
+        search.search_type = SearchType::Float;
+        search.set_cached_results(vec![SearchResult::new(address, SearchType::Float)]);
+        search.search_complete.store(true, Ordering::Release);
+        search.search_value_text = "10150".to_owned();
+        search.float_tolerance_percent = 1.0;
+        engine.filter_searches(0);
+        assert_eq!(wait(&engine.searches[0]), vec![(address, SearchType::Float)]);
+        engine.searches[0].float_tolerance_percent = 0.0;
+        engine.filter_searches(0);
+        assert!(wait(&engine.searches[0]).is_empty());
+        assert_eq!(f32::from_le_bytes(bytes[..4].try_into().unwrap()), 10_080.0);
     }
 
     #[cfg(unix)]

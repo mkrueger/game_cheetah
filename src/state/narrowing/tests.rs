@@ -95,7 +95,7 @@ fn reference(old: &[SearchResult], text: &str, memory: &Memory) -> Vec<SearchRes
                     let current = f32::from_le_bytes(bytes.try_into().unwrap());
                     let target = f32::from_le_bytes(target.1.try_into().unwrap());
                     if current.is_finite() && target.is_finite() {
-                        (current - target).abs() <= get_epsilon_f32(target)
+                        (current - target).abs() <= get_epsilon_f32(target, 0.0)
                     } else {
                         current == target || (current.is_nan() && target.is_nan())
                     }
@@ -104,7 +104,7 @@ fn reference(old: &[SearchResult], text: &str, memory: &Memory) -> Vec<SearchRes
                     let current = f64::from_le_bytes(bytes.try_into().unwrap());
                     let target = f64::from_le_bytes(target.1.try_into().unwrap());
                     if current.is_finite() && target.is_finite() {
-                        (current - target).abs() <= get_epsilon_f64(target)
+                        (current - target).abs() <= get_epsilon_f64(target, 0.0)
                     } else {
                         current == target || (current.is_nan() && target.is_nan())
                     }
@@ -193,6 +193,33 @@ fn floats_preserve_epsilon_nan_infinity_and_signed_zero() {
         let expected = reference(&old, text, &memory);
         assert_eq!(keys(&PreparedSearch::new(&old, text).update_results(&old, &memory)), keys(&expected));
     }
+}
+
+#[test]
+fn float_tolerance_percent_widens_large_values_but_never_the_fixed_minimum() {
+    assert_eq!(get_epsilon_f32(5.0, 1.0), 1.0 - f32::EPSILON);
+    assert_eq!(get_epsilon_f32(10_000.0, 1.0), 100.0);
+    assert_eq!(get_epsilon_f64(-10_000.0, 2.5), 250.0);
+    assert_eq!(get_epsilon_f64(10_000.0, f32::NAN), 1.0 - f64::EPSILON);
+    assert_eq!(get_epsilon_f64(10_000.0, -5.0), 1.0 - f64::EPSILON);
+    assert_eq!(get_epsilon_f64(10_000.0, 1000.0), 5_000.0, "Tolerance is clamped to the UI maximum");
+    assert_eq!(get_epsilon_f32(f32::INFINITY, 10.0), 1.0 - f32::EPSILON);
+    assert_eq!(get_epsilon_f32(f32::MAX, 50.0), f32::MAX / 2.0);
+
+    let mut memory = Memory::new(128);
+    let mut old = Vec::new();
+    for ty in [SearchType::Float, SearchType::Double] {
+        for value in ["10000", "9905", "10099", "10150", "inf"] {
+            old.push(memory.put(old.len() * 8, ty, value));
+        }
+    }
+    let exact_int = memory.put(80, SearchType::Int, "10000");
+    let near_int = memory.put(88, SearchType::Int, "10050");
+    old.extend([exact_int, near_int]);
+    let matches = |percent| keys(&PreparedSearch::with_float_tolerance(&old, "10000", percent).update_results(&old, &memory));
+    assert_eq!(matches(0.0), keys(&[old[0], old[5], exact_int]));
+    assert_eq!(matches(1.0), keys(&[old[0], old[1], old[2], old[5], old[6], old[7], exact_int]));
+    assert_eq!(matches(2.0), keys(&[old[0], old[1], old[2], old[3], old[5], old[6], old[7], old[8], exact_int]));
 }
 
 #[test]

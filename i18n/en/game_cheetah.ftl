@@ -159,6 +159,7 @@ name-label = Name:
 value-label = Value:
 search-description-label = Search description
 search-value-label = Search for { $valuetype } value
+float-tolerance-tooltip = Float tolerance: Float and Double matches may differ from the entered value by this percentage (always at least ±1). Useful when the game shows rounded or abbreviated numbers. Applies to new searches and updates; integers stay exact.
 
 found-results-label =
     { $results ->

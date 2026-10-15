@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and drop targets are highlighted while dragging. Visible searches display live
   values and progress together; keyboard actions and edits stay with the active
   pane. Layouts are session-only and do not require persistence.
+- Per-search float tolerance: a compact **± %** field beside the value input of
+  Number / Guess, Float32 and Float64 searches widens float matches by a
+  percentage of the entered value (0–50 %, never narrower than the existing ±1
+  window) for both initial scans and updates. Integer matches stay exact.
 
 ### Changed
 

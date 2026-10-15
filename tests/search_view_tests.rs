@@ -509,6 +509,48 @@ fn docked_result_scroll_survives_narrowing_and_widening_a_pane() {
     assert_eq!(visible_address_rows(&output)[0].0, first, "Short-pane scrolling must preserve table scroll");
 }
 #[test]
+fn float_tolerance_is_per_search_clamped_and_only_offered_for_float_capable_types() {
+    let mut app = two_searches();
+    app.state.searches[0].search_type = SearchType::Float;
+    app.switch_search(0);
+    let ctx = context();
+    let edit_tolerance = |app: &mut App, ctx: &Context, current: &str, text: &str| {
+        let output = settle(app, ctx, LARGE);
+        text_rect(&output, "± ");
+        click(app, ctx, LARGE, text_rect(&output, current).center());
+        frame(app, ctx, LARGE, vec![Event::Text(text.to_owned())]);
+        press_key(app, ctx, Key::Enter);
+        settle(app, ctx, LARGE)
+    };
+    let output = edit_tolerance(&mut app, &ctx, "0.0", "2.5");
+    text_rect(&output, "2.5");
+    let compact = settle(&mut app, &ctx, SIZES[0]);
+    let tolerance = text_rect(&compact, " %");
+    let update = text_rect(&compact, &fl!(LANGUAGE_LOADER, "update-button"));
+    assert!(
+        !tolerance.intersects(update),
+        "Tolerance must not overlap the primary action in compact windows"
+    );
+    assert_eq!(app.state.searches[0].float_tolerance_percent, 2.5);
+    assert_eq!(app.state.searches[1].float_tolerance_percent, 0.0, "Tolerance is per search");
+
+    app.switch_search(1);
+    let output = settle(&mut app, &ctx, LARGE);
+    assert_text_absent(&output, "± ");
+    for search_type in [SearchType::Guess, SearchType::Double] {
+        app.state.searches[1].search_type = search_type;
+        let output = settle(&mut app, &ctx, LARGE);
+        text_rect(&output, "± ");
+        text_rect(&output, "0.0");
+    }
+
+    app.switch_search(0);
+    let output = edit_tolerance(&mut app, &ctx, "2.5", "500");
+    text_rect(&output, "50.0");
+    assert_eq!(app.state.searches[0].float_tolerance_percent, game_cheetah::MAX_FLOAT_TOLERANCE_PERCENT);
+}
+
+#[test]
 fn hovering_a_tab_swaps_its_count_for_close_without_resizing_and_middle_click_closes() {
     let mut app = two_searches();
     app.new_search();

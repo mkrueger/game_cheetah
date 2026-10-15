@@ -77,6 +77,10 @@ impl PreparedSearch {
     }
 
     pub(super) fn new(results: &[SearchResult], text: &str) -> Self {
+        Self::with_float_tolerance(results, text, 0.0)
+    }
+
+    pub(super) fn with_float_tolerance(results: &[SearchResult], text: &str, tolerance_percent: f32) -> Self {
         let mut needles = std::array::from_fn(|_| None);
         let mut seen = [false; TYPE_COUNT];
         for result in results {
@@ -101,14 +105,14 @@ impl PreparedSearch {
                     let target = f32::from_le_bytes(value.1[..4].try_into().unwrap());
                     Needle::Float {
                         target,
-                        epsilon: get_epsilon_f32(target),
+                        epsilon: get_epsilon_f32(target, tolerance_percent),
                     }
                 }
                 SearchType::Double => {
                     let target = f64::from_le_bytes(value.1[..8].try_into().unwrap());
                     Needle::Double {
                         target,
-                        epsilon: get_epsilon_f64(target),
+                        epsilon: get_epsilon_f64(target, tolerance_percent),
                     }
                 }
                 _ => {
