@@ -309,7 +309,6 @@ impl App {
         self.clear_result_interaction();
         if let Some(search) = self.state.searches.get_mut(self.state.current_search) {
             search.selected_result = selected;
-            search.show_results = self.state.show_results;
         }
         self.search_value_request_focus = false;
         self.search_value_select_all = false;
@@ -317,7 +316,6 @@ impl App {
 
     pub(crate) fn restore_search_view(&mut self) {
         self.selected_result = self.state.searches[self.state.current_search].selected_result;
-        self.state.show_results = self.state.searches[self.state.current_search].show_results;
         // Scroll is held by egui under the context's stable view_id, not its index.
         self.result_selection_request_scroll = false;
         self.clear_change_tracker();

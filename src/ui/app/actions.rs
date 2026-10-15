@@ -220,7 +220,6 @@ impl App {
         self.state.clear_errors();
         self.clear_result_interaction();
         self.search_value_request_focus = true;
-        self.state.show_results = false;
         self.clear_change_tracker();
     }
 
@@ -567,7 +566,6 @@ impl App {
                 self.state.searches = searches;
                 self.state.current_search = 0;
                 self.search_workspace = Default::default();
-                self.state.show_results = false;
                 self.cancel_rename_search();
                 self.clear_result_interaction();
                 self.clear_change_tracker();

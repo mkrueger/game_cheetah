@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Search results are always visible, with a compact narrowing hint for large
+  lists instead of Show/Hide controls. Large visible panes also refresh live.
+- Result-table frozen counts use sorted address lookups, and float-presence
+  checks are cached per result generation, avoiding repeated whole-result scans.
+
 ## [0.7.4] - 2026-10-15
 
 ### Added
@@ -42,7 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   toggle switches, consistent card layouts, a locked data-type chip, wider
   result columns and cleaner memory-editor and process-list layouts.
 - Updated dependencies.
-- Search result visibility is now per search. Result editors and keyboard-focus
+- Result editors and keyboard-focus
   targets use stable search identities, including when two panes show the same
   address. Searches are renamed in place on their tab.
 - Narrow panes provide horizontal scrolling for all result columns, resizing

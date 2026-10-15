@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::{
-        Arc, RwLock,
+        Arc, Mutex, RwLock, Weak,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
@@ -198,7 +198,6 @@ pub struct SearchContext {
     pub(crate) refinement_pending: bool,
     pub(crate) search_input_id: Option<egui::Id>,
     pub(crate) reset_result_scroll: bool,
-    pub(crate) show_results: bool,
     /// Metadata stays out of the compact scan result. Only edited/loaded
     /// entries need it; unresolved entries must never enter a memory scan.
     pub address_overrides: HashMap<(usize, SearchType), crate::AddressSpec>,
@@ -236,6 +235,7 @@ pub struct SearchContext {
     // Changed to Arc<Vec> for cheap cloning
     pub cached_results: Arc<RwLock<Option<Arc<Vec<SearchResult>>>>>,
     pub cache_valid: Arc<AtomicBool>,
+    float_result_cache: Mutex<(Weak<Vec<SearchResult>>, bool)>,
 
     // For unknown searches - store memory snapshots
     pub memory_snapshot: MemorySnapshot,
@@ -257,7 +257,6 @@ impl SearchContext {
             refinement_pending: false,
             search_input_id: None,
             reset_result_scroll: false,
-            show_results: false,
             address_overrides: HashMap::new(),
             unresolved_addresses: Vec::new(),
             description,
@@ -286,6 +285,7 @@ impl SearchContext {
 
             cached_results: Arc::new(RwLock::new(None)),
             cache_valid: Arc::new(AtomicBool::new(false)),
+            float_result_cache: Mutex::new((Weak::new(), false)),
 
             memory_snapshot: Arc::new(RwLock::new(Vec::new())),
             previous_unknown_values: Arc::new(RwLock::new(HashMap::new())),
@@ -385,6 +385,32 @@ impl SearchContext {
 
     pub fn get_result_count(&self) -> usize {
         self.collect_results().len()
+    }
+
+    pub(crate) fn frozen_result_count(&self, results: &[SearchResult]) -> usize {
+        self.freezed_addresses
+            .iter()
+            .map(|address| {
+                let start = results.partition_point(|result| result.addr < *address);
+                results[start..].partition_point(|result| result.addr == *address)
+            })
+            .sum()
+    }
+
+    pub(crate) fn has_float_results(&self, results: &Arc<Vec<SearchResult>>) -> bool {
+        let mut cache = self.float_result_cache.lock().expect("float result cache poisoned");
+        let generation = Arc::downgrade(results);
+        if !cache.0.ptr_eq(&generation) {
+            // A Weak identity also changes when collect_results mutates an
+            // otherwise unshared Arc, without retaining a full Undo snapshot.
+            *cache = (
+                generation,
+                results
+                    .iter()
+                    .any(|result| matches!(result.search_type, SearchType::Float | SearchType::Double)),
+            );
+        }
+        cache.1
     }
 
     pub fn search_report(&self) -> Option<SearchReport> {
@@ -605,6 +631,72 @@ fn merge_results(results: &mut Vec<SearchResult>, incoming: &[SearchResult]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frozen_count_includes_each_type_but_not_absent_addresses() {
+        let mut search = SearchContext::new("frozen metadata".into());
+        search.freezed_addresses.extend([0x1000, 0x3000, 0xDEAD]);
+        search.set_cached_results(vec![
+            SearchResult::new(0x1000, SearchType::Int),
+            SearchResult::new(0x1000, SearchType::Float),
+            SearchResult::new(0x2000, SearchType::Int),
+            SearchResult::new(0x3000, SearchType::Double),
+        ]);
+        assert_eq!(search.frozen_result_count(&search.collect_results()), 3);
+        search.push_undo_state(search.collect_results());
+        search.set_cached_results(vec![SearchResult::new(0x1000, SearchType::Int)]);
+        assert_eq!(search.frozen_result_count(&search.collect_results()), 1);
+        search.undo_last_search();
+        assert_eq!(search.frozen_result_count(&search.collect_results()), 3);
+        search.freezed_addresses.remove(&0x1000);
+        assert_eq!(search.frozen_result_count(&search.collect_results()), 1);
+        search.freezed_addresses.clear();
+        assert_eq!(search.frozen_result_count(&search.collect_results()), 0);
+        search.freezed_addresses.insert(0x1000);
+        assert_eq!(search.frozen_result_count(&[]), 0);
+    }
+
+    #[test]
+    fn float_presence_cache_tracks_streaming_without_retaining_snapshots() {
+        let search = SearchContext::new("streamed metadata".into());
+        search.set_cached_results(vec![SearchResult::new(0x1000, SearchType::Int)]);
+        let first = search.collect_results();
+        assert!(!search.has_float_results(&first));
+        assert!(!search.has_float_results(&first));
+        assert_eq!(Arc::strong_count(&first), 2, "Metadata must not retain full result snapshots");
+        let identity = Arc::downgrade(&first);
+        drop(first);
+        search.results_sender.send(vec![SearchResult::new(0x2000, SearchType::Float)]).unwrap();
+        let streamed = search.collect_results();
+        assert!(identity.upgrade().is_none(), "In-place merging must invalidate the Weak identity");
+        assert!(search.has_float_results(&streamed));
+        assert!(search.has_float_results(&streamed));
+    }
+
+    #[test]
+    fn float_presence_cache_tracks_replacement_undo_reset_and_snapshot_preserving_merges() {
+        let mut search = SearchContext::new("metadata generations".into());
+        search.set_cached_results(vec![SearchResult::new(0x1000, SearchType::Double)]);
+        assert!(search.has_float_results(&search.collect_results()));
+        search.push_undo_state(search.collect_results());
+        search.set_cached_results(vec![SearchResult::new(0x1000, SearchType::Int)]);
+        assert!(
+            !search.has_float_results(&search.collect_results()),
+            "Same-length replacements need new metadata"
+        );
+        search.undo_last_search();
+        let snapshot = search.collect_results();
+        assert!(search.has_float_results(&snapshot));
+        search.results_sender.send(vec![SearchResult::new(0x2000, SearchType::Int)]).unwrap();
+        assert!(search.has_float_results(&search.collect_results()));
+        assert_eq!(snapshot.len(), 1);
+        search.clear_results();
+        assert!(!search.has_float_results(&search.collect_results()));
+        search.results_sender.send(vec![SearchResult::new(0x3000, SearchType::Float)]).unwrap();
+        assert!(search.has_float_results(&search.collect_results()));
+        search.invalidate_cache();
+        assert!(!search.has_float_results(&search.collect_results()));
+    }
 
     #[test]
     fn scan_report_counts_final_results_and_survives_undo_and_rollback() {

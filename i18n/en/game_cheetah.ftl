@@ -173,7 +173,7 @@ empty-search-title = No search yet
 empty-search-hint = Enter a value to start searching.
 empty-results-title = No results
 empty-results-hint = Change the value or data type and try again.
-too-many-results-hint = Too many hits to look through. Change the value in the game and narrow the search using the controls above.
+many-results-hint = Many hits? Change the value in the game and narrow the search above.
 
 undo-button = Undo
 numeric-filter-title = Filter results
@@ -216,8 +216,6 @@ result-unreadable = Unreadable
 result-unreadable-tooltip = This memory could not be read. It may have been freed or the process may have exited.
 result-frozen-count = frozen
 close-button = Close
-hide-results-button = Hide results
-show-results-button = Show results
 rename-button = Rename
 edit-button = Edit
 remove-button = Remove

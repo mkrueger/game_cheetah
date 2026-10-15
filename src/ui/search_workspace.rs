@@ -154,11 +154,7 @@ impl SearchWorkspace {
         state.searches.iter().enumerate().any(|(index, search)| {
             let active = index == state.current_search;
             let count = search.get_result_count();
-            let expanded = if active { state.show_results } else { search.show_results };
-            (active || visible.contains(&search.view_id))
-                && search.searching == crate::SearchMode::None
-                && count > 0
-                && (count <= in_process_view::BROWSE_RESULT_LIMIT || expanded)
+            (active || visible.contains(&search.view_id)) && search.searching == crate::SearchMode::None && count > 0
         })
     }
 }
@@ -429,7 +425,6 @@ impl Behavior<u64> for SearchBehavior<'_> {
         if !active {
             let background = self.inactive.entry(*id).or_default();
             background.selected_result = self.app.state.searches[index].selected_result;
-            background.show_results = self.app.state.searches[index].show_results;
             background.swap(self.app);
             self.app.state.current_search = index;
         }
@@ -453,7 +448,6 @@ impl Behavior<u64> for SearchBehavior<'_> {
                 .is_some_and(|response| response.gained_focus() && response.layer_id == ui.layer_id() && ui.max_rect().contains(response.rect.center()));
             let editing = self.app.editing_result.take();
             self.app.state.searches[index].selected_result = self.app.selected_result;
-            self.app.state.searches[index].show_results = self.app.state.show_results;
             self.app.changed_addresses.retain(|_, at| at.elapsed() < super::app::CHANGE_HIGHLIGHT);
             self.inactive.get_mut(id).expect("rendered pane state").swap(self.app);
             self.app.state.current_search = previous;
@@ -800,7 +794,6 @@ struct InactiveSearchView {
     hovered_result_row: Option<usize>,
     search_value_request_focus: bool,
     search_value_select_all: bool,
-    show_results: bool,
     address_editor: Option<super::address_editor::AddressEditor>,
     value_change_tracker: ValueCache<Vec<u8>>,
     changed_addresses: HashMap<usize, std::time::Instant>,
@@ -816,7 +809,6 @@ impl Default for InactiveSearchView {
             hovered_result_row: None,
             search_value_request_focus: false,
             search_value_select_all: false,
-            show_results: false,
             address_editor: None,
             value_change_tracker: ValueCache::new(8192),
             changed_addresses: HashMap::new(),
@@ -843,7 +835,6 @@ impl InactiveSearchView {
             value_change_tracker,
             changed_addresses,
         );
-        std::mem::swap(&mut self.show_results, &mut app.state.show_results);
     }
 }
 
@@ -867,9 +858,7 @@ mod tests {
         assert!(!workspace.has_live_values(&app.state));
         app.state.searches[0].searching = crate::SearchMode::None;
         app.state.searches[0].set_cached_results((1..=1001).map(|i| SearchResult::new(i * 8, SearchType::Int)).collect());
-        assert!(!workspace.has_live_values(&app.state), "Collapsed results do not need live repaints");
-        app.state.searches[0].show_results = true;
-        assert!(workspace.has_live_values(&app.state));
+        assert!(workspace.has_live_values(&app.state), "Large visible lists also need live repaints");
     }
 
     #[test]

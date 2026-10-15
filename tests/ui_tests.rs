@@ -620,19 +620,6 @@ fn test_search_value_input() {
 }
 
 #[test]
-fn test_toggle_results_visibility() {
-    let mut app = create_test_app();
-
-    assert!(!app.state.show_results);
-
-    app.state.show_results = !app.state.show_results;
-    assert!(app.state.show_results);
-
-    app.state.show_results = !app.state.show_results;
-    assert!(!app.state.show_results);
-}
-
-#[test]
 fn test_clear_results_requests_search_value_focus() {
     let mut app = create_test_app();
 

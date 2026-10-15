@@ -254,7 +254,6 @@ pub struct GameCheetahEngine {
     pub freeze_sender: crossbeam_channel::Sender<FreezeMessage>,
     freeze_stopped: crossbeam_channel::Receiver<(process_memory::Pid, usize)>,
     pub errors: VecDeque<AppError>,
-    pub show_results: bool,
     pub set_focus: bool,
 }
 
@@ -388,7 +387,6 @@ impl Default for GameCheetahEngine {
             // Removed: search_threads: ThreadPool::new(16),
             freeze_sender: tx,
             freeze_stopped: stopped_rx,
-            show_results: false,
             show_about_dialog: false,
             set_focus: true,
         }

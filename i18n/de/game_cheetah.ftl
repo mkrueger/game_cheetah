@@ -173,7 +173,7 @@ empty-search-title = Noch keine Suche
 empty-search-hint = Wert eingeben und die erste Suche starten.
 empty-results-title = Keine Treffer
 empty-results-hint = Wert ändern oder Datentyp wechseln und erneut suchen.
-too-many-results-hint = Zu viele Treffer zum Durchsehen. Ändere den Wert im Spiel und grenze die Suche oben weiter ein.
+many-results-hint = Viele Treffer? Ändere den Wert im Spiel und grenze die Suche oben weiter ein.
 
 undo-button = Rückgängig
 numeric-filter-title = Treffer eingrenzen
@@ -217,8 +217,6 @@ result-unreadable-tooltip = Dieser Speicherbereich konnte nicht gelesen werden. 
 result-frozen-count = eingefroren
 close-button = Schließen
 
-hide-results-button = Ergebnisse verstecken
-show-results-button = Ergebnisse zeigen
 rename-button = Umbenennen
 edit-button = Bearbeiten
 remove-button = Entfernen

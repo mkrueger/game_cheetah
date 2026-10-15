@@ -359,23 +359,22 @@ mod refresh_tests {
     }
 
     #[test]
-    fn real_tick_schedules_live_scan_idle_and_hidden_result_views() {
-        for (focused, count, searching, show_results, expected) in [
-            (true, 1, SearchMode::None, false, refresh::LIVE_INTERVAL),
-            (true, 0, SearchMode::Memory, false, Duration::from_millis(100)),
-            (true, 1, SearchMode::Memory, false, Duration::from_millis(100)),
-            (true, 0, SearchMode::None, false, refresh::IDLE_INTERVAL),
-            (true, 1001, SearchMode::None, false, refresh::IDLE_INTERVAL),
-            (true, 1001, SearchMode::None, true, refresh::LIVE_INTERVAL),
-            (false, 1, SearchMode::None, false, refresh::BACKGROUND_INTERVAL),
-            (false, 0, SearchMode::Memory, false, refresh::BACKGROUND_INTERVAL),
+    fn real_tick_schedules_live_scan_idle_and_large_result_views() {
+        for (focused, count, searching, expected) in [
+            (true, 1, SearchMode::None, refresh::LIVE_INTERVAL),
+            (true, 0, SearchMode::Memory, Duration::from_millis(100)),
+            (true, 1, SearchMode::Memory, Duration::from_millis(100)),
+            (true, 0, SearchMode::None, refresh::IDLE_INTERVAL),
+            (true, 1001, SearchMode::None, refresh::LIVE_INTERVAL),
+            (false, 1, SearchMode::None, refresh::BACKGROUND_INTERVAL),
+            (false, 1001, SearchMode::None, refresh::BACKGROUND_INTERVAL),
+            (false, 0, SearchMode::Memory, refresh::BACKGROUND_INTERVAL),
         ] {
             let ctx = egui::Context::default();
             let mut app = App {
                 app_state: AppState::InProcess,
                 ..Default::default()
             };
-            app.state.show_results = show_results;
             app.state.searches[0].searching = searching;
             app.state.searches[0].set_cached_results((0..count).map(|i| crate::SearchResult::new(i * 8, SearchType::Int)).collect());
             for frame in 0..4 {

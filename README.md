@@ -60,6 +60,12 @@ reachable. Resizing preserves the result-table scroll position. Scan spinners
 pause when the application is unfocused or minimized to preserve background
 refresh throttling.
 
+Result lists are always displayed, including large searches; only viewport rows
+are rendered. A small hint suggests narrowing large searches without hiding the
+table. Frozen-row counts look up the frozen addresses in the sorted results, and
+float-presence checks are cached per result generation instead of scanning all
+matches on every frame.
+
 Layouts stay in memory during the current workspace, including game reconnects
 and visits to the memory editor. They are not saved across application restarts
 or included in cheat-table files. Docking does not require experimental persistence.

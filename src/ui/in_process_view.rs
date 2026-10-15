@@ -13,7 +13,7 @@ const RESULT_ROW_HEIGHT: f32 = 32.0;
 
 /// Above this many hits the table is not worth browsing — narrowing the search
 /// is the only useful next step, so the list is collapsed behind a hint.
-pub(crate) const BROWSE_RESULT_LIMIT: usize = 1000;
+const NARROWING_HINT_THRESHOLD: usize = 1000;
 
 /// A search value is a handful of characters; a full-width field only pushes
 /// the type picker to the far edge of the window.
@@ -424,18 +424,11 @@ pub(crate) fn search_area(app: &mut App, ui: &mut egui::Ui, active: bool) {
 
     if matches!(searching, SearchMode::None) && search_results > 0 {
         ui.add_space(14.0);
-        let collapsed = search_results > BROWSE_RESULT_LIMIT && !app.state.show_results;
-        if collapsed {
-            too_many_results_panel(app, ui);
-        } else {
-            if search_results > BROWSE_RESULT_LIMIT {
-                if ui.add(secondary_btn(fl!(crate::LANGUAGE_LOADER, "hide-results-button"))).clicked() {
-                    app.state.show_results = false;
-                }
-                ui.add_space(8.0);
-            }
-            result_table(app, ui, active);
+        if search_results > NARROWING_HINT_THRESHOLD {
+            ui.add(egui::Label::new(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "many-results-hint")).size(12.0).weak()).wrap());
+            ui.add_space(6.0);
         }
+        result_table(app, ui, active);
     } else if matches!(searching, SearchMode::None) && (!is_search_complete || selected_type != SearchType::Unknown || unknown_comparison.is_some()) {
         ui.add_space(18.0);
         empty_results_panel(app, ui, is_search_complete);
@@ -602,45 +595,13 @@ fn result_count_label(ui: &mut egui::Ui, count: usize) {
     } else {
         fl!(crate::LANGUAGE_LOADER, "result-unit-plural")
     };
-    let mut text = egui::RichText::new(format!("{count} {unit}")).size(14.0).strong();
-    if count > BROWSE_RESULT_LIMIT {
-        text = text.color(ui.visuals().warn_fg_color);
-    }
+    let text = egui::RichText::new(format!("{count} {unit}")).size(14.0).strong();
     egui::Frame::new()
         .fill(ui.visuals().selection.bg_fill.gamma_multiply(0.18))
         .corner_radius(egui::CornerRadius::same(6))
         .inner_margin(egui::Margin::symmetric(10, 5))
         .show(ui, |ui| {
             ui.add(egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend));
-        });
-}
-
-/// Replaces the table while the result list is too large to read, so the next
-/// useful action is visible instead of thousands of rows.
-fn too_many_results_panel(app: &mut App, ui: &mut egui::Ui) {
-    egui::Frame::new()
-        .fill(egui::Color32::from_rgb(22, 25, 30))
-        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(55, 62, 72)))
-        .corner_radius(egui::CornerRadius::same(10))
-        .inner_margin(egui::Margin::symmetric(16, 14))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("\u{1F50D}").size(20.0));
-                ui.add_space(6.0);
-                ui.vertical(|ui| {
-                    ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "too-many-results-hint")).size(14.0));
-                    ui.add_space(8.0);
-                    if ui
-                        .add(
-                            egui::Button::new(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "show-results-button")).size(13.0))
-                                .min_size(egui::vec2(0.0, 28.0)),
-                        )
-                        .clicked()
-                    {
-                        app.state.show_results = true;
-                    }
-                });
-            });
         });
 }
 
@@ -784,14 +745,10 @@ fn result_table(app: &mut App, ui: &mut egui::Ui, active: bool) {
     let string_utf16_byte_len = SearchType::StringUtf16.byte_length_for_text(&search_context.search_value_text).unwrap_or(0);
     let pid = app.state.pid as process_memory::Pid;
 
-    // Build the freezed set + an "all frozen" check once for the whole frame.
-    let freezed: std::collections::HashSet<usize> = search_context.freezed_addresses.iter().copied().collect();
-    let all_frozen = !results.is_empty() && results.iter().all(|r| freezed.contains(&r.addr));
-    let frozen_count = results.iter().filter(|r| freezed.contains(&r.addr)).count();
+    let frozen_count = search_context.frozen_result_count(&results);
+    let all_frozen = !results.is_empty() && frozen_count == results.len();
     // Explain approximate hits only when the current results contain floats.
-    let float_basis = search_context
-        .float_search_basis
-        .filter(|_| results.iter().any(|r| matches!(r.search_type, SearchType::Float | SearchType::Double)));
+    let float_basis = search_context.float_search_basis.filter(|_| search_context.has_float_results(&results));
 
     // Capture lookups we'll need inside the row closure. Borrow checker:
     // the row closure runs inside TableBuilder::body which holds `ui`, and
@@ -994,7 +951,7 @@ fn result_table(app: &mut App, ui: &mut egui::Ui, active: bool) {
                 let Some(result) = results.get(i).copied() else {
                     return;
                 };
-                let is_frozen = freezed.contains(&result.addr);
+                let is_frozen = app.state.searches[search_index].freezed_addresses.contains(&result.addr);
                 let is_selected = selected_index == Some(i);
                 row.set_selected(is_selected);
 

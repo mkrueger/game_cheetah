@@ -132,10 +132,14 @@ fn assert_text_absent(output: &FullOutput, label: &str) {
 }
 
 fn assert_single_line_visible(output: &FullOutput, label: &str, size: Vec2) {
+    assert_single_line_visible_above(output, label, size, f32::INFINITY);
+}
+
+fn assert_single_line_visible_above(output: &FullOutput, label: &str, size: Vec2, max_y: f32) {
     let matches: Vec<_> = shapes(output)
         .into_iter()
         .filter_map(|(clip, shape)| match shape {
-            Shape::Text(text) if text.galley.job.text == label => Some((clip, text)),
+            Shape::Text(text) if text.galley.job.text == label && text.pos.y < max_y => Some((clip, text)),
             _ => None,
         })
         .collect();
@@ -145,6 +149,25 @@ fn assert_single_line_visible(output: &FullOutput, label: &str, size: Vec2) {
     let rect = text.galley.rect.translate(text.pos.to_vec2());
     assert!(Rect::from_min_size(Pos2::ZERO, size).contains_rect(rect), "Offscreen {label:?}: {rect:?}");
     assert!(clip.expand(1.0).contains_rect(rect), "Clipped {label:?}: {rect:?}, clip={clip:?}");
+}
+
+fn assert_numeric_filter_control(output: &FullOutput, visible: bool, size: Vec2) {
+    let label = fl!(LANGUAGE_LOADER, "result-filter-numeric");
+    let apply = text_rect(output, &fl!(LANGUAGE_LOADER, "numeric-filter-apply"));
+    let controls: Vec<_> = shapes(output)
+        .into_iter()
+        .filter_map(|(clip, shape)| match shape {
+            Shape::Text(text) if text.galley.job.text == label && text.pos.y < apply.top() => Some((clip, text)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(controls.len(), usize::from(visible), "Numeric criterion visibility at {size:?}");
+    if let Some((clip, text)) = controls.first() {
+        let rect = text.galley.rect.translate(text.pos.to_vec2());
+        assert_eq!(text.galley.rows.len(), 1);
+        assert!(clip.expand(1.0).contains_rect(rect));
+        assert!(Rect::from_min_size(Pos2::ZERO, size).contains_rect(rect));
+    }
 }
 
 // Check the painted button frame, not just its label: a label fitting into the
@@ -265,25 +288,52 @@ fn layout_presets_show_independent_searches_and_tabs_can_be_restored() {
 }
 
 #[test]
-fn docked_search_controls_do_not_share_inputs_or_hidden_result_visibility() {
-    let mut app = two_searches();
+fn large_result_lists_are_visible_without_expansion_and_stay_virtualized() {
+    for size in SIZES {
+        let mut app = app_with_results(100_001);
+        let ctx = context();
+        let output = settle(&mut app, &ctx, size);
+        text_rect(&output, "0x1000");
+        text_rect(&output, &fl!(LANGUAGE_LOADER, "many-results-hint"));
+        let addresses = shapes(&output)
+            .into_iter()
+            .filter(|(_, shape)| matches!(shape, Shape::Text(text) if text.galley.job.text.starts_with("0x")))
+            .count();
+        assert!(addresses < 100, "Only viewport rows should be rendered, got {addresses}");
+    }
+    let mut app = app_with_results(100_001);
     let ctx = context();
-    for search in &mut app.state.searches {
-        search.set_cached_results((1..=1001).map(|i| SearchResult::new(i * 0x1000, SearchType::Int)).collect());
+    ctx.global_style_mut(|style| style.scroll_animation = egui::style::ScrollAnimation::none());
+    settle(&mut app, &ctx, LARGE);
+    click_address(&mut app, &ctx, 0x1000);
+    press_key(&mut app, &ctx, Key::End);
+    assert_eq!(app.selected_result.unwrap().addr, 100_001 * 0x1000);
+    let output = settle(&mut app, &ctx, LARGE);
+    text_rect(&output, &format!("0x{:X}", 100_001 * 0x1000_usize));
+    press_key(&mut app, &ctx, Key::Home);
+    let output = settle(&mut app, &ctx, LARGE);
+    text_rect(&output, "0x1000");
+}
+
+#[test]
+fn docked_search_controls_keep_inputs_independent_and_large_results_visible() {
+    let mut app = two_searches();
+    app.switch_search(0);
+    let ctx = context();
+    for (index, search) in app.state.searches.iter_mut().enumerate() {
+        search.set_cached_results((1..=1001).map(|i| SearchResult::new(i * 0x1000 + index * 8, SearchType::Int)).collect());
     }
     arrange_searches(&mut app, &ctx, LARGE, &fl!(LANGUAGE_LOADER, "search-layout-horizontal"));
     let output = settle(&mut app, &ctx, LARGE);
-    let show = fl!(LANGUAGE_LOADER, "show-results-button");
-    click(&mut app, &ctx, LARGE, text_rect(&output, &show).center());
-    let output = settle(&mut app, &ctx, LARGE);
-    assert!(app.state.show_results);
-    text_rect(&output, &fl!(LANGUAGE_LOADER, "hide-results-button"));
-    text_rect(&output, &show);
+    text_rect(&output, "0x1000");
+    text_rect(&output, "0x1008");
+    text_rect(&output, &fl!(LANGUAGE_LOADER, "many-results-hint"));
     assert_eq!(app.state.current_search, 0);
     app.switch_search(1);
-    assert!(!app.state.show_results, "Showing Health results must not expand Money");
+    let output = settle(&mut app, &ctx, LARGE);
+    text_rect(&output, "0x1000");
+    text_rect(&output, "0x1008");
     app.switch_search(0);
-    assert!(app.state.show_results);
     assert_eq!(app.state.searches[0].search_value_text, "12345");
     assert_eq!(app.state.searches[1].search_value_text, "67890");
 }
@@ -1402,7 +1452,7 @@ fn all_filter_controls_are_accessible_in_small_and_large_windows() {
         let apply = fl!(LANGUAGE_LOADER, "numeric-filter-apply");
         assert_button_visible(&output, &apply, size);
         let apply_rect = button_frame(&output, &apply).0;
-        assert_single_line_visible(&output, &fl!(LANGUAGE_LOADER, "result-filter-numeric"), size);
+        assert_numeric_filter_control(&output, true, size);
         assert_single_line_visible(&output, &fl!(LANGUAGE_LOADER, "numeric-filter-and"), size);
         let scroll_pos = text_rect(&output, &fl!(LANGUAGE_LOADER, "result-filter-numeric")).center();
         for label in [
@@ -1430,13 +1480,13 @@ fn all_filter_controls_are_accessible_in_small_and_large_windows() {
                     output = wheel_filter(&mut app, &ctx, size, scroll_pos, -16.0);
                 }
             }
-            assert_single_line_visible(&output, &label, size);
+            assert_single_line_visible_above(&output, &label, size, apply_rect.top());
             assert_button_visible(&output, &apply, size);
             assert_eq!(button_frame(&output, &apply).0, apply_rect, "Apply must not scroll with the criteria");
         }
         if size != LARGE {
             output = wheel_filter(&mut app, &ctx, size, scroll_pos, 1000.0);
-            assert_single_line_visible(&output, &fl!(LANGUAGE_LOADER, "result-filter-numeric"), size);
+            assert_numeric_filter_control(&output, true, size);
             assert_single_line_visible(&output, &fl!(LANGUAGE_LOADER, "numeric-filter-and"), size);
             assert_eq!(button_frame(&output, &apply).0, apply_rect);
         }
@@ -1463,8 +1513,8 @@ fn only_unknown_shows_numeric_controls_and_switching_back_preserves_bounds() {
                 app.state.searches[0].search_type = selected_type;
                 let types_visible = matches!(selected_type, SearchType::Guess | SearchType::Unknown);
                 let output = settle(&mut app, &ctx, size);
+                assert_numeric_filter_control(&output, selected_type == SearchType::Unknown, size);
                 for label in [
-                    fl!(LANGUAGE_LOADER, "result-filter-numeric"),
                     game_cheetah::NumericComparison::Between.label(),
                     fl!(LANGUAGE_LOADER, "numeric-filter-and"),
                     "17".to_owned(),
@@ -2088,7 +2138,6 @@ fn narrow_owned_results(count: usize, selected_survives: bool, replace_text: boo
     let last = &values[count - 1] as *const i64 as usize;
     let mut app = app_with_results(0);
     app.state.pid = std::process::id() as _;
-    app.state.show_results = true;
     let search = &mut app.state.searches[0];
     search.search_type = SearchType::Guess;
     search.search_value_text = "12345".to_owned();
