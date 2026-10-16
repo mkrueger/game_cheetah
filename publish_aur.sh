@@ -5,6 +5,7 @@ set -euo pipefail
 # Configuration
 PKG_NAME="game-cheetah"
 AUR_USERNAME="your-aur-username"  # Change this to your AUR username
+PKGBUILD_SOURCE="build/arch/PKGBUILD"
 
 # Colors
 RED='\033[0;31m'
@@ -15,8 +16,8 @@ NC='\033[0m'
 echo -e "${BLUE}==> Preparing AUR submission for $PKG_NAME${NC}"
 
 # Check if PKGBUILD exists
-if [ ! -f "PKGBUILD" ]; then
-    echo -e "${RED}Error: PKGBUILD not found. Run build_arch.sh first.${NC}"
+if [ ! -f "$PKGBUILD_SOURCE" ]; then
+    echo -e "${RED}Error: $PKGBUILD_SOURCE not found. Run from the project root.${NC}"
     exit 1
 fi
 
@@ -26,7 +27,7 @@ rm -rf "$AUR_DIR"
 mkdir -p "$AUR_DIR"
 
 # Copy only necessary files for AUR
-cp PKGBUILD "$AUR_DIR/"
+cp "$PKGBUILD_SOURCE" "$AUR_DIR/"
 
 # Generate .SRCINFO
 cd "$AUR_DIR"

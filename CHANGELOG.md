@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- AUR packaging accepts `rustup` as a Rust provider and checks the active
+  compiler at build time. Rust 1.95 or newer remains required.
+
 ## [0.7.4] - 2026-10-15
 
 ### Added

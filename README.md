@@ -411,6 +411,27 @@ sudo dnf copr enable omnibrain/game-cheetah
 sudo dnf install game-cheetah
 ```
 
+### Arch Linux (AUR)
+
+The AUR source package accepts either the system Rust compiler or `rustup`.
+Rust **1.95 or newer** is still required by the current dependencies; the
+package checks the active compiler before fetching dependencies, rather than
+requiring a versioned `rust` package that excludes `rustup`.
+
+With `rustup`, update and select a suitable toolchain before building:
+
+```bash
+rustup update stable
+rustup default stable
+rustc --version
+```
+
+For maintainers, the AUR recipe is [build/arch/PKGBUILD](build/arch/PKGBUILD).
+Run `bash publish_aur.sh` from the project root to stage it and generate
+`.SRCINFO` with `makepkg`. This is separate from `build_arch.sh`, which builds
+the local working tree. Update the recipe's version and source checksum for
+each release, and regenerate `.SRCINFO` when changing package metadata.
+
 ### Install with Cargo
 
 Game Cheetah is also published on crates.io:
