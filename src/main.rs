@@ -5,7 +5,12 @@ fn main() -> eframe::Result<()> {
     use game_cheetah::App;
 
     if std::env::args().any(|argument| argument == game_cheetah::tutorial::TARGET_ARGUMENT) {
-        if let Err(error) = game_cheetah::tutorial::run_target() {
+        let lesson = if std::env::args().any(|argument| argument == game_cheetah::tutorial::HEALTH_BAR_ARGUMENT) {
+            game_cheetah::tutorial::Lesson::HealthBar
+        } else {
+            game_cheetah::tutorial::Lesson::KnownValue
+        };
+        if let Err(error) = game_cheetah::tutorial::run_target(lesson) {
             eprintln!("Tutorial target failed: {error}");
             std::process::exit(1);
         }

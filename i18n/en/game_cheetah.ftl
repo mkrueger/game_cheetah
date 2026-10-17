@@ -6,7 +6,6 @@ tutorial-error = Tutorial unavailable: { $error }. Restart the tutorial or retur
 tutorial-safety = The practice game is a small separate process that Game Cheetah starts and closes again when you finish. Only edit memory in your own single-player or offline games.
 tutorial-why = What is this about?
 tutorial-how = How to do it
-tutorial-game-title = Practice game
 tutorial-health = Health: { $health } / { $max }
 tutorial-damage-button = Take damage
 tutorial-heal-button = Drink potion
@@ -21,11 +20,9 @@ tutorial-freeze-title = Freeze
 tutorial-test-title = Test the freeze
 tutorial-complete-title = Well done!
 tutorial-intro-text =
-    Games store numbers such as health, ammo or gold in memory, each at a fixed location: its address. Game Cheetah searches there for the number you currently see in the game.
+    Games store numbers such as health in memory, each at a fixed location: its address. The same number often appears there hundreds of times, though. So you search for the number, change it in the game and search again until only the right address remains.
 
-    The same number usually appears in hundreds of places, though. So you change the value in the game and search again. Only addresses that changed along with it remain.
-
-    Above you can see the practice game; it is already attached. On the left is the regular search area, where you practice in six short steps: search, narrow down, change the value and freeze it.
+    Above you can see the practice game; on the left is the search area where you work.
 tutorial-begin = Let's go
 tutorial-search-why =
     The first search reads the game's entire memory and remembers every location containing the number. Each of these locations is a candidate.
@@ -74,14 +71,66 @@ tutorial-complete-text = You completed the whole workflow: you searched for a va
 tutorial-tips-title = Tips for real games
 tutorial-tips =
     • If you find nothing, try another data type. Some games store values as “float (4 bytes)”, a decimal number.
-    • If you do not know the exact number, for example a health bar without digits, use the “Unknown” type and narrow down with “increased” or “decreased”.
+    • If you do not know the exact number, for example a health bar without digits, use the “Unknown” type and narrow down with “Increased”, “Decreased” and “Unchanged”, as in lesson 2.
     • After restarting a game, values usually live at different addresses. Simply search again.
     • Use a separate search tab for each value, for example one for gold and one for ammo.
+tutorial-lesson-known = 1 · Known number
+tutorial-lesson-bar = 2 · Health bar
+tutorial-lesson-switch = Starts this lesson from the beginning.
+tutorial-next-lesson = Continue with lesson 2: Health bar
+tutorial-bar-game-rules = Damage and potions change the bar by a random amount. The exact number is hidden, as in many games. If the bar runs empty, you respawn with a full bar.
+tutorial-bar-intro-text =
+    Many games show only a bar, not a number. Then Game Cheetah first remembers the entire memory. Afterwards you change the bar and only tell it what happened: smaller, larger or unchanged. What remains are the locations that behaved exactly the same way.
+tutorial-bar-search-title = Initial state
+tutorial-bar-narrow-title = Compare
+tutorial-bar-search-why = Without a known number, Game Cheetah cannot search for anything specific. So it saves a copy of the entire memory that all later comparisons work with. Therefore, only change the bar after the initial state has been captured.
+tutorial-bar-search-how =
+    1. Click the type selector to the right of the value field and choose “Unknown”. The value field disappears: you do not need a number.
+    2. Click “Capture initial state”.
+    3. Wait until “Initial state captured” appears.
+tutorial-bar-narrow-why =
+    After each change in the game, click the button that describes what happened to the bar. Game Cheetah keeps only locations that behaved exactly the same way.
+
+    However, a game's memory also contains values that keep changing on their own, such as animations or timers. You remove those with “Unchanged”: leave the game alone for a moment. The bar stays the same while the other values change.
+tutorial-bar-narrow-how =
+    1. Click “Take damage”, then “Decreased” on the left.
+    2. Click “Drink potion”, then “Increased”.
+    3. Change nothing, wait a moment and click “Unchanged”.
+    4. Repeat in any order until at most two addresses remain.
+
+    Compare after every change, before you change the bar again. If the bar runs empty, it respawns full: that counts as “Increased”.
+tutorial-bar-narrow-ready = Initial state captured. Now change the bar in the game, then click the matching comparison.
+tutorial-bar-narrow-status = Candidates: { $count } addresses (goal: at most { $goal })
+tutorial-bar-edit-why =
+    You found the bar's address. It appears twice in the result table: once with the data type “Int32” and once with “Float32”. These are the same 4 bytes, just read in two different ways. The unknown search tries both interpretations.
+
+    The Float32 row shows a sensible decimal number such as 63.4; the Int32 row shows a huge, meaningless number. Bars almost always store their value as a decimal number (float). The decimal number also reveals the scale: if a roughly half-full bar shows about 50, the bar is full at 100.
+tutorial-bar-edit-how =
+    1. In the result table, find the row with the data type “Float32”.
+    2. Click its value, replace it with 200 and press Enter.
+    3. The bar is now overcharged and glows gold: more than any potion could give.
+tutorial-bar-freeze-why = Even the overcharged bar does not last long: with the next hit, the game subtracts something again. When a value is frozen, Game Cheetah writes it back several times per second.
+tutorial-bar-freeze-how =
+    1. In the Float32 row, click the snowflake in the “Frozen” column.
+    2. The snowflake becomes highlighted.
+
+    Freezing applies to the 4 bytes at this address. That is why the Int32 row for the same address is frozen as well.
+tutorial-bar-test-how =
+    1. Click “Take damage” in the practice game.
+    2. Watch the bar: it stays gold and full.
+tutorial-bar-test-status = Checking whether the bar stays overcharged…
+tutorial-bar-complete-text = Well done! You found a value without knowing its number: capture the initial state, change the bar, choose the matching comparison and use “Unchanged” to remove values that change on their own. You also learned that the same memory can be read as Int and as Float, and which interpretation the game actually uses.
+tutorial-hint-choose-unknown = You do not know a number for a bar. Click “Reset search”, choose “Unknown” as the type and click “Capture initial state”.
+tutorial-bar-hint-narrow-lost = Oops, the bar was filtered out. The comparison probably did not match the change in the game, or the bar was changed more than once between two comparisons. Click “Undo” and choose the matching comparison. Alternatively, click “Reset search” and capture the initial state again.
+tutorial-bar-hint-nothing-removed = Nothing was filtered out. Change the bar in the game between two comparisons, or wait a moment and use “Unchanged” to remove values that change on their own.
+tutorial-hint-wrong-type = The bar is almost empty although you took no damage: you probably changed the Int32 row. The bytes of a whole number read as a decimal number are almost zero. Set the Float32 row to 200 instead.
+tutorial-bar-hint-freeze-value = The bar is no longer overcharged. First set the Float32 row back to 200, then freeze it. If it is already frozen, release it by clicking its snowflake.
 tutorial-glossary-title = Terms explained
 tutorial-glossary =
     Address: The location in memory where a value is stored, shown as a hexadecimal number.
     Value: The number currently stored at that address.
     Data type: How a value is stored. Int is a 4-byte whole number; float is a 4-byte decimal number.
+    Initial state: A copy of the entire memory that an unknown search later compares with.
     Candidate: An address that has matched every search so far.
     Narrow down: Check only the existing candidates again with a new value.
     Freeze: Keep writing a value back so the game cannot change it.
@@ -90,9 +139,9 @@ tutorial-hint-narrow-lost = Oops, the real address was filtered out. This happen
 tutorial-hint-nothing-removed = Nothing was filtered out because the value has not changed since the last search. First change health in the practice game, then narrow down with the new value.
 tutorial-hint-tab-closed = This lesson's search tab was closed. Simply start a new search with the current health.
 tutorial-hint-copy-edited = You changed a copy: it now shows 999, but the game's real health did not change. Games often store values more than once. Set the other candidate to 999.
-tutorial-hint-wrong-freeze = You froze a different address. Freeze the result you used to set the game's health to 999.
+tutorial-hint-wrong-freeze = You froze a different address. Freeze the result you used to change the value in the game.
 tutorial-hint-freeze-value = Health is no longer 999. First set the right result back to 999, then freeze it. If it is already frozen, release it by clicking its snowflake.
-tutorial-hint-freeze-failed = Health did not return to 999. Check that the snowflake of the right result is active and test again.
+tutorial-hint-freeze-failed = The value did not return to the frozen value. Check that the snowflake of the right result is active and test again.
 error-process-title = Process no longer available.
 error-process-help = Start the game and select it again.
 error-access-title = Access denied.

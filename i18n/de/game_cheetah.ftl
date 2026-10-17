@@ -6,7 +6,6 @@ tutorial-error = Tutorial nicht verfügbar: { $error }. Starte das Tutorial neu 
 tutorial-safety = Das Übungsspiel ist ein eigener kleiner Prozess, den Game Cheetah startet und beim Beenden wieder schließt. Nutze Speicheränderungen nur bei eigenen Einzelspieler- oder Offline-Spielen.
 tutorial-why = Worum geht es?
 tutorial-how = So geht's
-tutorial-game-title = Übungsspiel
 tutorial-health = Lebenspunkte: { $health } / { $max }
 tutorial-damage-button = Schaden nehmen
 tutorial-heal-button = Heiltrank trinken
@@ -21,11 +20,9 @@ tutorial-freeze-title = Einfrieren
 tutorial-test-title = Einfrieren testen
 tutorial-complete-title = Geschafft!
 tutorial-intro-text =
-    Spiele speichern Zahlen wie Lebenspunkte, Munition oder Gold im Arbeitsspeicher, jede an einer festen Stelle: ihrer Adresse. Game Cheetah sucht dort nach der Zahl, die du gerade im Spiel siehst.
+    Spiele speichern Zahlen wie Lebenspunkte im Arbeitsspeicher, jede an einer festen Stelle: ihrer Adresse. Dieselbe Zahl steht dort aber oft hundertfach. Darum suchst du die Zahl, änderst sie im Spiel und suchst erneut, bis nur die richtige Adresse übrig bleibt.
 
-    Dieselbe Zahl steht aber meist an Hunderten Stellen. Deshalb änderst du den Wert im Spiel und suchst erneut. Nur Adressen, die sich mitverändert haben, bleiben übrig.
-
-    Oben siehst du das Übungsspiel; es ist bereits verbunden. Links liegt der normale Suchbereich. Dort übst du in sechs kurzen Schritten: suchen, eingrenzen, Wert ändern und einfrieren.
+    Oben siehst du das Übungsspiel, links den Suchbereich, in dem du arbeitest.
 tutorial-begin = Los geht's
 tutorial-search-why =
     Die erste Suche liest den gesamten Speicher des Spiels und merkt sich jede Stelle, an der die gesuchte Zahl steht. Jede dieser Stellen ist ein Kandidat.
@@ -74,14 +71,66 @@ tutorial-complete-text = Du hast den kompletten Ablauf geschafft: einen Wert ges
 tutorial-tips-title = Tipps für echte Spiele
 tutorial-tips =
     • Findest du nichts, probiere einen anderen Datentyp. Manche Spiele speichern Werte als „Float (4 Bytes)“, also als Kommazahl.
-    • Kennst du die genaue Zahl nicht, zum Beispiel bei einer Lebensleiste ohne Zahl, nutze den Typ „Unbekannt“ und grenze mit „gestiegen“ oder „gesunken“ ein.
+    • Kennst du die genaue Zahl nicht, zum Beispiel bei einer Lebensleiste ohne Zahl, nutze den Typ „Unbekannt“ und grenze mit „Erhöht“, „Verringert“ und „Unverändert“ ein, wie in Lektion 2.
     • Nach einem Neustart des Spiels liegen Werte meist an anderen Adressen. Suche dann einfach erneut.
     • Lege für jeden Wert einen eigenen Such-Tab an, zum Beispiel einen für Gold und einen für Munition.
+tutorial-lesson-known = 1 · Bekannte Zahl
+tutorial-lesson-bar = 2 · Lebensbalken
+tutorial-lesson-switch = Startet diese Lektion von vorn.
+tutorial-next-lesson = Weiter mit Lektion 2: Lebensbalken
+tutorial-bar-game-rules = Schaden und Heiltrank verändern den Balken um ein zufälliges Stück. Die genaue Zahl ist verborgen, wie in vielen Spielen. Ist der Balken leer, startest du mit vollem Balken neu.
+tutorial-bar-intro-text =
+    Viele Spiele zeigen nur einen Balken, keine Zahl. Dann merkt sich Game Cheetah zuerst den gesamten Speicher. Danach änderst du den Balken und sagst nur, was passiert ist: kleiner, größer oder gleich geblieben. Übrig bleiben die Stellen, die sich genauso verhalten haben.
+tutorial-bar-search-title = Ausgangszustand
+tutorial-bar-narrow-title = Vergleichen
+tutorial-bar-search-why = Ohne bekannte Zahl kann Game Cheetah nicht gezielt suchen. Deshalb speichert es eine Kopie des gesamten Speichers, mit der alle späteren Vergleiche arbeiten. Ändere den Balken darum erst, nachdem der Ausgangszustand erfasst ist.
+tutorial-bar-search-how =
+    1. Klicke auf das Typ-Auswahlfeld rechts neben dem Wert-Feld und wähle „Unbekannt“. Das Wert-Feld verschwindet: Du brauchst keine Zahl.
+    2. Klicke auf „Ausgangszustand erfassen“.
+    3. Warte, bis „Ausgangszustand erfasst“ erscheint.
+tutorial-bar-narrow-why =
+    Nach jeder Änderung im Spiel klickst du den Knopf, der beschreibt, was mit dem Balken passiert ist. Game Cheetah behält nur Stellen, die sich genauso verhalten haben.
+
+    Im Speicher eines Spiels ändern sich aber auch ständig Werte von selbst, etwa Animationen oder Timer. Die entfernst du mit „Unverändert“: Lass das Spiel kurz in Ruhe. Der Balken bleibt gleich, die anderen Werte ändern sich.
+tutorial-bar-narrow-how =
+    1. Klicke auf „Schaden nehmen“ und dann links auf „Verringert“.
+    2. Klicke auf „Heiltrank trinken“ und dann auf „Erhöht“.
+    3. Ändere nichts, warte einen Moment und klicke auf „Unverändert“.
+    4. Wiederhole das in beliebiger Reihenfolge, bis höchstens zwei Adressen übrig sind.
+
+    Vergleiche nach jeder Änderung, bevor du den Balken erneut änderst. Läuft der Balken leer, startet er wieder voll: Das ist dann „Erhöht“.
+tutorial-bar-narrow-ready = Ausgangszustand erfasst. Ändere jetzt den Balken im Spiel und klicke dann auf den passenden Vergleich.
+tutorial-bar-narrow-status = Kandidaten: { $count } Adressen (Ziel: höchstens { $goal })
+tutorial-bar-edit-why =
+    Du hast die Adresse des Balkens gefunden. In der Ergebnistabelle steht sie zweimal: einmal mit dem Datentyp „Int32“, einmal mit „Float32“. Es sind dieselben 4 Bytes, nur unterschiedlich gelesen. Die unbekannte Suche probiert beide Lesarten aus.
+
+    Die Float32-Zeile zeigt eine sinnvolle Kommazahl wie 63.4, die Int32-Zeile eine riesige, unsinnige Zahl. Balken speichern ihren Wert fast immer als Kommazahl (Float). An der Kommazahl erkennst du auch die Skala: Steht bei einem etwa halb vollen Balken ungefähr 50, ist der Balken bei 100 voll.
+tutorial-bar-edit-how =
+    1. Suche in der Ergebnistabelle die Zeile mit dem Datentyp „Float32“.
+    2. Klicke auf ihren Wert, ersetze ihn durch 200 und drücke Enter.
+    3. Der Balken ist jetzt überladen und leuchtet golden: mehr, als ein Heiltrank je geben könnte.
+tutorial-bar-freeze-why = Auch der überladene Balken hält nicht lange: Beim nächsten Treffer zieht das Spiel wieder etwas ab. Beim Einfrieren schreibt Game Cheetah den Wert mehrmals pro Sekunde zurück.
+tutorial-bar-freeze-how =
+    1. Klicke in der Float32-Zeile auf die Schneeflocke in der Spalte „Eingefroren“.
+    2. Die Schneeflocke wird farbig hervorgehoben.
+
+    Eingefroren werden die 4 Bytes an dieser Adresse. Darum wird die Int32-Zeile derselben Adresse automatisch mit eingefroren.
+tutorial-bar-test-how =
+    1. Klicke im Übungsspiel auf „Schaden nehmen“.
+    2. Beobachte den Balken: Er bleibt golden und voll.
+tutorial-bar-test-status = Prüfe, ob der Balken überladen bleibt …
+tutorial-bar-complete-text = Geschafft! Du hast einen Wert gefunden, ohne seine Zahl zu kennen: Ausgangszustand erfassen, den Balken ändern, passend vergleichen und mit „Unverändert“ Werte entfernen, die sich von selbst ändern. Außerdem weißt du jetzt, dass derselbe Speicher als Int und als Float gelesen werden kann und welche Lesart das Spiel tatsächlich benutzt.
+tutorial-hint-choose-unknown = Für einen Balken kennst du keine Zahl. Klicke auf „Suche zurücksetzen“, wähle als Typ „Unbekannt“ und klicke auf „Ausgangszustand erfassen“.
+tutorial-bar-hint-narrow-lost = Hoppla, der Balken wurde aussortiert. Wahrscheinlich passte der Vergleich nicht zur Änderung im Spiel, oder der Balken wurde zwischen zwei Vergleichen mehrfach geändert. Klicke auf „Rückgängig“ und wähle den passenden Vergleich. Alternativ klickst du auf „Suche zurücksetzen“ und erfasst den Ausgangszustand neu.
+tutorial-bar-hint-nothing-removed = Es wurde nichts aussortiert. Ändere zwischen zwei Vergleichen den Balken im Spiel, oder warte einen Moment und nutze „Unverändert“, um Werte zu entfernen, die sich von selbst ändern.
+tutorial-hint-wrong-type = Der Balken ist fast leer, obwohl du keinen Schaden genommen hast: Du hast vermutlich die Int32-Zeile geändert. Die Bytes einer Ganzzahl ergeben als Kommazahl gelesen fast null. Setze stattdessen die Float32-Zeile auf 200.
+tutorial-bar-hint-freeze-value = Der Balken ist nicht mehr überladen. Setze die Float32-Zeile zuerst wieder auf 200 und friere sie dann ein. Ist sie schon eingefroren, löse sie mit einem Klick auf die Schneeflocke.
 tutorial-glossary-title = Begriffe erklärt
 tutorial-glossary =
     Adresse: Die Stelle im Arbeitsspeicher, an der ein Wert liegt, angezeigt als Hexadezimalzahl.
     Wert: Die Zahl, die gerade an dieser Adresse steht.
     Datentyp: Wie ein Wert gespeichert ist. Int ist eine ganze Zahl aus 4 Bytes, Float eine Kommazahl aus 4 Bytes.
+    Ausgangszustand: Eine Kopie des gesamten Speichers, mit der eine unbekannte Suche später vergleicht.
     Kandidat: Eine Adresse, die bisher zu allen Suchen gepasst hat.
     Eingrenzen: Nur die bisherigen Kandidaten mit einem neuen Wert erneut prüfen.
     Einfrieren: Einen Wert laufend zurückschreiben, damit das Spiel ihn nicht ändern kann.
@@ -90,9 +139,9 @@ tutorial-hint-narrow-lost = Hoppla, die echte Adresse wurde aussortiert. Das pas
 tutorial-hint-nothing-removed = Es wurde nichts aussortiert, weil sich der Wert seit der letzten Suche nicht geändert hat. Ändere zuerst die Lebenspunkte im Übungsspiel und grenze dann mit dem neuen Wert ein.
 tutorial-hint-tab-closed = Der Such-Tab dieser Lektion wurde geschlossen. Starte einfach eine neue Suche mit den aktuellen Lebenspunkten.
 tutorial-hint-copy-edited = Du hast eine Kopie geändert: Sie zeigt jetzt 999, die echten Lebenspunkte im Spiel haben sich aber nicht geändert. Spiele speichern Werte oft mehrfach. Setze den anderen Kandidaten auf 999.
-tutorial-hint-wrong-freeze = Du hast eine andere Adresse eingefroren. Friere den Treffer ein, mit dem du die Lebenspunkte im Spiel auf 999 gesetzt hast.
+tutorial-hint-wrong-freeze = Du hast eine andere Adresse eingefroren. Friere den Treffer ein, mit dem du den Wert im Spiel geändert hast.
 tutorial-hint-freeze-value = Die Lebenspunkte sind nicht mehr 999. Setze den richtigen Treffer zuerst wieder auf 999 und friere ihn dann ein. Ist er schon eingefroren, löse ihn mit einem Klick auf die Schneeflocke.
-tutorial-hint-freeze-failed = Die Lebenspunkte sind nicht auf 999 zurückgesprungen. Prüfe, ob die Schneeflocke beim richtigen Treffer aktiv ist, und teste noch einmal.
+tutorial-hint-freeze-failed = Der Wert ist nicht auf den eingefrorenen Wert zurückgesprungen. Prüfe, ob die Schneeflocke beim richtigen Treffer aktiv ist, und teste noch einmal.
 error-process-title = Prozess nicht mehr verfügbar.
 error-process-help = Spiel starten und erneut auswählen.
 error-access-title = Zugriff verweigert.

@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   status and hints for common mistakes. It uses a separate practice game whose
   health can be changed at any time and which contains realistic decoys,
   including a lagging HUD copy.
+- Second tutorial lesson, "Health bar": find a hidden float value behind a bar
+  without a number using the Unknown search (initial state, Decreased,
+  Increased, Unchanged), tell the Float32 reading from the Int32 reading of the
+  same bytes, then overcharge and freeze the bar. The practice game includes
+  values that change on their own, which only "Unchanged" removes.
 
 ### Changed
 

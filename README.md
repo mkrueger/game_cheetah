@@ -44,10 +44,10 @@ Choose **Tutorial** in the main menu for a guided introduction in English or
 German. Game Cheetah starts a small, separate practice game and attaches to it;
 a panel on the right shows its health bar with **Take damage** and **Drink
 potion** buttons, which can be used at any time. Damage and potions change
-health by random amounts, so you always have to read the current value.
+health by random amounts. Two lessons are available and can be switched at the
+top of the panel; finishing lesson 1 offers lesson 2.
 
-The lesson uses the regular search workspace and explains each step with a
-"What is this about?" and a "How to do it" section:
+**Lesson 1 – Known number.** Health is shown as a number.
 
 1. **Basics:** what addresses, values and candidates are.
 2. **First search:** search for the current health as `Int`.
@@ -60,12 +60,28 @@ The lesson uses the regular search workspace and explains each step with a
 5. **Freeze** the working result with its snowflake.
 6. **Test the freeze:** take damage and watch health return to `999`.
 
-Progress is checked against completed scans and the practice game's actual
-memory, not button clicks. Hints explain common mistakes, such as narrowing
-with an outdated value (use **Undo**), narrowing without changing health, or
-freezing the wrong address. A short glossary explains the terms. **Restart**
-resets the exercise. The practice process is terminated when you end or
-restart the tutorial or close Game Cheetah; no external game is needed.
+**Lesson 2 – Health bar.** Health is a hidden `Float` behind a bar without a
+number, and the practice game contains values that change on their own, like
+animations and timers.
+
+1. **Basics:** why comparisons replace a value search.
+2. **Initial state:** choose the **Unknown** type and capture the initial state.
+3. **Compare:** after each change, click **Decreased** or **Increased**; wait
+   and click **Unchanged** to remove values that move on their own. Repeat
+   until at most two addresses remain.
+4. **Change the value:** the bar's address appears as both `Int32` and
+   `Float32`. Setting the `Float32` row to `200` overcharges the bar; editing
+   the `Int32` row empties it, with a hint explaining why.
+5. **Freeze** and 6. **test** the overcharged bar.
+
+Each step shows the current status and **How to do it** first, followed by
+**What is this about?**. Progress is checked against completed scans and the
+practice game's actual memory, not button clicks. Hints directly below the step
+title explain common mistakes, such as narrowing with an outdated value or a
+mismatched comparison (use **Undo**), comparing without a change, or freezing
+the wrong address. A short glossary explains the terms. **Restart** resets the
+current lesson. The practice process is terminated when you end or restart the
+tutorial, switch lessons or close Game Cheetah; no external game is needed.
 
 ## Features
 
