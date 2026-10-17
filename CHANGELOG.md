@@ -54,6 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The health-bar tutorial lesson could get stuck with three candidates: glibc's
+  per-thread CPU number in the practice game sometimes followed the bar's
+  direction. The practice game now starts with `glibc.pthread.rseq=0`.
 - The Windows icon stores its 256 px entry PNG-compressed again, shrinking
   `app.ico` from 363 KB to 130 KB without changing any pixels.
 - AUR packaging accepts `rustup` as a Rust provider and checks the active

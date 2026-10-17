@@ -57,6 +57,7 @@ fn narrow_to_current_health(app: &mut App, target: &TutorialProcess) -> Vec<usiz
 }
 
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "reading another process needs root or a debugger entitlement on macOS")]
 fn practice_game_needs_repeated_narrowing_and_supports_edit_and_freeze() {
     let mut target = TutorialProcess::spawn(Path::new(EXE), Lesson::KnownValue).unwrap();
     let pid = target.pid();
@@ -121,6 +122,7 @@ fn addresses(rows: &[(usize, SearchType)]) -> usize {
 /// Follows the lesson's instructions literally: damage/Decreased,
 /// potion/Increased and wait/Unchanged until at most two addresses remain.
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "reading another process needs root or a debugger entitlement on macOS")]
 fn health_bar_is_found_with_unknown_comparisons_and_overcharged_as_float() {
     let mut target = TutorialProcess::spawn(Path::new(EXE), Lesson::HealthBar).unwrap();
     let pid = target.pid();
@@ -306,6 +308,7 @@ mod panel {
     }
 
     #[test]
+    #[cfg_attr(target_os = "macos", ignore = "reading another process needs root or a debugger entitlement on macOS")]
     fn panel_guides_through_intro_search_and_repeated_narrowing() {
         let ctx = egui::Context::default();
         game_cheetah::ui::theme::apply(&ctx);
@@ -369,6 +372,7 @@ mod panel {
     }
 
     #[test]
+    #[cfg_attr(target_os = "macos", ignore = "reading another process needs root or a debugger entitlement on macOS")]
     fn health_bar_lesson_is_completed_through_the_panel_without_showing_the_number() {
         let ctx = egui::Context::default();
         game_cheetah::ui::theme::apply(&ctx);
@@ -403,19 +407,26 @@ mod panel {
         wait_idle(&mut ui.app);
         assert!(ui.shows(&tr("tutorial-bar-narrow-ready")));
 
-        for (button, comparison) in [
-            (Some("tutorial-damage-button"), UnknownComparison::Decreased),
-            (Some("tutorial-heal-button"), UnknownComparison::Increased),
-            (None, UnknownComparison::Unchanged),
-        ] {
-            std::thread::sleep(Duration::from_millis(300));
-            if let Some(button) = button {
-                ui.click(&tr(button));
+        // Random walks can survive one round by chance, so repeat like the lesson says.
+        let edit_how = tr("tutorial-bar-edit-how");
+        for _ in 0..4 {
+            for (button, comparison) in [
+                (Some("tutorial-damage-button"), UnknownComparison::Decreased),
+                (Some("tutorial-heal-button"), UnknownComparison::Increased),
+                (None, UnknownComparison::Unchanged),
+            ] {
+                std::thread::sleep(Duration::from_millis(300));
+                if let Some(button) = button {
+                    ui.click(&tr(button));
+                }
+                ui.app.unknown_search(comparison);
+                wait_idle(&mut ui.app);
             }
-            ui.app.unknown_search(comparison);
-            wait_idle(&mut ui.app);
+            if ui.shows(&edit_how) {
+                break;
+            }
         }
-        assert!(ui.shows(&tr("tutorial-bar-edit-how")));
+        assert!(ui.shows(&edit_how));
 
         let rows = ui.app.state.searches[0].collect_results();
         let row = |kind: SearchType| rows.iter().position(|row| row.search_type == kind).unwrap();
@@ -435,6 +446,7 @@ mod panel {
     }
 
     #[test]
+    #[cfg_attr(target_os = "macos", ignore = "reading another process needs root or a debugger entitlement on macOS")]
     fn header_and_exit_button_fit_at_the_default_window_size() {
         let ctx = egui::Context::default();
         game_cheetah::ui::theme::apply(&ctx);

@@ -296,7 +296,9 @@ fn main_menu_logo_has_no_backdrop_and_uses_the_image_area() {
     }
     let opaque_x: Vec<_> = logo
         .rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .enumerate()
         .filter_map(|(index, pixel)| (pixel[3] == 255).then_some(index % 512))
         .collect();

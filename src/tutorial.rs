@@ -228,6 +228,13 @@ fn serve(output: &mut impl Write, mut apply: impl FnMut(&str) -> bool) -> io::Re
     Ok(())
 }
 
+fn rseq_disabled(tunables: &str) -> String {
+    let kept = tunables
+        .split(':')
+        .filter(|tunable| !tunable.is_empty() && !tunable.starts_with("glibc.pthread.rseq="));
+    kept.chain(["glibc.pthread.rseq=0"]).collect::<Vec<_>>().join(":")
+}
+
 /// Owns the child, including cleanup on errors and application shutdown.
 pub struct TutorialProcess {
     lesson: Lesson,
@@ -245,6 +252,13 @@ impl TutorialProcess {
         command.arg(TARGET_ARGUMENT);
         if lesson == Lesson::HealthBar {
             command.arg(HEALTH_BAR_ARGUMENT);
+        }
+        // glibc's rseq area holds the CPU number, which the kernel rewrites
+        // whenever a thread wakes up. It can follow the bar's direction by
+        // chance and survive every comparison, so the practice game opts out.
+        if cfg!(target_os = "linux") {
+            let tunables = std::env::var("GLIBC_TUNABLES").unwrap_or_default();
+            command.env("GLIBC_TUNABLES", rseq_disabled(&tunables));
         }
         let mut child = command
             .stdin(Stdio::piped())
@@ -364,6 +378,15 @@ impl Drop for TutorialProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rseq_is_disabled_without_dropping_other_tunables() {
+        assert_eq!(rseq_disabled(""), "glibc.pthread.rseq=0");
+        assert_eq!(
+            rseq_disabled("glibc.malloc.check=3:glibc.pthread.rseq=1"),
+            "glibc.malloc.check=3:glibc.pthread.rseq=0"
+        );
+    }
 
     #[test]
     fn health_rules_always_change_damage_and_cap_potions() {

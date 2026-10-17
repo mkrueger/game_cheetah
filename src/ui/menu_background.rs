@@ -844,7 +844,7 @@ mod tests {
                 let [Shape::Mesh(mesh)] = shapes.as_slice() else {
                     panic!("Sierpinski must be a single mesh");
                 };
-                let points: Vec<Pos2> = mesh.vertices.chunks_exact(4).map(|quad| quad[0].pos.lerp(quad[2].pos, 0.5)).collect();
+                let points: Vec<Pos2> = mesh.vertices.as_chunks::<4>().0.iter().map(|quad| quad[0].pos.lerp(quad[2].pos, 0.5)).collect();
                 assert!(points.len() >= 1_000, "Too few visible points at {size:?}");
                 // The middle triangle's inradius is a quarter of the circumradius.
                 let circumradius = size.y.max(size.x * 0.56) * SIERPINSKI_RADIUS * 0.96;
