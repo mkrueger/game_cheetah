@@ -151,6 +151,9 @@ pub struct App {
     pub memory_editor: MemoryEditor,
     pub memory_editor_result_index: Option<usize>,
 
+    /// Decorative main-menu animation, picked at random for each launch.
+    pub menu_background: crate::ui::menu_background::MenuBackground,
+
     /// Tracks if a search just completed last frame, so the next frame can
     /// repopulate the value cache before the row callback runs.
     pub last_searching_was_active: bool,
@@ -208,6 +211,7 @@ impl Default for App {
             last_reattach_attempt: Instant::now() - Duration::from_secs(10),
             memory_editor: MemoryEditor::default(),
             memory_editor_result_index: None,
+            menu_background: Default::default(),
             last_searching_was_active: false,
         }
     }

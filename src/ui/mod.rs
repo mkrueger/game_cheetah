@@ -7,6 +7,7 @@ pub mod pointer_scanner;
 pub mod in_process_view;
 pub mod main_window;
 pub mod mem_editor;
+pub mod menu_background;
 pub(crate) mod notice;
 pub mod process_selection;
 pub(crate) mod refresh;

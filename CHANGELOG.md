@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- New application icon: a gold cheetah mascot on a navy tile, with an editable
+  SVG source and `tools/generate_icons.sh` to regenerate all platform icons.
+- Redesigned main menu: the mascot logo sits next to the title, the subtitle is
+  gone, and the version plus GitHub, discussion, and bug-report links moved into
+  a compact footer. The menu scrolls on short windows.
+- The main menu plays one of seven randomly chosen game-themed background
+  animations per launch (twinkling starfield, synthwave grid, hex memory rain, pixel
+  aliens, falling blocks, Julia fractal, Sierpinski triangle). It only animates while the window is focused. The
+  About screen uses a different randomly chosen effect than the main menu.
+
 ### Fixed
 
 - AUR packaging accepts `rustup` as a Rust provider and checks the active

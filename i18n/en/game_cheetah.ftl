@@ -110,7 +110,6 @@ settings-button = Settings
 discuss-button = Discuss
 bug-button = Bug / feature request
 quit-button = Quit
-main-menu-subtitle = Memory scanner and game trainer
 
 process-label = Process:
 filter-processes-hint = Search by name, PID or command …

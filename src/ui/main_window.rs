@@ -10,75 +10,109 @@ const ABOUT_CARD_WIDTH: f32 = 620.0;
 
 pub fn view_main_window(app: &mut App, ui: &mut egui::Ui) {
     egui::CentralPanel::default().show(ui, |ui| {
+        animated_background(ui, app.menu_background);
+
         let top_space = (ui.available_height() * 0.07).clamp(24.0, 72.0);
-        ui.add_space(top_space);
-        ui.vertical_centered(|ui| {
-            // Outer card with a subtle drop shadow for depth.
-            card_frame(22, 30).show(ui, |ui| {
-                ui.set_width(MAIN_MENU_CARD_WIDTH);
-                ui.vertical_centered(|ui| {
-                    ui.heading(egui::RichText::new(crate::APP_NAME).size(44.0).strong());
-                    ui.add_space(8.0);
-                    accent_rule(ui);
-                    ui.add_space(6.0);
-                    ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "main-menu-subtitle")).size(15.0).weak());
-                    // Optional "update available" pill — visible only when the
-                    // background update check found a newer release.
-                    if let Some(latest) = app.latest_version.clone() {
-                        ui.add_space(14.0);
-                        let label = fl!(crate::LANGUAGE_LOADER, "update-available", version = latest.trim_start_matches('v'));
-                        if ui
-                            .add(
-                                egui::Button::new(egui::RichText::new(label).size(14.0))
-                                    .fill(egui::Color32::from_rgb(56, 78, 126))
-                                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(96, 124, 182)))
-                                    .corner_radius(egui::CornerRadius::same(14)),
-                            )
-                            .clicked()
-                        {
-                            let _ = webbrowser::open("https://github.com/mkrueger/game_cheetah/releases/latest");
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.add_space(top_space);
+            ui.vertical_centered(|ui| {
+                // Outer card with a subtle drop shadow for depth.
+                card_frame(22, 30).show(ui, |ui| {
+                    ui.set_width(MAIN_MENU_CARD_WIDTH);
+                    ui.vertical_centered(|ui| {
+                        main_menu_header(ui);
+                        // Optional "update available" pill — visible only when the
+                        // background update check found a newer release.
+                        if let Some(latest) = app.latest_version.clone() {
+                            ui.add_space(14.0);
+                            let label = fl!(crate::LANGUAGE_LOADER, "update-available", version = latest.trim_start_matches('v'));
+                            if ui
+                                .add(
+                                    egui::Button::new(egui::RichText::new(label).size(14.0))
+                                        .fill(egui::Color32::from_rgb(56, 78, 126))
+                                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(96, 124, 182)))
+                                        .corner_radius(egui::CornerRadius::same(14)),
+                                )
+                                .clicked()
+                            {
+                                let _ = webbrowser::open("https://github.com/mkrueger/game_cheetah/releases/latest");
+                            }
                         }
-                    }
 
-                    ui.add_space(26.0);
+                        ui.add_space(22.0);
 
-                    if menu_button(ui, &fl!(crate::LANGUAGE_LOADER, "attach-button"), true).clicked() {
-                        app.attach_action();
-                    }
-                    ui.add_space(8.0);
-                    if menu_button(ui, &fl!(crate::LANGUAGE_LOADER, "settings-button"), false).clicked() {
-                        app.app_state = AppState::Settings;
-                    }
-                    ui.add_space(8.0);
-                    if menu_button(ui, &fl!(crate::LANGUAGE_LOADER, "about-button"), false).clicked() {
-                        app.app_state = AppState::About;
-                    }
-                    ui.add_space(8.0);
-                    if menu_button(ui, &fl!(crate::LANGUAGE_LOADER, "discuss-button"), false).clicked() {
-                        let _ = webbrowser::open("https://github.com/mkrueger/game_cheetah/discussions");
-                    }
-                    ui.add_space(8.0);
-                    if menu_button(ui, &fl!(crate::LANGUAGE_LOADER, "bug-button"), false).clicked() {
-                        let _ = webbrowser::open("https://github.com/mkrueger/game_cheetah/issues/new");
-                    }
+                        if menu_button(ui, &fl!(crate::LANGUAGE_LOADER, "attach-button"), true).clicked() {
+                            app.attach_action();
+                        }
+                        ui.add_space(8.0);
+                        if menu_button(ui, &fl!(crate::LANGUAGE_LOADER, "settings-button"), false).clicked() {
+                            app.app_state = AppState::Settings;
+                        }
+                        ui.add_space(8.0);
+                        if menu_button(ui, &fl!(crate::LANGUAGE_LOADER, "about-button"), false).clicked() {
+                            app.app_state = AppState::About;
+                        }
 
-                    // Subtle divider before the destructive action.
-                    ui.add_space(14.0);
-                    thin_divider(ui, MAIN_MENU_BUTTON_WIDTH);
-                    ui.add_space(10.0);
+                        // Subtle divider before the destructive action.
+                        ui.add_space(14.0);
+                        thin_divider(ui, MAIN_MENU_BUTTON_WIDTH);
+                        ui.add_space(10.0);
 
-                    if menu_button(ui, &fl!(crate::LANGUAGE_LOADER, "quit-button"), false).clicked() {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
+                        if menu_button(ui, &fl!(crate::LANGUAGE_LOADER, "quit-button"), false).clicked() {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
 
-                    ui.add_space(24.0);
-                    ui.label(egui::RichText::new(format!("v{}", crate::VERSION)).size(12.0).weak());
-                    if ui.link(egui::RichText::new("github.com/mkrueger/game_cheetah").size(13.0)).clicked() {
-                        let _ = webbrowser::open("https://github.com/mkrueger/game_cheetah");
-                    }
+                        ui.add_space(22.0);
+                        main_menu_footer(ui);
+                    });
                 });
             });
+            ui.add_space(24.0);
         });
+    });
+}
+
+fn main_menu_header(ui: &mut egui::Ui) {
+    let logo_size = egui::Vec2::splat(96.0);
+    let title = ui
+        .painter()
+        .layout_no_wrap(crate::APP_NAME.to_owned(), egui::FontId::proportional(34.0), ui.visuals().strong_text_color());
+    let size = egui::vec2(logo_size.x + ui.spacing().item_spacing.x + title.size().x, logo_size.y);
+    ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.add(
+            egui::Image::new(egui::include_image!("../../assets/cheetah-menu.png"))
+                .fit_to_exact_size(logo_size)
+                .alt_text(crate::APP_NAME),
+        );
+        ui.label(title);
+    });
+}
+
+/// Version plus secondary community links in one centered row.
+fn main_menu_footer(ui: &mut egui::Ui) {
+    let links = [
+        ("GitHub".to_owned(), "https://github.com/mkrueger/game_cheetah"),
+        (
+            fl!(crate::LANGUAGE_LOADER, "discuss-button"),
+            "https://github.com/mkrueger/game_cheetah/discussions",
+        ),
+        (fl!(crate::LANGUAGE_LOADER, "bug-button"), "https://github.com/mkrueger/game_cheetah/issues/new"),
+    ];
+    let font = egui::FontId::proportional(13.0);
+    let version = format!("v{}", crate::VERSION);
+    let separator = "·";
+    let measure = |text: &str| ui.painter().layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER).size().x;
+    let spacing = ui.spacing().item_spacing.x;
+    let width = measure(&version) + links.iter().map(|(label, _)| measure(label) + measure(separator) + 2.0 * spacing).sum::<f32>();
+    ui.horizontal(|ui| {
+        ui.add_space(((ui.available_width() - width) * 0.5).max(0.0));
+        ui.label(egui::RichText::new(version).font(font.clone()).weak());
+        for (label, url) in links {
+            ui.label(egui::RichText::new(separator).font(font.clone()).weak());
+            if ui.link(egui::RichText::new(label).font(font.clone())).on_hover_text(url).clicked() {
+                let _ = webbrowser::open(url);
+            }
+        }
     });
 }
 
@@ -188,6 +222,8 @@ pub fn view_settings(app: &mut App, ui: &mut egui::Ui) {
 
 pub fn view_about(app: &mut App, ui: &mut egui::Ui) {
     egui::CentralPanel::default().show(ui, |ui| {
+        animated_background(ui, app.menu_background.alternate());
+
         let top_space = (ui.available_height() * 0.07).clamp(24.0, 72.0);
         ui.add_space(top_space);
         ui.vertical_centered(|ui| {
@@ -213,6 +249,16 @@ pub fn view_about(app: &mut App, ui: &mut egui::Ui) {
             });
         });
     });
+}
+
+/// Paint a full-window game animation behind the current screen.
+fn animated_background(ui: &egui::Ui, background: crate::ui::menu_background::MenuBackground) {
+    let screen = ui.ctx().content_rect();
+    background.paint(&ui.painter().with_clip_rect(screen), screen, ui.input(|input| input.time));
+    // Unfocused or minimized windows keep the last frame instead of animating.
+    if !crate::ui::refresh::backgrounded(ui.ctx()) {
+        ui.ctx().request_repaint_after(crate::ui::refresh::LIVE_INTERVAL);
+    }
 }
 
 /// Raised card shared by the main menu and About screen.

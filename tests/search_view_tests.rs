@@ -13,6 +13,352 @@ use i18n_embed_fl::fl;
 const LARGE: Vec2 = egui::vec2(1100.0, 720.0);
 const SIZES: [Vec2; 2] = [egui::vec2(640.0, 420.0), LARGE];
 
+fn main_menu_frame(app: &mut App, ctx: &Context, size: Vec2, events: Vec<Event>) -> FullOutput {
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+            events,
+            ..Default::default()
+        },
+        |ui| game_cheetah::ui::main_window::view_main_window(app, ui),
+    );
+    output.textures_delta.clear();
+    output
+}
+
+fn loaded_main_menu(size: Vec2, effect: game_cheetah::ui::menu_background::MenuEffect) -> (App, Context) {
+    let mut app = App::default();
+    app.menu_background = game_cheetah::ui::menu_background::MenuBackground::new(effect, 7);
+    let ctx = context();
+    egui_extras::install_image_loaders(&ctx);
+    main_menu_frame(&mut app, &ctx, size, vec![]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while ctx.has_pending_images() {
+        assert!(std::time::Instant::now() < deadline, "The embedded logo did not finish loading");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    (app, ctx)
+}
+
+#[test]
+fn main_menu_has_no_subtitle_and_moves_community_links_into_the_footer() {
+    use game_cheetah::ui::menu_background::MenuEffect;
+    for size in SIZES {
+        let (mut app, ctx) = loaded_main_menu(size, MenuEffect::Starfield);
+        for _ in 0..4 {
+            main_menu_frame(
+                &mut app,
+                &ctx,
+                size,
+                vec![
+                    Event::PointerMoved(egui::pos2(size.x / 2.0, size.y / 2.0)),
+                    Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -1000.0),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        let output = main_menu_frame(&mut app, &ctx, size, vec![Event::PointerGone]);
+        for subtitle in ["Memory scanner and game trainer", "Speicherscanner und Game Trainer"] {
+            assert_text_absent(&output, subtitle);
+        }
+        let version = text_rect(&output, &format!("v{}", game_cheetah::VERSION));
+        let quit = button_frame(&output, &fl!(LANGUAGE_LOADER, "quit-button")).0;
+        let mut previous = version;
+        for label in ["GitHub".to_owned(), fl!(LANGUAGE_LOADER, "discuss-button"), fl!(LANGUAGE_LOADER, "bug-button")] {
+            let link = text_rect(&output, &label);
+            assert!(link.top() > quit.bottom(), "{label:?} must be below the menu actions");
+            assert!((link.center().y - version.center().y).abs() < 2.0, "{label:?} must share the footer row");
+            assert!(link.left() > previous.right(), "{label:?} must follow the previous footer item");
+            assert!(
+                link.max.x <= quit.max.x + 1.0 && link.min.x >= quit.min.x - 1.0,
+                "{label:?} must fit the card width"
+            );
+            previous = link;
+        }
+        let row_center = (version.left() + previous.right()) * 0.5;
+        assert!((row_center - quit.center().x).abs() < 4.0, "The footer row must be centered");
+    }
+}
+
+#[test]
+fn main_menu_background_fills_the_window_and_only_animates_while_focused() {
+    use game_cheetah::ui::menu_background::MenuEffect;
+    let frame_with_focus = |app: &mut App, ctx: &Context, screen: Rect, focused: bool| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                focused,
+                ..Default::default()
+            },
+            |ui| game_cheetah::ui::main_window::view_main_window(app, ui),
+        );
+        output.textures_delta.clear();
+        output
+    };
+    for effect in MenuEffect::ALL {
+        for size in SIZES {
+            let (mut app, ctx) = loaded_main_menu(size, effect);
+            let screen = Rect::from_min_size(Pos2::ZERO, size);
+            // Let egui's own one-shot animations (scroll bar fade-in) finish.
+            for _ in 0..30 {
+                frame_with_focus(&mut app, &ctx, screen, true);
+            }
+            let output = frame_with_focus(&mut app, &ctx, screen, true);
+            let background = output.shapes.iter().filter(|shape| shape.clip_rect == screen).count();
+            assert!(background > 0, "{effect:?} must paint behind the whole window at {size:?}");
+            text_rect(&output, game_cheetah::APP_NAME);
+            text_rect(&output, &fl!(LANGUAGE_LOADER, "attach-button"));
+            let delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+            // egui subtracts the predicted frame time from the requested 33 ms.
+            assert!(
+                (std::time::Duration::from_millis(10)..=std::time::Duration::from_millis(40)).contains(&delay),
+                "{effect:?} must animate at the live refresh rate while focused: {delay:?}"
+            );
+
+            // The first unfocused frame still carries the last focused request.
+            frame_with_focus(&mut app, &ctx, screen, false);
+            for _ in 0..2 {
+                let output = frame_with_focus(&mut app, &ctx, screen, false);
+                let delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+                assert!(
+                    delay >= std::time::Duration::from_millis(400),
+                    "{effect:?} must pause when unfocused: {delay:?} {:?}",
+                    ctx.repaint_causes()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn about_screen_plays_a_different_background_than_the_main_menu() {
+    use game_cheetah::ui::menu_background::{MenuBackground, MenuEffect};
+    let size = LARGE;
+    let screen = Rect::from_min_size(Pos2::ZERO, size);
+    let render = |app: &mut App, ctx: &Context, about: bool, focused: bool| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(8.0),
+                focused,
+                ..Default::default()
+            },
+            |ui| {
+                if about {
+                    game_cheetah::ui::main_window::view_about(app, ui);
+                } else {
+                    game_cheetah::ui::main_window::view_main_window(app, ui);
+                }
+            },
+        );
+        output.textures_delta.clear();
+        output
+    };
+    let background = |output: &FullOutput| -> Vec<Shape> {
+        output
+            .shapes
+            .iter()
+            .filter(|shape| shape.clip_rect == screen)
+            .map(|shape| shape.shape.clone())
+            .collect()
+    };
+    for effect in MenuEffect::ALL {
+        let mut app = App::default();
+        app.menu_background = MenuBackground::new(effect, 11);
+        app.app_state = AppState::About;
+        let ctx = context();
+        for _ in 0..30 {
+            render(&mut app, &ctx, true, true);
+        }
+        let about = render(&mut app, &ctx, true, true);
+        let about_background = background(&about);
+        assert!(!about_background.is_empty(), "About must paint a background after {effect:?}");
+        text_rect(&about, &fl!(LANGUAGE_LOADER, "about-dialog-heading"));
+        let delay = about.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+        assert!(delay <= std::time::Duration::from_millis(40), "About background must animate: {delay:?}");
+
+        let menu_ctx = context();
+        let mut menu_app = App::default();
+        menu_app.menu_background = app.menu_background;
+        render(&mut menu_app, &menu_ctx, false, true);
+        let menu = render(&mut menu_app, &menu_ctx, false, true);
+        assert_ne!(background(&menu), about_background, "About must not reuse the {effect:?} background");
+
+        render(&mut app, &ctx, true, false);
+        let paused = render(&mut app, &ctx, true, false);
+        let delay = paused.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+        assert!(delay >= std::time::Duration::from_millis(400), "About must pause when unfocused: {delay:?}");
+
+        let close = button_frame(&about, &fl!(LANGUAGE_LOADER, "close-button")).0.center();
+        for events in [
+            vec![Event::PointerMoved(close)],
+            vec![Event::PointerButton {
+                pos: close,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            }],
+            vec![Event::PointerButton {
+                pos: close,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            }],
+        ] {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |ui| game_cheetah::ui::main_window::view_about(&mut app, ui),
+            );
+            output.textures_delta.clear();
+        }
+        assert_eq!(app.app_state, AppState::MainWindow, "Close must still work over the background");
+    }
+}
+
+#[test]
+fn main_menu_logo_has_no_backdrop_and_uses_the_image_area() {
+    let logo = eframe::icon_data::from_png_bytes(include_bytes!("../assets/cheetah-menu.png")).expect("menu logo must be a valid PNG");
+    assert_eq!((logo.width, logo.height), (512, 512));
+    for (x, y) in [(0, 0), (32, 32), (479, 32), (32, 479), (479, 479)] {
+        assert_eq!(logo.rgba[(y * 512 + x) * 4 + 3], 0, "Backdrop must be transparent at ({x}, {y})");
+    }
+    let opaque_x: Vec<_> = logo
+        .rgba
+        .chunks_exact(4)
+        .enumerate()
+        .filter_map(|(index, pixel)| (pixel[3] == 255).then_some(index % 512))
+        .collect();
+    let width = opaque_x.iter().max().expect("logo must have opaque pixels") - opaque_x.iter().min().unwrap() + 1;
+    assert!(width >= 470, "The mascot must fill the image rather than retain the app icon's padding");
+}
+
+#[test]
+fn main_menu_logo_is_visible_cached_and_does_not_overlap_the_title() {
+    for size in SIZES {
+        let mut app = App::default();
+        let ctx = context();
+        egui_extras::install_image_loaders(&ctx);
+        main_menu_frame(&mut app, &ctx, size, vec![]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while ctx.has_pending_images() {
+            assert!(std::time::Instant::now() < deadline, "The embedded logo did not finish loading");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let mut logo_texture = None;
+        for _ in 0..2 {
+            let output = main_menu_frame(&mut app, &ctx, size, vec![]);
+            let title = text_rect(&output, game_cheetah::APP_NAME);
+            let logos: Vec<_> = shapes(&output)
+                .into_iter()
+                .filter_map(|(clip, shape)| match shape {
+                    Shape::Rect(rect) => rect.brush.as_ref().map(|brush| (clip, rect.rect, brush.fill_texture_id)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(logos.len(), 1, "The main menu must paint one loaded logo");
+            let (clip, logo, texture) = logos[0];
+            assert_eq!(logo.size(), Vec2::splat(96.0));
+            assert!(clip.contains_rect(logo));
+            assert!(Rect::from_min_size(Pos2::ZERO, size).contains_rect(logo));
+            assert!(logo.right() < title.left());
+            assert!((logo.center().y - title.center().y).abs() < 2.0);
+            if let Some(previous) = logo_texture {
+                assert_eq!(texture, previous, "The logo texture must be reused between frames");
+            }
+            logo_texture = Some(texture);
+            text_rect(&output, &fl!(LANGUAGE_LOADER, "attach-button"));
+        }
+        assert_eq!(app.app_state, AppState::MainWindow);
+    }
+}
+
+#[test]
+fn main_menu_actions_remain_accessible_with_the_logo() {
+    for size in SIZES {
+        for latest in [None, Some("v99.0.0".to_owned())] {
+            let mut app = App::default();
+            app.latest_version = latest;
+            let ctx = context();
+            egui_extras::install_image_loaders(&ctx);
+            main_menu_frame(&mut app, &ctx, size, vec![]);
+            let output = main_menu_frame(&mut app, &ctx, size, vec![]);
+            if size == LARGE {
+                text_rect(&output, &fl!(LANGUAGE_LOADER, "quit-button"));
+            }
+            let settings = text_rect(&output, &fl!(LANGUAGE_LOADER, "settings-button")).center();
+            main_menu_frame(&mut app, &ctx, size, vec![Event::PointerMoved(settings)]);
+            for pressed in [true, false] {
+                main_menu_frame(
+                    &mut app,
+                    &ctx,
+                    size,
+                    vec![Event::PointerButton {
+                        pos: settings,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    }],
+                );
+            }
+            assert_eq!(app.app_state, AppState::Settings);
+            app.app_state = AppState::MainWindow;
+            for _ in 0..4 {
+                main_menu_frame(
+                    &mut app,
+                    &ctx,
+                    size,
+                    vec![
+                        Event::PointerMoved(egui::pos2(size.x / 2.0, size.y / 2.0)),
+                        Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, -1000.0),
+                            phase: egui::TouchPhase::Move,
+                            modifiers: Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            let output = main_menu_frame(&mut app, &ctx, size, vec![]);
+            let quit_label = fl!(LANGUAGE_LOADER, "quit-button");
+            let (quit, _, clip) = button_frame(&output, &quit_label);
+            assert!(clip.contains_rect(quit), "Quit must be fully visible after scrolling");
+            let quit = quit.center();
+            main_menu_frame(&mut app, &ctx, size, vec![Event::PointerMoved(quit)]);
+            main_menu_frame(
+                &mut app,
+                &ctx,
+                size,
+                vec![Event::PointerButton {
+                    pos: quit,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                }],
+            );
+            let output = main_menu_frame(
+                &mut app,
+                &ctx,
+                size,
+                vec![Event::PointerButton {
+                    pos: quit,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                }],
+            );
+            assert!(output.viewport_output[&egui::ViewportId::ROOT].commands.contains(&egui::ViewportCommand::Close));
+        }
+    }
+}
+
 #[test]
 fn scan_statistics_and_zero_match_summary_are_visible_at_both_window_sizes() {
     for size in SIZES {

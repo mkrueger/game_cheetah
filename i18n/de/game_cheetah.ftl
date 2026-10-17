@@ -110,7 +110,6 @@ settings-button = Einstellungen
 discuss-button = Diskutieren
 bug-button = Fehler melden
 quit-button = Beenden
-main-menu-subtitle = Speicherscanner und Game Trainer
 
 process-label = Prozess:
 filter-processes-hint = Nach Name, PID oder Kommando suchen …

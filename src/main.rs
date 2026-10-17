@@ -19,6 +19,7 @@ fn main() -> eframe::Result<()> {
         &format!("{} {}", game_cheetah::APP_NAME, game_cheetah::VERSION),
         options,
         Box::new(move |cc| {
+            egui_extras::install_image_loaders(&cc.egui_ctx);
             game_cheetah::ui::theme::apply(&cc.egui_ctx);
             let mut app = App::new();
             if show_processes {

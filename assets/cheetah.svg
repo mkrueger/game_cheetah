@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>Game Cheetah</title>
+  <desc>A cheeky cheetah mascot with expressive turquoise eyes, angular cheeks and a small grin.</desc>
+  <defs>
+    <linearGradient id="tile" x2="1" y2="1">
+      <stop stop-color="#20334c"/>
+      <stop offset="1" stop-color="#0c1627"/>
+    </linearGradient>
+    <linearGradient id="fur" x1="0" y1="0" x2=".9" y2="1">
+      <stop stop-color="#ffdc7c"/>
+      <stop offset="1" stop-color="#f4af38"/>
+    </linearGradient>
+  </defs>
+  <rect x="24" y="24" width="464" height="464" rx="108" fill="url(#tile)"/>
+  <g id="mascot">
+    <path d="M128 218C94 205 81 151 98 112C129 101 170 119 191 148L327 144C347 115 390 101 418 113C434 153 418 198 386 213Z" fill="url(#fur)"/>
+    <path d="M128 180Q106 150 118 132Q148 135 164 158ZM354 156Q374 134 397 133Q405 154 382 179Z" fill="#142238"/>
+    <path d="M256 136L274 113L279 140L306 125L301 147C355 155 384 193 389 248L411 297L385 298L393 326L354 352Q317 401 256 416Q199 401 158 354L120 333L128 305L101 306L124 258C126 193 171 149 232 140L246 119Z" fill="url(#fur)"/>
+    <path d="M256 154Q337 144 373 208L389 248L411 297L385 298L393 326L354 352Q317 401 256 416L280 372L292 302Z" fill="#ec9e30" opacity=".55"/>
+    <g fill="#142238">
+      <ellipse cx="255" cy="178" rx="12" ry="16" transform="rotate(12 255 178)"/>
+      <ellipse cx="211" cy="190" rx="12" ry="9" transform="rotate(-25 211 190)"/>
+      <ellipse cx="302" cy="188" rx="13" ry="9" transform="rotate(20 302 188)"/>
+      <ellipse cx="147" cy="287" rx="10" ry="13" transform="rotate(-15 147 287)"/>
+      <ellipse cx="365" cy="282" rx="10" ry="13" transform="rotate(15 365 282)"/>
+      <path d="M150 232Q181 213 222 243Q239 267 219 291Q184 305 161 275Z"/>
+      <path d="M283 244Q318 214 362 226L350 273Q329 299 296 286Q279 271 283 244Z"/>
+    </g>
+    <path d="M170 241Q191 235 213 251L210 280Q188 289 175 267Z" fill="#55dcca"/>
+    <path d="M298 251Q321 234 342 237L337 268Q320 284 301 275Z" fill="#55dcca"/>
+    <ellipse cx="198" cy="260" rx="9" ry="19" fill="#142238"/>
+    <ellipse cx="316" cy="257" rx="9" ry="19" fill="#142238"/>
+    <ellipse cx="185" cy="246" rx="8" ry="6" fill="#f0fff5"/>
+    <ellipse cx="328" cy="242" rx="8" ry="6" fill="#f0fff5"/>
+    <path d="M145 221Q173 200 215 219M292 219Q329 194 367 207" fill="none" stroke="#142238" stroke-width="12" stroke-linecap="round"/>
+    <path d="M181 290L197 291L190 313L211 338L197 352L171 320ZM321 289L337 283L344 314L321 343L307 331L328 309Z" fill="#142238"/>
+    <path d="M255 326Q237 307 216 314Q190 324 197 351Q205 378 235 373L256 366Q279 383 307 367Q327 351 312 327Q299 307 279 315Z" fill="#fff0cc"/>
+    <path d="M231 323Q256 313 281 322L268 340Q255 350 244 340Z" fill="#142238"/>
+    <path d="M256 341V358Q275 369 294 351M236 363Q248 365 256 358" fill="none" stroke="#142238" stroke-width="8" stroke-linecap="round"/>
+    <path d="M282 361L291 356L286 369Z" fill="#fff0cc"/>
+  </g>
+</svg>

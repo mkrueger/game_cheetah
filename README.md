@@ -6,6 +6,32 @@ Use it to search values in a running process, narrow down result sets, edit memo
 
 > Modifying another process can crash the target application or behave unpredictably. Use at your own risk. Game Cheetah is not intended for cheating in online or multiplayer games.
 
+## Application icon and main menu
+
+The editable icon source is [assets/cheetah.svg](assets/cheetah.svg).
+The main menu shows a larger, transparent mascot next to the application title,
+without the app icon's navy tile. Its primary actions are **Start**, **Settings**,
+**About**, and **Quit**; the version and the GitHub, discussion, and bug-report
+links share a compact footer row. On short windows, the menu scrolls so all
+actions remain accessible.
+
+Behind the menu, one of seven game-themed animations is picked at random for each
+launch: a gently drifting, twinkling starfield, a synthwave grid with a retro sun, a hex-byte memory rain,
+marching pixel aliens, falling tetromino blocks, a smooth-shaded Julia fractal gliding
+between well-known constants, or a sparkling Sierpinski triangle whose empty center
+sits behind the menu card. The About screen plays a
+different one of these effects, derived from the same launch seed, so the two
+screens never share an animation. The effects are drawn as
+plain shapes from the elapsed time and a per-launch seed, without textures or
+per-frame state. They animate at the live refresh rate (about 30 Hz) only while
+the window is focused, and pause on the last frame when it is unfocused or minimized.
+
+After editing the icon, run `bash tools/generate_icons.sh` to regenerate the embedded
+application PNG, the transparent [menu logo](assets/cheetah-menu.png), and the
+Linux, macOS, and Windows icons. The menu logo is cropped from the SVG's `mascot`
+group, keeping both variants in sync. This requires Inkscape
+and ImageMagick 7 (`magick`); Windows ICO output includes sizes from 16 to 256 pixels.
+
 ## Features
 
 - **Cross-platform desktop app**
