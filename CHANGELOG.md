@@ -18,9 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   animations per launch (twinkling starfield, synthwave grid, hex memory rain, pixel
   aliens, falling blocks, Julia fractal, Sierpinski triangle). It only animates while the window is focused. The
   About screen uses a different randomly chosen effect than the main menu.
+  Clicking the cheetah logo switches to the next effect. The Julia fractal
+  recomputes 10 keyframes per second and blends between them, averaging about
+  0.7 ms per frame.
+
+### Removed
+
+- Unused web build template (`index.html`, `Trunk.toml`). Its referenced web
+  icons, manifest and service worker never existed, and a memory scanner cannot
+  run in a browser.
 
 ### Fixed
 
+- The Windows icon stores its 256 px entry PNG-compressed again, shrinking
+  `app.ico` from 363 KB to 130 KB without changing any pixels.
 - AUR packaging accepts `rustup` as a Rust provider and checks the active
   compiler at build time. Rust 1.95 or newer remains required.
 

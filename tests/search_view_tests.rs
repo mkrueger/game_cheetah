@@ -40,6 +40,70 @@ fn loaded_main_menu(size: Vec2, effect: game_cheetah::ui::menu_background::MenuE
     (app, ctx)
 }
 
+fn painted_logo(output: &FullOutput) -> Rect {
+    let logos: Vec<_> = shapes(output)
+        .into_iter()
+        .filter_map(|(_, shape)| match shape {
+            Shape::Rect(rect) => rect.brush.as_ref().map(|_| rect.rect),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(logos.len(), 1, "The main menu must paint one logo");
+    logos[0]
+}
+
+fn main_menu_click(app: &mut App, ctx: &Context, size: Vec2, pos: Pos2) {
+    main_menu_frame(app, ctx, size, vec![Event::PointerMoved(pos)]);
+    for pressed in [true, false] {
+        main_menu_frame(
+            app,
+            ctx,
+            size,
+            vec![Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+    }
+}
+
+#[test]
+fn clicking_the_logo_cycles_background_effects_without_leaving_the_menu() {
+    use game_cheetah::ui::menu_background::MenuEffect;
+    for size in SIZES {
+        let (mut app, ctx) = loaded_main_menu(size, MenuEffect::Starfield);
+        let output = main_menu_frame(&mut app, &ctx, size, vec![]);
+        let logo = painted_logo(&output);
+        let title = text_rect(&output, game_cheetah::APP_NAME);
+        assert_eq!(logo.size(), Vec2::splat(96.0));
+
+        // Hovering hints at the Easter egg by growing the logo slightly, in place.
+        for _ in 0..30 {
+            main_menu_frame(&mut app, &ctx, size, vec![Event::PointerMoved(logo.center())]);
+        }
+        let hovered = main_menu_frame(&mut app, &ctx, size, vec![]);
+        let grown = painted_logo(&hovered);
+        assert!(grown.width() > 100.0 && grown.width() <= 104.5, "Hovered logo: {grown:?}");
+        assert!((grown.center() - logo.center()).length() < 0.5);
+        assert_eq!(text_rect(&hovered, game_cheetah::APP_NAME), title, "The title must not move");
+
+        let mut expected = app.menu_background;
+        for _ in 0..MenuEffect::ALL.len() {
+            expected = expected.next();
+            main_menu_click(&mut app, &ctx, size, logo.center());
+            assert_eq!(app.menu_background, expected);
+            assert_eq!(app.app_state, AppState::MainWindow);
+            assert_ne!(app.menu_background.alternate().effect, app.menu_background.effect);
+        }
+        assert_eq!(app.menu_background.effect, MenuEffect::Starfield, "Effects must cycle back");
+
+        main_menu_click(&mut app, &ctx, size, title.center());
+        assert_eq!(app.menu_background, expected, "Only the logo is clickable");
+    }
+}
+
 #[test]
 fn main_menu_has_no_subtitle_and_moves_community_links_into_the_footer() {
     use game_cheetah::ui::menu_background::MenuEffect;

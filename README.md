@@ -16,21 +16,27 @@ links share a compact footer row. On short windows, the menu scrolls so all
 actions remain accessible.
 
 Behind the menu, one of seven game-themed animations is picked at random for each
-launch: a gently drifting, twinkling starfield, a synthwave grid with a retro sun, a hex-byte memory rain,
-marching pixel aliens, falling tetromino blocks, a smooth-shaded Julia fractal gliding
-between well-known constants, or a sparkling Sierpinski triangle whose empty center
-sits behind the menu card. The About screen plays a
-different one of these effects, derived from the same launch seed, so the two
-screens never share an animation. The effects are drawn as
-plain shapes from the elapsed time and a per-launch seed, without textures or
-per-frame state. They animate at the live refresh rate (about 30 Hz) only while
-the window is focused, and pause on the last frame when it is unfocused or minimized.
+launch: a gently drifting, twinkling starfield, a synthwave grid with a retro sun, a
+hex-byte memory rain, marching pixel aliens, falling tetromino blocks, a
+smooth-shaded Julia fractal gliding between well-known constants, or a sparkling
+Sierpinski triangle whose empty center sits behind the menu card. The About screen
+plays a different one of these effects, derived from the same launch seed, so the
+two screens never share an animation. Clicking the cheetah logo in the main menu
+switches to the next effect; the logo grows slightly on hover as a hint. The effects
+are drawn as plain shapes from the elapsed time and a per-launch seed, without
+textures or per-frame state; only the Julia fractal memoizes two keyframes,
+evaluating its escape-time grid 10 times per second and blending colors in between.
+They animate at the live refresh rate (about 30 Hz) only while the window is
+focused, and pause on the last frame when it is unfocused or minimized.
 
 After editing the icon, run `bash tools/generate_icons.sh` to regenerate the embedded
 application PNG, the transparent [menu logo](assets/cheetah-menu.png), and the
 Linux, macOS, and Windows icons. The menu logo is cropped from the SVG's `mascot`
-group, keeping both variants in sync. This requires Inkscape
-and ImageMagick 7 (`magick`); Windows ICO output includes sizes from 16 to 256 pixels.
+group, keeping both variants in sync. This requires Inkscape, ImageMagick 7
+(`magick`), and Python 3. The Windows ICO includes sizes from 16 to 256 pixels:
+the 256 px entry is PNG-compressed, smaller sizes stay BMP for compatibility, and
+[tools/pack_ico.py](tools/pack_ico.py) assembles them. Outputs omit timestamps,
+so regenerating unchanged artwork leaves the files byte-identical.
 
 ## Features
 

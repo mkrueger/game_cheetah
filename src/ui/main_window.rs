@@ -20,7 +20,7 @@ pub fn view_main_window(app: &mut App, ui: &mut egui::Ui) {
                 card_frame(22, 30).show(ui, |ui| {
                     ui.set_width(MAIN_MENU_CARD_WIDTH);
                     ui.vertical_centered(|ui| {
-                        main_menu_header(ui);
+                        main_menu_header(ui, &mut app.menu_background);
                         // Optional "update available" pill — visible only when the
                         // background update check found a newer release.
                         if let Some(latest) = app.latest_version.clone() {
@@ -72,18 +72,22 @@ pub fn view_main_window(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
-fn main_menu_header(ui: &mut egui::Ui) {
+fn main_menu_header(ui: &mut egui::Ui, background: &mut crate::ui::menu_background::MenuBackground) {
     let logo_size = egui::Vec2::splat(96.0);
     let title = ui
         .painter()
         .layout_no_wrap(crate::APP_NAME.to_owned(), egui::FontId::proportional(34.0), ui.visuals().strong_text_color());
     let size = egui::vec2(logo_size.x + ui.spacing().item_spacing.x + title.size().x, logo_size.y);
     ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        ui.add(
-            egui::Image::new(egui::include_image!("../../assets/cheetah-menu.png"))
-                .fit_to_exact_size(logo_size)
-                .alt_text(crate::APP_NAME),
-        );
+        // Easter egg: clicking the cheetah switches to the next background effect.
+        let (rect, response) = ui.allocate_exact_size(logo_size, egui::Sense::click());
+        let grow = ui.ctx().animate_bool_responsive(response.id, response.hovered());
+        egui::Image::new(egui::include_image!("../../assets/cheetah-menu.png"))
+            .alt_text(crate::APP_NAME)
+            .paint_at(ui, rect.expand(4.0 * grow));
+        if response.clicked() {
+            *background = background.next();
+        }
         ui.label(title);
     });
 }

@@ -1,10 +1,14 @@
 //! Decorative, game-themed animations painted behind the main menu.
 //!
 //! Every effect is a pure function of the elapsed time and a per-launch seed:
-//! there is no per-frame state, nothing to allocate between frames and no
-//! texture uploads. One effect is picked at random for each application start.
+//! there is no per-frame state and no texture uploads. Only the Julia fractal
+//! memoizes its two current keyframes. One effect is picked at random for each
+//! application start; clicking the menu logo advances to the next one.
 
-use std::{f32::consts::TAU, sync::LazyLock};
+use std::{
+    f32::consts::TAU,
+    sync::{Arc, LazyLock},
+};
 
 use egui::{Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
 
@@ -51,6 +55,12 @@ impl MenuBackground {
     pub fn from_seed(seed: u64) -> Self {
         let index = (mix(seed, u64::MAX) % MenuEffect::ALL.len() as u64) as usize;
         Self::new(MenuEffect::ALL[index], seed)
+    }
+
+    /// The next effect in the cycle, keeping the launch seed (logo Easter egg).
+    pub fn next(&self) -> Self {
+        let current = MenuEffect::ALL.iter().position(|effect| *effect == self.effect).unwrap_or(0);
+        Self::new(MenuEffect::ALL[(current + 1) % MenuEffect::ALL.len()], self.seed)
     }
 
     /// A background for a second screen: same launch seed, never the same effect.
@@ -394,7 +404,70 @@ const JULIA_CONSTANTS: [(f32, f32); 8] = [
 const JULIA_SEGMENT_SECONDS: f32 = 12.0;
 
 /// Smooth-shaded Julia set gliding between well-known constants.
+///
+/// The escape-time grid is the most expensive effect, so it is only evaluated
+/// at [`JULIA_KEYFRAME_RATE`]; frames in between blend the vertex colors of the
+/// two surrounding keyframes. The keyframes are memoized in egui's temporary
+/// memory, but the painted result is still a pure function of `t`.
 fn julia(painter: &Painter, rect: Rect, t: f32, seed: u64) {
+    let position = t * JULIA_KEYFRAME_RATE;
+    let index = position.floor();
+    let blend = position - index;
+    let index = index as i64;
+
+    let ctx = painter.ctx();
+    let id = egui::Id::new("menu_background_julia_keyframes");
+    let mut cache = ctx.data(|data| data.get_temp::<JuliaKeyframes>(id)).unwrap_or_default();
+    let from = cache.get_or_compute(rect, seed, index);
+    let to = cache.get_or_compute(rect, seed, index + 1);
+    cache.0.retain(|entry| entry.key == (seed, rect, index) || entry.key == (seed, rect, index + 1));
+    ctx.data_mut(|data| data.insert_temp(id, cache));
+
+    if blend <= 0.0 {
+        painter.add(Shape::mesh(from));
+        return;
+    }
+    let mut mesh = (*from).clone();
+    for (vertex, target) in mesh.vertices.iter_mut().zip(&to.vertices) {
+        vertex.color = vertex.color.lerp_to_gamma(target.color, blend);
+    }
+    painter.add(Shape::mesh(mesh));
+}
+
+/// Julia keyframes per second; frames in between blend vertex colors.
+pub(crate) const JULIA_KEYFRAME_RATE: f32 = 10.0;
+
+#[derive(Clone)]
+struct JuliaKeyframe {
+    key: (u64, Rect, i64),
+    mesh: Arc<Mesh>,
+}
+
+/// At most the two keyframes surrounding the current time.
+#[derive(Clone, Default)]
+struct JuliaKeyframes(Vec<JuliaKeyframe>);
+
+impl JuliaKeyframes {
+    fn get_or_compute(&mut self, rect: Rect, seed: u64, index: i64) -> Arc<Mesh> {
+        let key = (seed, rect, index);
+        if let Some(keyframe) = self.0.iter().find(|keyframe| keyframe.key == key) {
+            return keyframe.mesh.clone();
+        }
+        let mesh = Arc::new(julia_mesh(rect, index as f32 / JULIA_KEYFRAME_RATE, seed));
+        self.0.push(JuliaKeyframe { key, mesh: mesh.clone() });
+        mesh
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static JULIA_MESHES_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn julia_mesh(rect: Rect, t: f32, seed: u64) -> Mesh {
+    #[cfg(test)]
+    JULIA_MESHES_COMPUTED.with(|count| count.set(count.get() + 1));
+
     let cell = (rect.area() / JULIA_MAX_CELLS).sqrt().max(6.0);
     let columns = (rect.width() / cell).ceil().max(1.0) as usize;
     let rows = (rect.height() / cell).ceil().max(1.0) as usize;
@@ -455,7 +528,7 @@ fn julia(painter: &Painter, rect: Rect, t: f32, seed: u64) {
             mesh.add_triangle(top_left + 1, top_left + stride + 1, top_left + stride);
         }
     }
-    painter.add(Shape::mesh(mesh));
+    mesh
 }
 
 /// Base-3 address digits per Sierpinski point; 2^-14 is far below a pixel.
@@ -606,6 +679,80 @@ mod tests {
                 assert_ne!(first, render(background, size, 12.5), "{effect:?} must animate");
             }
         }
+    }
+
+    #[test]
+    fn next_cycles_through_every_effect_and_keeps_the_seed() {
+        let start = MenuBackground::new(MenuEffect::Starfield, 77);
+        let mut background = start;
+        let mut seen = Vec::new();
+        for _ in 0..MenuEffect::ALL.len() {
+            seen.push(background.effect);
+            background = background.next();
+            assert_ne!(background.alternate().effect, background.effect);
+        }
+        assert_eq!(background, start, "Cycling must return to the first effect");
+        assert_eq!(seen, MenuEffect::ALL);
+    }
+
+    fn julia_vertices(ctx: &egui::Context, size: egui::Vec2, time: f64) -> Vec<egui::epaint::Vertex> {
+        let screen = Rect::from_min_size(Pos2::ZERO, size);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            },
+            |ui| MenuBackground::new(MenuEffect::Julia, 3).paint(&ui.painter().with_clip_rect(screen), screen, time),
+        );
+        output.textures_delta.clear();
+        let mut shapes = Vec::new();
+        output.shapes.iter().for_each(|clipped| flatten(&clipped.shape, &mut shapes));
+        let [Shape::Mesh(mesh)] = shapes.as_slice() else {
+            panic!("Julia must paint a single mesh");
+        };
+        mesh.vertices.clone()
+    }
+
+    #[test]
+    fn julia_evaluates_keyframes_at_a_reduced_rate_and_blends_smoothly() {
+        let size = vec2(1100.0, 720.0);
+        let ctx = egui::Context::default();
+        JULIA_MESHES_COMPUTED.with(|count| count.set(0));
+        let frames: Vec<_> = (0..30).map(|frame| julia_vertices(&ctx, size, 20.0 + f64::from(frame) / 30.0)).collect();
+        let computed = JULIA_MESHES_COMPUTED.with(std::cell::Cell::get);
+        assert!(
+            computed <= JULIA_KEYFRAME_RATE as usize + 1,
+            "A second at 30 Hz must reuse keyframes, computed {computed}"
+        );
+
+        // Memoization must not change the picture.
+        for (frame, time) in [(7, 20.0 + 7.0 / 30.0), (29, 20.0 + 29.0 / 30.0)] {
+            assert_eq!(frames[frame], julia_vertices(&egui::Context::default(), size, time));
+        }
+
+        // A frame between keyframes lies between their colors, so motion stays smooth.
+        let screen = Rect::from_min_size(Pos2::ZERO, size);
+        let before = julia_mesh(screen, 20.0, 3);
+        let after = julia_mesh(screen, 20.1, 3);
+        let middle = julia_vertices(&ctx, size, 20.05);
+        let mut changed = 0;
+        for ((a, b), m) in before.vertices.iter().zip(&after.vertices).zip(&middle) {
+            for channel in 0..4 {
+                let (a, b, m) = (a.color[channel], b.color[channel], m.color[channel]);
+                assert!(m >= a.min(b).saturating_sub(1) && m <= a.max(b).saturating_add(1));
+            }
+            changed += usize::from(a.color != b.color);
+        }
+        assert!(changed > 100, "Consecutive keyframes must differ");
+
+        let cache = ctx.data(|data| data.get_temp::<JuliaKeyframes>(egui::Id::new("menu_background_julia_keyframes")));
+        assert!(cache.is_some_and(|cache| cache.0.len() <= 2), "Only the surrounding keyframes may stay cached");
+        julia_vertices(&ctx, vec2(800.0, 600.0), 20.05);
+        let cache = ctx.data(|data| data.get_temp::<JuliaKeyframes>(egui::Id::new("menu_background_julia_keyframes")));
+        assert!(
+            cache.is_some_and(|cache| cache.0.len() == 2 && cache.0.iter().all(|keyframe| keyframe.key.1.width() == 800.0)),
+            "Resizing must replace stale keyframes"
+        );
     }
 
     #[test]
