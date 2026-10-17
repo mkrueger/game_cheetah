@@ -44,7 +44,7 @@ fn highlight_job(ui: &egui::Ui, text: &str, filter: &str, color: egui::Color32, 
     };
     let marked = egui::TextFormat {
         color: ui.visuals().selection.stroke.color,
-        background: ui.visuals().selection.bg_fill.gamma_multiply(0.55),
+        background: ui.ctx().global_style().visuals.selection.bg_fill.gamma_multiply(0.55),
         ..normal.clone()
     };
     let mut job = egui::text::LayoutJob::default();
@@ -64,80 +64,170 @@ fn highlight_job(ui: &egui::Ui, text: &str, filter: &str, color: egui::Color32, 
 }
 
 const ROW_HEIGHT: f32 = 34.0;
+const AVATAR_SIZE: f32 = 22.0;
+const DISCLOSURE_WIDTH: f32 = 18.0;
+/// Auto-refresh indicator; the list really is live, so green reads as "on".
+/// Window heights below this hide the subtitle and keyboard hint.
+const COMPACT_HEIGHT: f32 = 520.0;
+const LIVE_COLOR: egui::Color32 = egui::Color32::from_rgb(88, 204, 128);
+
+/// Stable per-executable hue, so a game keeps its avatar color across launches.
+fn avatar_color(executable: &str) -> egui::Color32 {
+    let hash = executable
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3));
+    egui::ecolor::HsvaGamma {
+        h: (hash % 360) as f32 / 360.0,
+        s: 0.6,
+        v: 0.6,
+        a: 1.0,
+    }
+    .into()
+}
+
+/// Rounded tile with the process's initial, like an app launcher icon.
+fn avatar(ui: &mut egui::Ui, process: &crate::ProcessInfo, size: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let letter = process
+        .name
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .and_then(|c| c.to_uppercase().next())
+        .unwrap_or('?');
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same((size * 0.28) as u8), avatar_color(&process.executable));
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        letter,
+        egui::FontId::proportional((size * 0.62).round()),
+        egui::Color32::WHITE,
+    );
+}
+
+/// Filter field with a search glyph and an inline clear button.
+fn search_field(app: &mut App, ui: &mut egui::Ui) -> egui::Response {
+    let response = ui.add(
+        egui::TextEdit::singleline(&mut app.state.process_filter)
+            .id(egui::Id::new("process-filter"))
+            .hint_text(fl!(crate::LANGUAGE_LOADER, "filter-processes-hint"))
+            .desired_width(ui.available_width())
+            .margin(egui::Margin {
+                left: 36,
+                right: 36,
+                top: 10,
+                bottom: 10,
+            }),
+    );
+    let focus_shortcut = ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::F));
+    if app.state.set_focus || focus_shortcut {
+        response.request_focus();
+        app.state.set_focus = false;
+    }
+    let icon_color = if response.has_focus() {
+        crate::ui::theme::ACCENT_TEXT
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    paint_search_icon(ui.painter(), response.rect.left_center() + egui::vec2(18.0, 0.0), icon_color);
+    if !app.state.process_filter.is_empty() {
+        let clear_rect = egui::Rect::from_center_size(response.rect.right_center() - egui::vec2(19.0, 0.0), egui::vec2(26.0, 26.0));
+        let clear = ui
+            .put(
+                clear_rect,
+                egui::Button::new(egui::RichText::new("×").size(16.0))
+                    .frame(false)
+                    .corner_radius(egui::CornerRadius::same(13)),
+            )
+            .on_hover_text(fl!(crate::LANGUAGE_LOADER, "reset-filter-button"))
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if clear.clicked() {
+            app.state.process_filter.clear();
+            response.request_focus();
+        }
+    }
+    response
+}
+
+/// Magnifier drawn from shapes; emoji fonts do not reliably cover it.
+fn paint_search_icon(painter: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
+    let lens = center - egui::vec2(2.5, 2.5);
+    painter.circle_stroke(lens, 4.5, egui::Stroke::new(1.7, color));
+    let handle = egui::vec2(1.0, 1.0).normalized();
+    painter.line_segment([lens + handle * 5.5, lens + handle * 13.0], egui::Stroke::new(2.4, color));
+}
+
+/// Small rounded count pill shown next to a group's name.
+fn badge(ui: &mut egui::Ui, text: String, color: egui::Color32, fill: egui::Color32) -> egui::Response {
+    let galley = ui.painter().layout_no_wrap(text, egui::FontId::proportional(11.0), color);
+    let (rect, response) = ui.allocate_exact_size(galley.size() + egui::vec2(14.0, 4.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, egui::CornerRadius::same((rect.height() / 2.0) as u8), fill);
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
+    response
+}
 
 pub fn view_process_selection(app: &mut App, ui: &mut egui::Ui) {
     egui::CentralPanel::default()
         .frame(egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::symmetric(20, 16)))
         .show(ui, |ui| {
             let full = ui.available_rect_before_wrap();
-            let footer_height = 64.0;
+            // Short windows drop the subtitle and keyboard hint to keep rows visible.
+            let compact = full.height() < COMPACT_HEIGHT;
+            let footer_height = if compact { 62.0 } else { 84.0 };
             let content_rect = egui::Rect::from_min_max(full.min, egui::pos2(full.max.x, full.max.y - footer_height - 12.0));
             let footer_rect = egui::Rect::from_min_max(egui::pos2(full.min.x, full.max.y - footer_height), full.max);
             let mut content = ui.new_child(egui::UiBuilder::new().max_rect(content_rect).layout(egui::Layout::top_down(egui::Align::Min)));
-            let mut connect = process_content(app, &mut content);
+            let mut connect = process_content(app, &mut content, compact);
             let mut footer = ui.new_child(egui::UiBuilder::new().max_rect(footer_rect).layout(egui::Layout::top_down(egui::Align::Min)));
-            connect |= process_footer(app, &mut footer);
+            connect |= process_footer(app, &mut footer, compact);
             if connect && app.app_state == AppState::ProcessSelection {
                 app.connect_selected_process();
             }
         });
 }
 
-fn process_content(app: &mut App, ui: &mut egui::Ui) -> bool {
-    ui.heading(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "process-selection-title")).size(23.0).strong());
-    ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "process-selection-subtitle")).size(13.0).weak());
-    ui.add_space(12.0);
+fn process_content(app: &mut App, ui: &mut egui::Ui, compact: bool) -> bool {
+    ui.heading(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "process-selection-title")).size(24.0).strong());
+    if compact {
+        ui.add_space(8.0);
+    } else {
+        ui.add_space(2.0);
+        ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "process-selection-subtitle")).size(13.5).weak());
+        ui.add_space(14.0);
+    }
 
-    let mut filter_response = None;
-    ui.horizontal(|ui| {
-        let width = (ui.available_width() - 38.0 - ui.spacing().item_spacing.x).max(100.0);
-        let response = ui.add(
-            egui::TextEdit::singleline(&mut app.state.process_filter)
-                .id(egui::Id::new("process-filter"))
-                .hint_text(fl!(crate::LANGUAGE_LOADER, "filter-processes-hint"))
-                .desired_width(width)
-                .margin(egui::Margin::symmetric(10, 8)),
-        );
-        let focus_shortcut = ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::F));
-        if app.state.set_focus || focus_shortcut {
-            response.request_focus();
-            app.state.set_focus = false;
-        }
-        if ui
-            .add_enabled(!app.state.process_filter.is_empty(), egui::Button::new("×").min_size(egui::vec2(32.0, 32.0)))
-            .on_hover_text(fl!(crate::LANGUAGE_LOADER, "reset-filter-button"))
-            .clicked()
-        {
-            app.state.process_filter.clear();
-            response.request_focus();
-        }
-        filter_response = Some(response);
-    });
+    let filter_response = search_field(app, ui);
 
     // Read the edited value, not last frame's copy. Clear stale selection
     // before drawing the footer so a hidden result cannot be attached to.
     let filter = app.state.process_filter.trim().to_owned();
     app.process_selection.update_filter(&filter);
     let (total, matched, groups) = process_counts(&app.state.processes, &filter);
-    ui.add_space(6.0);
-    ui.horizontal_wrapped(|ui| {
-        let count = if filter.is_empty() {
-            fl!(crate::LANGUAGE_LOADER, "process-count-total", total = total)
-        } else {
-            fl!(crate::LANGUAGE_LOADER, "process-count-filtered", shown = matched, total = total)
-        };
-        ui.label(egui::RichText::new(count).size(12.0).weak());
-        ui.label(egui::RichText::new("·").weak());
-        ui.label(
-            egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "process-group-count", groups = groups))
-                .size(12.0)
-                .weak(),
-        )
-        .on_hover_text(fl!(crate::LANGUAGE_LOADER, "process-group-count-hint"));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "process-refresh-status")).size(12.0).weak());
-        });
-    });
+    ui.add_space(8.0);
+    egui::Sides::new().shrink_left().truncate().show(
+        ui,
+        |ui| {
+            let count = if filter.is_empty() {
+                fl!(crate::LANGUAGE_LOADER, "process-count-total", total = total)
+            } else {
+                fl!(crate::LANGUAGE_LOADER, "process-count-filtered", shown = matched, total = total)
+            };
+            ui.label(egui::RichText::new(count).size(12.5).weak());
+            ui.label(egui::RichText::new("·").size(12.5).weak());
+            ui.label(
+                egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "process-group-count", groups = groups))
+                    .size(12.5)
+                    .weak(),
+            )
+            .on_hover_text(fl!(crate::LANGUAGE_LOADER, "process-group-count-hint"));
+        },
+        |ui| {
+            ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "process-refresh-status")).size(12.5).weak());
+            let (dot, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+            ui.painter().circle_filled(dot.center(), 3.5, LIVE_COLOR);
+            ui.painter().circle_filled(dot.center(), 6.0, LIVE_COLOR.gamma_multiply(0.18));
+        },
+    );
     ui.add_space(8.0);
 
     let rows = build_rows(
@@ -148,7 +238,7 @@ fn process_content(app: &mut App, ui: &mut egui::Ui) -> bool {
         &app.process_selection,
     );
     app.process_selection.reconcile(&rows);
-    let filter_focused = filter_response.as_ref().is_some_and(egui::Response::has_focus);
+    let filter_focused = filter_response.has_focus();
     let keyboard_allowed = !egui::Popup::is_any_open(ui.ctx())
         && (filter_focused || ui.memory(|memory| memory.focused().is_none() || memory.focused() == app.process_selection.row_focus));
     let mut connect = false;
@@ -238,13 +328,41 @@ fn process_table(
     } else {
         None
     };
+    // Bars are relative to the largest visible entry; sqrt keeps small
+    // processes visible next to a multi-gigabyte game.
+    let max_memory = rows.iter().map(|row| row.process.memory).max().unwrap_or(0).max(1) as f32;
+    let accent = crate::ui::theme::ACCENT_TEXT;
+    let memory_text_width = ui
+        .painter()
+        .layout_no_wrap(
+            "Σ 999.99 MB".to_owned(),
+            egui::TextStyle::Monospace.resolve(ui.style()),
+            egui::Color32::PLACEHOLDER,
+        )
+        .size()
+        .x
+        + 12.0;
     // Only the body scrolls vertically: the table header stays visible.
     // At narrow window widths the command column is reached horizontally.
     egui::ScrollArea::horizontal()
         .id_salt("process-horizontal")
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            // Calmer table chrome: faint column dividers, a tinted (not
+            // saturated) selection and soft hover/stripe fills.
+            let visuals = &mut ui.style_mut().visuals;
+            visuals.widgets.noninteractive.bg_stroke.color = egui::Color32::from_rgb(42, 46, 54);
+            visuals.selection.bg_fill = egui::Color32::from_rgb(19, 72, 96);
+            visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(35, 40, 47);
+            visuals.faint_bg_color = egui::Color32::from_rgb(23, 26, 31);
+
             let available_width = ui.available_width();
+            let header_line = ui.cursor().top() + 32.0 + ui.spacing().item_spacing.y * 0.5;
+            ui.painter().hline(
+                ui.max_rect().x_range(),
+                header_line,
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(52, 58, 68)),
+            );
             let mut table = TableBuilder::new(ui)
                 .id_salt("process-list-v2")
                 .striped(true)
@@ -253,10 +371,10 @@ fn process_table(
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .min_scrolled_height(80.0)
                 .animate_scrolling(false)
-                .column(Column::initial(240.0).at_least(180.0).clip(true))
+                .column(Column::initial(260.0).at_least(190.0).clip(true))
                 .column(Column::initial(85.0).at_least(70.0))
-                .column(Column::initial(120.0).at_least(100.0))
-                .column(Column::remainder().at_least((available_width - 480.0).max(180.0)));
+                .column(Column::initial(170.0).at_least(110.0))
+                .column(Column::remainder().at_least((available_width - 540.0).max(180.0)));
             if let Some(index) = scroll_to {
                 table = table.scroll_to_row(index, None);
             }
@@ -269,17 +387,26 @@ fn process_table(
                         (fl!(crate::LANGUAGE_LOADER, "command-heading"), ProcessSortColumn::Command),
                     ] {
                         header.col(|ui| {
-                            let arrow = if *sort_column == column {
-                                if *sort_direction == SortDirection::Ascending { " ⏶" } else { " ⏷" }
+                            let active = *sort_column == column;
+                            let mut job = egui::text::LayoutJob::default();
+                            let font = egui::FontId::proportional(13.5);
+                            let color = if active {
+                                ui.visuals().strong_text_color()
                             } else {
-                                ""
+                                ui.visuals().weak_text_color()
                             };
+                            job.append(&label, 0.0, egui::TextFormat::simple(font.clone(), color));
+                            if active {
+                                let arrow = if *sort_direction == SortDirection::Ascending { " ⏶" } else { " ⏷" };
+                                job.append(arrow, 0.0, egui::TextFormat::simple(font, accent));
+                            }
                             if ui
-                                .add(egui::Button::new(egui::RichText::new(format!("{label}{arrow}")).strong()).frame(false))
+                                .add(egui::Button::new(job).frame(false))
                                 .on_hover_text(fl!(crate::LANGUAGE_LOADER, "process-sort-hint"))
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
                                 .clicked()
                             {
-                                *sort_direction = if *sort_column == column {
+                                *sort_direction = if active {
                                     if *sort_direction == SortDirection::Ascending {
                                         SortDirection::Descending
                                     } else {
@@ -298,7 +425,8 @@ fn process_table(
                 })
                 .body(|body| {
                     body.rows(ROW_HEIGHT, rows.len(), |mut row| {
-                        let item = &rows[row.index()];
+                        let index = row.index();
+                        let item = &rows[index];
                         let process = item.process;
                         let selected = selection.selected.as_ref() == Some(&item.key);
                         row.set_selected(selected);
@@ -307,17 +435,29 @@ fn process_table(
                         };
                         let mut disclosure_clicked = false;
                         row.col(|ui| {
-                            if item.parent.is_some() {
-                                ui.add_space(22.0);
+                            let cell = ui.max_rect();
+                            if selected {
+                                let bar = egui::Rect::from_min_max(cell.left_top(), egui::pos2(cell.left() + 3.0, cell.bottom()));
+                                ui.painter().rect_filled(bar, egui::CornerRadius::same(1), accent);
                             }
-                            if item.is_group() {
+                            if item.parent.is_some() {
+                                // Tree guide from the group's disclosure arrow to this instance.
+                                let last = rows.get(index + 1).is_none_or(|next| next.parent != item.parent);
+                                let x = cell.left() + DISCLOSURE_WIDTH * 0.5 + 4.0;
+                                let bottom = if last { cell.center().y } else { cell.bottom() };
+                                let guide = egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 78, 90));
+                                ui.painter().vline(x, cell.top()..=bottom, guide);
+                                ui.painter().hline(x..=x + 12.0, cell.center().y, guide);
+                                ui.add_space(DISCLOSURE_WIDTH + ui.spacing().item_spacing.x + 4.0);
+                            } else if item.is_group() {
+                                ui.add_space(4.0);
                                 let response = ui
                                     .add(
                                         egui::Button::new(
                                             egui::RichText::new(if item.expanded { "⏷" } else { "⏵" }).color(text_color(ui, ui.visuals().text_color())),
                                         )
                                         .frame(false)
-                                        .min_size(egui::vec2(18.0, 24.0)),
+                                        .min_size(egui::vec2(DISCLOSURE_WIDTH, 24.0)),
                                     )
                                     .on_hover_text(fl!(crate::LANGUAGE_LOADER, "process-expand-hint"));
                                 if response.clicked() {
@@ -328,10 +468,13 @@ fn process_table(
                             } else {
                                 // Reserve the disclosure slot so every name
                                 // on a level starts at the same x.
-                                ui.add_space(18.0 + ui.spacing().item_spacing.x);
+                                ui.add_space(4.0 + DISCLOSURE_WIDTH + ui.spacing().item_spacing.x);
                             }
-                            let badge = if item.is_group() {
-                                Some(if filter.is_empty() {
+                            if item.parent.is_none() {
+                                avatar(ui, process, AVATAR_SIZE);
+                            }
+                            let badge_text = item.is_group().then(|| {
+                                if filter.is_empty() {
                                     fl!(crate::LANGUAGE_LOADER, "process-group-badge", count = item.group_size)
                                 } else {
                                     fl!(
@@ -340,28 +483,36 @@ fn process_table(
                                         matched = item.matching_children,
                                         total = item.group_size
                                     )
-                                })
-                            } else {
-                                None
-                            };
-                            let badge_width = badge.as_ref().map_or(0.0, |text| {
+                                }
+                            });
+                            let badge_width = badge_text.as_ref().map_or(0.0, |text| {
                                 ui.painter()
-                                    .layout_no_wrap(text.clone(), egui::FontId::proportional(11.0), text_color(ui, ui.visuals().weak_text_color()))
+                                    .layout_no_wrap(text.clone(), egui::FontId::proportional(11.0), egui::Color32::PLACEHOLDER)
                                     .size()
                                     .x
-                                    + 12.0
+                                    + 14.0
+                                    + ui.spacing().item_spacing.x
                             });
                             let name_width = (ui.available_width() - badge_width).max(32.0);
-                            let name = highlight_job(ui, &process.name, filter, text_color(ui, ui.visuals().strong_text_color()), false);
-                            // `add_sized` would centre the name; keep it flush
-                            // with the heading and the other columns.
+                            let name_color = if item.parent.is_some() {
+                                ui.visuals().text_color()
+                            } else {
+                                ui.visuals().strong_text_color()
+                            };
+                            let name = highlight_job(ui, &process.name, filter, text_color(ui, name_color), false);
+                            // Only as wide as the name, so the group badge follows it directly.
                             ui.allocate_ui_with_layout(egui::vec2(name_width, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                ui.set_width(name_width);
                                 ui.add(egui::Label::new(name).selectable(false).truncate())
                                     .on_hover_text(format!("{}\n{}", process.name, process.executable));
                             });
-                            if let Some(badge) = badge {
-                                ui.label(egui::RichText::new(badge).size(11.0).color(text_color(ui, ui.visuals().weak_text_color())));
+                            if let Some(text) = badge_text {
+                                let color = text_color(ui, accent);
+                                let fill = if selected {
+                                    egui::Color32::from_white_alpha(30)
+                                } else {
+                                    accent.gamma_multiply(0.14)
+                                };
+                                badge(ui, text, color, fill);
                             }
                         });
                         row.col(|ui| {
@@ -374,6 +525,23 @@ fn process_table(
                             }
                         });
                         row.col(|ui| {
+                            // Compact usage bar right of the value, relative to the largest entry.
+                            let cell = ui.max_rect();
+                            let fraction = (process.memory as f32 / max_memory).sqrt().clamp(0.0, 1.0);
+                            let track = egui::Rect::from_min_max(
+                                egui::pos2(cell.left() + memory_text_width, cell.center().y - 2.0),
+                                egui::pos2(cell.right() - 10.0, cell.center().y + 2.0),
+                            );
+                            if track.width() >= 12.0 {
+                                let (track_color, fill_color) = if selected {
+                                    (egui::Color32::from_white_alpha(30), egui::Color32::from_white_alpha(190))
+                                } else {
+                                    (egui::Color32::from_white_alpha(14), accent.gamma_multiply(0.75))
+                                };
+                                ui.painter().rect_filled(track, egui::CornerRadius::same(2), track_color);
+                                let fill = egui::Rect::from_min_size(track.min, egui::vec2((track.width() * fraction).max(2.0), track.height()));
+                                ui.painter().rect_filled(fill, egui::CornerRadius::same(2), fill_color);
+                            }
                             let memory = gabi::BytesConfig::default().bytes(process.memory as u64).to_string();
                             let memory = if item.is_group() { format!("Σ {memory}") } else { memory };
                             let response = ui.add(
@@ -425,48 +593,73 @@ fn process_table(
     connect
 }
 
-fn process_footer(app: &mut App, ui: &mut egui::Ui) -> bool {
-    ui.separator();
-    ui.add_space(6.0);
+fn process_footer(app: &mut App, ui: &mut egui::Ui, compact: bool) -> bool {
+    let top = ui.max_rect().top();
+    ui.painter()
+        .hline(ui.max_rect().x_range(), top, egui::Stroke::new(1.0, egui::Color32::from_rgb(46, 51, 60)));
+    ui.add_space(12.0);
     let selected = app
         .process_selection
         .selected
         .as_ref()
         .and_then(|key| resolve_process(&app.state.processes, key));
     let enabled = selected.is_some();
-    let title = if let Some(process) = selected {
-        format!("{} · PID {}", process.name, process.pid)
-    } else if matches!(app.process_selection.selected, Some(ProcessRowKey::Group(_))) {
-        fl!(crate::LANGUAGE_LOADER, "process-group-select-hint")
-    } else {
-        fl!(crate::LANGUAGE_LOADER, "process-select-hint")
-    };
     let mut connect = false;
     ui.horizontal(|ui| {
-        let label_width = (ui.available_width() - 258.0).max(80.0);
-        ui.add_sized([label_width, 32.0], egui::Label::new(egui::RichText::new(title.clone()).size(13.0)).truncate())
-            .on_hover_text(title);
+        let info_width = (ui.available_width() - 258.0).max(80.0);
+        ui.allocate_ui_with_layout(egui::vec2(info_width, 38.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_width(info_width);
+            if let Some(process) = selected {
+                avatar(ui, process, 32.0);
+                let memory = gabi::BytesConfig::default().bytes(process.memory as u64).to_string();
+                let details = format!("PID {} · {memory}", process.pid);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 1.0;
+                    ui.add(egui::Label::new(egui::RichText::new(&process.name).size(15.0).strong()).truncate())
+                        .on_hover_text(format!("{}\n{}", process.name, process.executable));
+                    ui.add(egui::Label::new(egui::RichText::new(details).size(12.0).weak()).truncate());
+                });
+            } else {
+                let hint = if matches!(app.process_selection.selected, Some(ProcessRowKey::Group(_))) {
+                    fl!(crate::LANGUAGE_LOADER, "process-group-select-hint")
+                } else {
+                    fl!(crate::LANGUAGE_LOADER, "process-select-hint")
+                };
+                ui.add(egui::Label::new(egui::RichText::new(hint).size(13.5).weak()).truncate());
+            }
+        });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             connect = ui
                 .add_enabled(
                     enabled,
-                    egui::Button::new(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "process-connect-button")).color(egui::Color32::WHITE))
-                        .fill(ui.visuals().selection.bg_fill)
-                        .min_size(egui::vec2(120.0, 32.0)),
+                    egui::Button::new(
+                        egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "process-connect-button"))
+                            .strong()
+                            .color(egui::Color32::WHITE),
+                    )
+                    .fill(ui.visuals().selection.bg_fill)
+                    .corner_radius(egui::CornerRadius::same(10))
+                    .min_size(egui::vec2(124.0, 36.0)),
                 )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .clicked();
             if ui
-                .add(egui::Button::new(fl!(crate::LANGUAGE_LOADER, "process-cancel-button")).min_size(egui::vec2(110.0, 32.0)))
+                .add(
+                    egui::Button::new(fl!(crate::LANGUAGE_LOADER, "process-cancel-button"))
+                        .corner_radius(egui::CornerRadius::same(10))
+                        .min_size(egui::vec2(110.0, 36.0)),
+                )
                 .clicked()
             {
                 app.app_state = AppState::MainWindow;
             }
         });
     });
+    ui.add_space(4.0);
     if let Some(message) = &app.process_selection.message {
-        ui.label(egui::RichText::new(message).size(11.0).color(ui.visuals().warn_fg_color));
-    } else {
-        ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "process-keyboard-hint")).size(11.0).weak());
+        ui.label(egui::RichText::new(message).size(11.5).color(ui.visuals().warn_fg_color));
+    } else if !compact {
+        ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "process-keyboard-hint")).size(11.5).weak());
     }
     connect
 }
@@ -500,8 +693,8 @@ mod tests {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             for style in [egui::TextStyle::Body, egui::TextStyle::Button, egui::TextStyle::Small] {
                 let font = style.resolve(ui.style());
-                for arrow in ['⏶', '⏷', '⏵', '⏴'] {
-                    assert!(ui.fonts_mut(|fonts| fonts.has_glyph(&font, arrow)), "Missing arrow {arrow} in {font:?}");
+                for glyph in ['⏶', '⏷', '⏵', '⏴', '×', 'Σ'] {
+                    assert!(ui.fonts_mut(|fonts| fonts.has_glyph(&font, glyph)), "Missing glyph {glyph} in {font:?}");
                 }
             }
         });
@@ -624,6 +817,116 @@ mod tests {
         app.app_state = AppState::ProcessSelection;
         app.state.processes = vec![process(101, "TestGame", 1024), process(202, "OtherGame", 512)];
         app
+    }
+
+    fn click_at(app: &mut App, ctx: &egui::Context, size: egui::Vec2, pos: egui::Pos2) {
+        frame(app, ctx, size, vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            frame(
+                app,
+                ctx,
+                size,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+    }
+
+    #[test]
+    fn search_field_clear_button_only_appears_with_a_filter_and_clears_it() {
+        let size = egui::vec2(1100.0, 720.0);
+        let mut app = app();
+        let ctx = egui::Context::default();
+        crate::ui::theme::apply(&ctx);
+        frame(&mut app, &ctx, size, vec![]);
+        let output = frame(&mut app, &ctx, size, vec![]);
+        let texts = text_shapes(&output);
+        assert!(!texts.iter().any(|(text, _)| text == "×"), "No clear button without a filter");
+
+        app.state.process_filter = "Other".to_owned();
+        frame(&mut app, &ctx, size, vec![]);
+        let output = frame(&mut app, &ctx, size, vec![]);
+        let texts = text_shapes(&output);
+        let (_, clear) = texts.iter().find(|(text, _)| text == "×").expect("clear button with a filter");
+        let field = ctx
+            .memory(|memory| memory.area_rect(egui::LayerId::background().id))
+            .unwrap_or(egui::Rect::EVERYTHING);
+        assert!(field.contains_rect(*clear));
+        assert!(!texts.iter().any(|(text, _)| text == "TestGame"), "The filter applies");
+        click_at(&mut app, &ctx, size, clear.center());
+        assert!(app.state.process_filter.is_empty(), "Clicking × clears the filter");
+        assert!(
+            ctx.memory(|memory| memory.has_focus(egui::Id::new("process-filter"))),
+            "Focus returns to the field"
+        );
+        let output = frame(&mut app, &ctx, size, vec![]);
+        assert!(text_shapes(&output).iter().any(|(text, _)| text == "TestGame"));
+    }
+
+    #[test]
+    fn compact_windows_hide_secondary_text_but_keep_rows_and_actions() {
+        let subtitle = fl!(crate::LANGUAGE_LOADER, "process-selection-subtitle");
+        let hint = fl!(crate::LANGUAGE_LOADER, "process-keyboard-hint");
+        for (size, compact) in [(egui::vec2(640.0, 420.0), true), (egui::vec2(1100.0, 720.0), false)] {
+            let mut app = app();
+            let ctx = egui::Context::default();
+            crate::ui::theme::apply(&ctx);
+            frame(&mut app, &ctx, size, vec![]);
+            let texts = text_shapes(&frame(&mut app, &ctx, size, vec![]));
+            for label in [&subtitle, &hint] {
+                assert_eq!(texts.iter().any(|(text, _)| text == label), !compact, "{label} at {size:?}");
+            }
+            for name in ["TestGame", "OtherGame"] {
+                let (_, rect) = texts.iter().find(|(text, _)| text == name).expect("rows stay visible");
+                assert!(rect.bottom() < size.y - 60.0, "{name} must be above the footer at {size:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn footer_summarizes_the_selected_process() {
+        let size = egui::vec2(1100.0, 720.0);
+        let mut app = app();
+        let ctx = egui::Context::default();
+        crate::ui::theme::apply(&ctx);
+        frame(&mut app, &ctx, size, vec![]);
+        let texts = text_shapes(&frame(&mut app, &ctx, size, vec![]));
+        let hint = fl!(crate::LANGUAGE_LOADER, "process-select-hint");
+        assert!(texts.iter().any(|(text, rect)| text == &hint && rect.top() > size.y - 100.0));
+
+        let selected = app.state.processes[1].clone();
+        app.process_selection.selected = Some(ProcessRowKey::process(&selected));
+        let texts = text_shapes(&frame(&mut app, &ctx, size, vec![]));
+        let details = format!("PID {} · {}", selected.pid, gabi::BytesConfig::default().bytes(selected.memory as u64));
+        let (_, name) = texts
+            .iter()
+            .filter(|(text, _)| text == &selected.name)
+            .max_by(|a, b| a.1.top().total_cmp(&b.1.top()))
+            .unwrap();
+        let (_, details) = texts.iter().find(|(text, _)| text == &details).expect("footer details");
+        assert!(name.top() > size.y - 100.0, "The footer shows the selected name");
+        assert!(details.top() > name.top() && (details.left() - name.left()).abs() < 1.0);
+        assert!(!texts.iter().any(|(text, _)| text == &hint));
+    }
+
+    #[test]
+    fn avatar_colors_are_stable_per_executable_and_vary_between_games() {
+        assert_eq!(avatar_color("/games/a"), avatar_color("/games/a"));
+        let colors: std::collections::HashSet<_> = ["/games/a", "/games/b", "/opt/factorio", "/usr/bin/retroarch", "bg3.exe"]
+            .into_iter()
+            .map(avatar_color)
+            .collect();
+        assert!(colors.len() >= 4, "Different executables should get different colors");
+        for color in colors {
+            let [r, g, b, a] = color.to_array();
+            assert_eq!(a, 255);
+            // White initials must stay readable.
+            assert!(r.max(g).max(b) < 190 && r.max(g).max(b) > 70, "{color:?}");
+        }
     }
 
     #[test]

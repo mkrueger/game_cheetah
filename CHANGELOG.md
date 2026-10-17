@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recomputes 10 keyframes per second and blends between them, averaging about
   0.7 ms per frame.
 
+- Polished process selection dialog: a search field with an icon and inline
+  clear button, a live auto-refresh indicator, colored initial avatars per
+  executable, compact memory usage bars, group count pills, tree guides for
+  group instances, a calmer tinted selection with an accent bar, and a footer
+  that summarizes the selected process. Short windows hide the subtitle and
+  keyboard hint so more rows stay visible.
+
 ### Removed
 
 - Unused web build template (`index.html`, `Trunk.toml`). Its referenced web
