@@ -9,6 +9,7 @@ const SETTINGS_MAX_WIDTH: f32 = 820.0;
 const ABOUT_CARD_WIDTH: f32 = 620.0;
 
 pub fn view_main_window(app: &mut App, ui: &mut egui::Ui) {
+    crate::ui::error_notice::show(app, ui);
     egui::CentralPanel::default().show(ui, |ui| {
         animated_background(ui, app.menu_background);
 
@@ -43,6 +44,10 @@ pub fn view_main_window(app: &mut App, ui: &mut egui::Ui) {
 
                         if menu_button(ui, &fl!(crate::LANGUAGE_LOADER, "attach-button"), true).clicked() {
                             app.attach_action();
+                        }
+                        ui.add_space(8.0);
+                        if menu_button(ui, &fl!(crate::LANGUAGE_LOADER, "tutorial-title"), false).clicked() {
+                            app.start_tutorial();
                         }
                         ui.add_space(8.0);
                         if menu_button(ui, &fl!(crate::LANGUAGE_LOADER, "settings-button"), false).clicked() {

@@ -4,6 +4,14 @@
 fn main() -> eframe::Result<()> {
     use game_cheetah::App;
 
+    if std::env::args().any(|argument| argument == game_cheetah::tutorial::TARGET_ARGUMENT) {
+        if let Err(error) = game_cheetah::tutorial::run_target() {
+            eprintln!("Tutorial target failed: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     let show_processes = std::env::args().any(|argument| argument == "--processes");
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/cheetah.png")).expect("embedded application icon must be a valid PNG");
     let options = eframe::NativeOptions {

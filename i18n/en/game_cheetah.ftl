@@ -1,3 +1,98 @@
+tutorial-title = Tutorial
+tutorial-target = Tutorial practice game
+tutorial-restart = Restart
+tutorial-exit = End tutorial
+tutorial-error = Tutorial unavailable: { $error }. Restart the tutorial or return to the main menu.
+tutorial-safety = The practice game is a small separate process that Game Cheetah starts and closes again when you finish. Only edit memory in your own single-player or offline games.
+tutorial-why = What is this about?
+tutorial-how = How to do it
+tutorial-game-title = Practice game
+tutorial-health = Health: { $health } / { $max }
+tutorial-damage-button = Take damage
+tutorial-heal-button = Drink potion
+tutorial-heal-full = Health is already full.
+tutorial-game-rules = Damage: −7 to −23 · Potion: +10 to +30 (up to 100) · At 0 health you respawn with 100.
+tutorial-progress = Step { $step } of { $total }
+tutorial-intro-title = Basics
+tutorial-search-title = First search
+tutorial-narrow-title = Narrow down
+tutorial-edit-title = Change the value
+tutorial-freeze-title = Freeze
+tutorial-test-title = Test the freeze
+tutorial-complete-title = Well done!
+tutorial-intro-text =
+    Games store numbers such as health, ammo or gold in memory, each at a fixed location: its address. Game Cheetah searches there for the number you currently see in the game.
+
+    The same number usually appears in hundreds of places, though. So you change the value in the game and search again. Only addresses that changed along with it remain.
+
+    Above you can see the practice game; it is already attached. On the left is the regular search area, where you practice in six short steps: search, narrow down, change the value and freeze it.
+tutorial-begin = Let's go
+tutorial-search-why =
+    The first search reads the game's entire memory and remembers every location containing the number. Each of these locations is a candidate.
+
+    To search, you need to know how the number is stored: its data type. In most games health is a whole number, usually of type “int (4 bytes)”.
+tutorial-search-how =
+    1. Next to the input field, check that “Int” is selected as the type.
+    2. Enter the practice game's current health in the “Value:” field.
+    3. Click “Search” or press Enter.
+tutorial-search-status = Current health: { $health }. So search for { $health }.
+tutorial-narrow-why =
+    You now have many candidates. Most of them contain the same number only by coincidence. You can recognize the real address because it changes when health changes in the game.
+
+    “Narrow down” no longer scans all memory. It checks only the existing candidates and keeps those that now contain the new value. The list gets shorter with each round.
+tutorial-narrow-how =
+    1. Change health in the practice game: click “Take damage” or “Drink potion”.
+    2. In the same search tab, replace the old value with the new health.
+    3. Click “Narrow down”.
+    4. Repeat steps 1 to 3 until at most two candidates remain.
+
+    If several results with exactly the same value remain after one round, they are often copies, for example for the display. Only another change separates them from the real health value.
+tutorial-narrow-status = Health now: { $health } · Candidates: { $count } (goal: at most { $goal })
+tutorial-skip-hint = Some memory locations change along by coincidence. If the list stops getting shorter, you can continue with the remaining candidates.
+tutorial-skip = Continue with these candidates
+tutorial-edit-why =
+    You now know where health is stored. If you write a different value there, the game uses it, because it reads health from exactly this address.
+
+    If two candidates remain, one is often just a copy, for example for the display. The game does not calculate with it; changing it has no effect.
+tutorial-edit-how =
+    1. In the result table, click the number in a result's “Value” column.
+    2. Replace it with 999 and press Enter.
+    3. Look at the practice game's health bar. If it shows 999, you found the right address. If not, try the next result.
+tutorial-edit-status = Remaining candidates: { $count }
+tutorial-freeze-why = Games change their values constantly. After the next hit, the 999 health would be gone again. When a value is frozen, Game Cheetah writes it back several times per second and immediately undoes the game's changes.
+tutorial-freeze-how =
+    1. In the result table, find the result you used to set health to 999.
+    2. Click the snowflake in its “Frozen” column. It becomes highlighted.
+
+    Freezing keeps the value that is in memory at the moment you click.
+tutorial-test-why = A highlighted snowflake alone proves nothing. What matters is what happens in the game. So always test whether the frozen value really holds.
+tutorial-test-how =
+    1. Click “Take damage” in the practice game.
+    2. Watch the health bar. It drops briefly and jumps straight back to 999.
+tutorial-test-status = Checking whether health returns to 999…
+tutorial-complete-text = You completed the whole workflow: you searched for a value, narrowed down the candidates step by step, told the real value apart from a copy, changed it and verified the freeze. This is exactly how you proceed in real games.
+tutorial-tips-title = Tips for real games
+tutorial-tips =
+    • If you find nothing, try another data type. Some games store values as “float (4 bytes)”, a decimal number.
+    • If you do not know the exact number, for example a health bar without digits, use the “Unknown” type and narrow down with “increased” or “decreased”.
+    • After restarting a game, values usually live at different addresses. Simply search again.
+    • Use a separate search tab for each value, for example one for gold and one for ammo.
+tutorial-glossary-title = Terms explained
+tutorial-glossary =
+    Address: The location in memory where a value is stored, shown as a hexadecimal number.
+    Value: The number currently stored at that address.
+    Data type: How a value is stored. Int is a 4-byte whole number; float is a 4-byte decimal number.
+    Candidate: An address that has matched every search so far.
+    Narrow down: Check only the existing candidates again with a new value.
+    Freeze: Keep writing a value back so the game cannot change it.
+tutorial-hint-search-missed = Health is not among the results. Check that the type is “Int” and that you entered exactly the current health. Then click “Reset search” and search again.
+tutorial-hint-narrow-lost = Oops, the real address was filtered out. This happens when the value you entered does not match the current health. Click “Undo” and narrow down again with the current value.
+tutorial-hint-nothing-removed = Nothing was filtered out because the value has not changed since the last search. First change health in the practice game, then narrow down with the new value.
+tutorial-hint-tab-closed = This lesson's search tab was closed. Simply start a new search with the current health.
+tutorial-hint-copy-edited = You changed a copy: it now shows 999, but the game's real health did not change. Games often store values more than once. Set the other candidate to 999.
+tutorial-hint-wrong-freeze = You froze a different address. Freeze the result you used to set the game's health to 999.
+tutorial-hint-freeze-value = Health is no longer 999. First set the right result back to 999, then freeze it. If it is already frozen, release it by clicking its snowflake.
+tutorial-hint-freeze-failed = Health did not return to 999. Check that the snowflake of the right result is active and test again.
 error-process-title = Process no longer available.
 error-process-help = Start the game and select it again.
 error-access-title = Access denied.

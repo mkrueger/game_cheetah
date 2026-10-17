@@ -11,7 +11,7 @@ Use it to search values in a running process, narrow down result sets, edit memo
 The editable icon source is [assets/cheetah.svg](assets/cheetah.svg).
 The main menu shows a larger, transparent mascot next to the application title,
 without the app icon's navy tile. Its primary actions are **Start**, **Settings**,
-**About**, and **Quit**; the version and the GitHub, discussion, and bug-report
+**Tutorial**, **About**, and **Quit**; the version and the GitHub, discussion, and bug-report
 links share a compact footer row. On short windows, the menu scrolls so all
 actions remain accessible.
 
@@ -37,6 +37,35 @@ group, keeping both variants in sync. This requires Inkscape, ImageMagick 7
 the 256 px entry is PNG-compressed, smaller sizes stay BMP for compatibility, and
 [tools/pack_ico.py](tools/pack_ico.py) assembles them. Outputs omit timestamps,
 so regenerating unchanged artwork leaves the files byte-identical.
+
+## Interactive tutorial
+
+Choose **Tutorial** in the main menu for a guided introduction in English or
+German. Game Cheetah starts a small, separate practice game and attaches to it;
+a panel on the right shows its health bar with **Take damage** and **Drink
+potion** buttons, which can be used at any time. Damage and potions change
+health by random amounts, so you always have to read the current value.
+
+The lesson uses the regular search workspace and explains each step with a
+"What is this about?" and a "How to do it" section:
+
+1. **Basics:** what addresses, values and candidates are.
+2. **First search:** search for the current health as `Int`.
+3. **Narrow down:** change health in the game, enter the new value and click
+   **Narrow down** in the same search tab; repeat until at most two candidates
+   remain. The practice game keeps a lagging HUD copy of health that only a
+   second change filters out, as real games often do.
+4. **Change the value:** set a result to `999`. Editing the copy shows a hint
+   that the game's real health did not change.
+5. **Freeze** the working result with its snowflake.
+6. **Test the freeze:** take damage and watch health return to `999`.
+
+Progress is checked against completed scans and the practice game's actual
+memory, not button clicks. Hints explain common mistakes, such as narrowing
+with an outdated value (use **Undo**), narrowing without changing health, or
+freezing the wrong address. A short glossary explains the terms. **Restart**
+resets the exercise. The practice process is terminated when you end or
+restart the tutorial or close Game Cheetah; no external game is needed.
 
 ## Features
 

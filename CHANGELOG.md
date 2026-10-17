@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Interactive tutorial in the main menu. A side panel guides new users through
+  searching, repeated narrowing, editing and freezing with explanations, live
+  status and hints for common mistakes. It uses a separate practice game whose
+  health can be changed at any time and which contains realistic decoys,
+  including a lagging HUD copy.
+
 ### Changed
 
 - New application icon: a gold cheetah mascot on a navy tile, with an editable

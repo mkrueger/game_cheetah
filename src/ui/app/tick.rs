@@ -82,6 +82,10 @@ impl App {
         // Search context state machine: cycle each context's search-mode
         // flag back to `None` once `search_complete` flips.
         self.state.poll_searches();
+        if self.tutorial.is_some() {
+            self.poll_tutorial();
+            ctx.request_repaint_after(refresh::poll_interval(ctx));
+        }
 
         self.poll_pointer_scan();
         self.poll_automatic_save();
@@ -130,7 +134,8 @@ impl App {
             }
             AppState::InProcess => {
                 self.state.detach_if_gone();
-                if self.auto_reconnect
+                if self.tutorial.is_none()
+                    && self.auto_reconnect
                     && self.state.pid == 0
                     && !self.state.process_name.is_empty()
                     && self.last_reattach_attempt.elapsed() >= Duration::from_secs(1)

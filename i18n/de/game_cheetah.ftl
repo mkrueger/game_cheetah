@@ -1,3 +1,98 @@
+tutorial-title = Tutorial
+tutorial-target = Tutorial-Übungsspiel
+tutorial-restart = Neu starten
+tutorial-exit = Tutorial beenden
+tutorial-error = Tutorial nicht verfügbar: { $error }. Starte das Tutorial neu oder kehre zum Hauptmenü zurück.
+tutorial-safety = Das Übungsspiel ist ein eigener kleiner Prozess, den Game Cheetah startet und beim Beenden wieder schließt. Nutze Speicheränderungen nur bei eigenen Einzelspieler- oder Offline-Spielen.
+tutorial-why = Worum geht es?
+tutorial-how = So geht's
+tutorial-game-title = Übungsspiel
+tutorial-health = Lebenspunkte: { $health } / { $max }
+tutorial-damage-button = Schaden nehmen
+tutorial-heal-button = Heiltrank trinken
+tutorial-heal-full = Die Lebenspunkte sind schon voll.
+tutorial-game-rules = Schaden: −7 bis −23 · Heiltrank: +10 bis +30 (höchstens 100) · Bei 0 Lebenspunkten startest du mit 100 neu.
+tutorial-progress = Schritt { $step } von { $total }
+tutorial-intro-title = Grundlagen
+tutorial-search-title = Erste Suche
+tutorial-narrow-title = Eingrenzen
+tutorial-edit-title = Wert ändern
+tutorial-freeze-title = Einfrieren
+tutorial-test-title = Einfrieren testen
+tutorial-complete-title = Geschafft!
+tutorial-intro-text =
+    Spiele speichern Zahlen wie Lebenspunkte, Munition oder Gold im Arbeitsspeicher, jede an einer festen Stelle: ihrer Adresse. Game Cheetah sucht dort nach der Zahl, die du gerade im Spiel siehst.
+
+    Dieselbe Zahl steht aber meist an Hunderten Stellen. Deshalb änderst du den Wert im Spiel und suchst erneut. Nur Adressen, die sich mitverändert haben, bleiben übrig.
+
+    Oben siehst du das Übungsspiel; es ist bereits verbunden. Links liegt der normale Suchbereich. Dort übst du in sechs kurzen Schritten: suchen, eingrenzen, Wert ändern und einfrieren.
+tutorial-begin = Los geht's
+tutorial-search-why =
+    Die erste Suche liest den gesamten Speicher des Spiels und merkt sich jede Stelle, an der die gesuchte Zahl steht. Jede dieser Stellen ist ein Kandidat.
+
+    Dafür musst du wissen, wie die Zahl gespeichert ist, also ihren Datentyp. Lebenspunkte sind in den meisten Spielen ganze Zahlen, meistens vom Typ „Int (4 Bytes)“.
+tutorial-search-how =
+    1. Prüfe rechts neben dem Eingabefeld, dass „Int“ als Typ ausgewählt ist.
+    2. Gib im Feld „Wert:“ die aktuellen Lebenspunkte aus dem Übungsspiel ein.
+    3. Klicke auf „Suchen“ oder drücke Enter.
+tutorial-search-status = Aktuelle Lebenspunkte: { $health }. Suche also nach { $health }.
+tutorial-narrow-why =
+    Jetzt hast du viele Kandidaten. Die meisten enthalten nur zufällig dieselbe Zahl. Die echte Adresse erkennst du daran, dass sie sich ändert, wenn sich die Lebenspunkte im Spiel ändern.
+
+    „Eingrenzen“ durchsucht nicht mehr den ganzen Speicher, sondern prüft nur die bisherigen Kandidaten. Es behält nur die, die jetzt den neuen Wert enthalten. Jede Runde wird die Liste kürzer.
+tutorial-narrow-how =
+    1. Ändere die Lebenspunkte im Übungsspiel: Klicke auf „Schaden nehmen“ oder „Heiltrank trinken“.
+    2. Ersetze im selben Such-Tab den alten Wert durch die neuen Lebenspunkte.
+    3. Klicke auf „Eingrenzen“.
+    4. Wiederhole die Schritte 1 bis 3, bis höchstens zwei Kandidaten übrig sind.
+
+    Bleiben nach einer Runde mehrere Treffer mit genau demselben Wert übrig, sind das oft Kopien, zum Beispiel für die Anzeige. Erst eine weitere Änderung trennt sie von den echten Lebenspunkten.
+tutorial-narrow-status = Lebenspunkte jetzt: { $health } · Kandidaten: { $count } (Ziel: höchstens { $goal })
+tutorial-skip-hint = Manche Treffer im Speicher ändern sich zufällig mit. Wenn sich die Liste nicht weiter verkürzt, kannst du mit den verbleibenden Kandidaten weitermachen.
+tutorial-skip = Mit diesen Kandidaten weitermachen
+tutorial-edit-why =
+    Jetzt weißt du, wo die Lebenspunkte gespeichert sind. Schreibst du dort einen anderen Wert hinein, übernimmt das Spiel ihn, denn es liest die Lebenspunkte genau von dieser Adresse.
+
+    Bleiben zwei Kandidaten übrig, ist einer oft nur eine Kopie, zum Beispiel für die Anzeige. Das Spiel rechnet nicht damit; eine Änderung dort hat keine Wirkung.
+tutorial-edit-how =
+    1. Klicke in der Ergebnistabelle in der Spalte „Wert“ auf die Zahl eines Treffers.
+    2. Ersetze sie durch 999 und drücke Enter.
+    3. Schau auf die Lebensleiste des Übungsspiels. Zeigt sie 999, hast du die richtige Adresse. Wenn nicht, probiere den nächsten Treffer.
+tutorial-edit-status = Verbleibende Kandidaten: { $count }
+tutorial-freeze-why = Spiele ändern ihre Werte ständig. Nach dem nächsten Treffer wären die 999 Lebenspunkte wieder weg. Beim Einfrieren schreibt Game Cheetah den Wert mehrmals pro Sekunde zurück und macht Änderungen durch das Spiel sofort rückgängig.
+tutorial-freeze-how =
+    1. Suche in der Ergebnistabelle den Treffer, mit dem du die Lebenspunkte auf 999 gesetzt hast.
+    2. Klicke in seiner Spalte „Eingefroren“ auf die Schneeflocke. Sie wird farbig hervorgehoben.
+
+    Eingefroren wird der Wert, der beim Klicken gerade im Speicher steht.
+tutorial-test-why = Eine hervorgehobene Schneeflocke beweist noch nichts. Entscheidend ist, was im Spiel passiert. Teste deshalb immer, ob der eingefrorene Wert wirklich gehalten wird.
+tutorial-test-how =
+    1. Klicke im Übungsspiel auf „Schaden nehmen“.
+    2. Beobachte die Lebensleiste. Sie fällt kurz und springt sofort wieder auf 999.
+tutorial-test-status = Prüfe, ob die Lebenspunkte wieder 999 erreichen …
+tutorial-complete-text = Du hast den kompletten Ablauf geschafft: einen Wert gesucht, die Kandidaten schrittweise eingegrenzt, den echten Wert von einer Kopie unterschieden, ihn geändert und das Einfrieren überprüft. Genau so gehst du auch in echten Spielen vor.
+tutorial-tips-title = Tipps für echte Spiele
+tutorial-tips =
+    • Findest du nichts, probiere einen anderen Datentyp. Manche Spiele speichern Werte als „Float (4 Bytes)“, also als Kommazahl.
+    • Kennst du die genaue Zahl nicht, zum Beispiel bei einer Lebensleiste ohne Zahl, nutze den Typ „Unbekannt“ und grenze mit „gestiegen“ oder „gesunken“ ein.
+    • Nach einem Neustart des Spiels liegen Werte meist an anderen Adressen. Suche dann einfach erneut.
+    • Lege für jeden Wert einen eigenen Such-Tab an, zum Beispiel einen für Gold und einen für Munition.
+tutorial-glossary-title = Begriffe erklärt
+tutorial-glossary =
+    Adresse: Die Stelle im Arbeitsspeicher, an der ein Wert liegt, angezeigt als Hexadezimalzahl.
+    Wert: Die Zahl, die gerade an dieser Adresse steht.
+    Datentyp: Wie ein Wert gespeichert ist. Int ist eine ganze Zahl aus 4 Bytes, Float eine Kommazahl aus 4 Bytes.
+    Kandidat: Eine Adresse, die bisher zu allen Suchen gepasst hat.
+    Eingrenzen: Nur die bisherigen Kandidaten mit einem neuen Wert erneut prüfen.
+    Einfrieren: Einen Wert laufend zurückschreiben, damit das Spiel ihn nicht ändern kann.
+tutorial-hint-search-missed = Die Lebenspunkte sind nicht unter den Treffern. Prüfe, ob der Typ „Int“ ist und ob du genau die aktuellen Lebenspunkte eingegeben hast. Klicke dann auf „Suche zurücksetzen“ und suche erneut.
+tutorial-hint-narrow-lost = Hoppla, die echte Adresse wurde aussortiert. Das passiert, wenn der eingegebene Wert nicht den aktuellen Lebenspunkten entspricht. Klicke auf „Rückgängig“ und grenze mit dem aktuellen Wert erneut ein.
+tutorial-hint-nothing-removed = Es wurde nichts aussortiert, weil sich der Wert seit der letzten Suche nicht geändert hat. Ändere zuerst die Lebenspunkte im Übungsspiel und grenze dann mit dem neuen Wert ein.
+tutorial-hint-tab-closed = Der Such-Tab dieser Lektion wurde geschlossen. Starte einfach eine neue Suche mit den aktuellen Lebenspunkten.
+tutorial-hint-copy-edited = Du hast eine Kopie geändert: Sie zeigt jetzt 999, die echten Lebenspunkte im Spiel haben sich aber nicht geändert. Spiele speichern Werte oft mehrfach. Setze den anderen Kandidaten auf 999.
+tutorial-hint-wrong-freeze = Du hast eine andere Adresse eingefroren. Friere den Treffer ein, mit dem du die Lebenspunkte im Spiel auf 999 gesetzt hast.
+tutorial-hint-freeze-value = Die Lebenspunkte sind nicht mehr 999. Setze den richtigen Treffer zuerst wieder auf 999 und friere ihn dann ein. Ist er schon eingefroren, löse ihn mit einem Klick auf die Schneeflocke.
+tutorial-hint-freeze-failed = Die Lebenspunkte sind nicht auf 999 zurückgesprungen. Prüfe, ob die Schneeflocke beim richtigen Treffer aktiv ist, und teste noch einmal.
 error-process-title = Prozess nicht mehr verfügbar.
 error-process-help = Spiel starten und erneut auswählen.
 error-access-title = Zugriff verweigert.

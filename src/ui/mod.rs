@@ -13,6 +13,7 @@ pub mod process_selection;
 pub(crate) mod refresh;
 pub(crate) mod search_workspace;
 pub mod theme;
+pub(crate) mod tutorial;
 pub mod value_cache;
 
 pub const APP_NAME: &str = "Game Cheetah";

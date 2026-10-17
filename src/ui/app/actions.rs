@@ -15,6 +15,9 @@ impl App {
     // ---- Process attach / detach ---------------------------------------
 
     pub fn attach_action(&mut self) {
+        if self.tutorial.is_some() {
+            self.back_to_main_menu();
+        }
         self.cancel_cheat_table_save();
         self.pointer_scanner.cancel();
         self.state.update_process_data();
@@ -25,6 +28,9 @@ impl App {
     }
 
     pub fn select_process(&mut self, process: &crate::ProcessInfo) {
+        if self.tutorial.is_some() {
+            self.back_to_main_menu();
+        }
         self.cancel_cheat_table_save();
         self.pointer_scanner.cancel();
         self.clear_result_interaction();
@@ -41,6 +47,8 @@ impl App {
         self.cancel_cheat_table_save();
         self.automatic_save_notice = None;
         self.pointer_scanner.cancel();
+        self.state.detach();
+        self.tutorial = None;
         self.app_state = AppState::MainWindow;
         self.state = GameCheetahEngine::default();
         self.search_workspace = Default::default();

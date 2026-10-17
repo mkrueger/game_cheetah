@@ -17,6 +17,7 @@ pub mod pointer_scan;
 pub mod user_settings;
 pub use user_settings::*;
 
+pub mod tutorial;
 pub mod update_check;
 
 pub mod search_value;

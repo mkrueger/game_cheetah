@@ -58,8 +58,14 @@ fn icon_button(ui: &mut egui::Ui, visible: bool, glyph: &str, tooltip: String) -
 }
 
 pub fn view_in_process(app: &mut App, ui: &mut egui::Ui) {
+    let was_tutorial = app.tutorial.is_some();
     app.finish_refinement_ui(ui.ctx());
     top_bar(app, ui);
+    crate::ui::tutorial::show(app, ui);
+    if was_tutorial && app.tutorial.is_none() {
+        crate::ui::main_window::view_main_window(app, ui);
+        return;
+    }
     crate::ui::auto_save::show(app, ui);
     error_bar(app, ui);
     egui::CentralPanel::default()

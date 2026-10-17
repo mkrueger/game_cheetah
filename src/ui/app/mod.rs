@@ -57,6 +57,7 @@ pub struct App {
     last_address_refresh: Instant,
     pub app_state: AppState,
     pub state: GameCheetahEngine,
+    pub(crate) tutorial: Option<crate::ui::tutorial::Tutorial>,
     pub(crate) search_workspace: crate::ui::search_workspace::SearchWorkspace,
 
     pub renaming_search_index: Option<usize>,
@@ -175,6 +176,7 @@ impl Default for App {
             last_address_refresh: Instant::now(),
             app_state: AppState::default(),
             state: GameCheetahEngine::default(),
+            tutorial: None,
             search_workspace: Default::default(),
             renaming_search_index: None,
             rename_search_text: String::new(),
