@@ -462,7 +462,7 @@ empty result; individually unreadable regions or candidates may still be skipped
 
 ## Video demo
 
-[![Watch the video](https://img.youtube.com/vi/ng_1LBaUS48/maxresdefault.jpg)](https://youtu.be/ng_1LBaUS48)
+[![Watch the video](https://img.youtube.com/vi/VQ6Y8DgXUNc/maxresdefault.jpg)](https://youtu.be/VQ6Y8DgXUNc)
 
 ## Installation
 

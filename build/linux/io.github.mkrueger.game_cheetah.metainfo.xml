@@ -83,6 +83,12 @@
   </requires>
 
   <releases>
+    <release version="0.7.5" date="2026-10-17">
+      <url type="details">https://github.com/mkrueger/game_cheetah/releases/tag/v0.7.5</url>
+      <description>
+        <p>Added an interactive tutorial with a practice game, a new application icon, and a redesigned main menu and process selection dialog.</p>
+      </description>
+    </release>
     <release version="0.7.4" date="2026-10-15">
       <url type="details">https://github.com/mkrueger/game_cheetah/releases/tag/v0.7.4</url>
       <description>

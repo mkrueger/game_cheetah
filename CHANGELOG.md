@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-10-17
+
 ### Added
 
 - Interactive tutorial in the main menu. A side panel guides new users through
@@ -35,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recomputes 10 keyframes per second and blends between them, averaging about
   0.7 ms per frame.
 
+- New README demo video showing parallel searches in Heroes of Might and Magic:
+  Olden Era and live editing in FTL.
 - Polished process selection dialog: a search field with an icon and inline
   clear button, a live auto-refresh indicator, colored initial avatars per
   executable, compact memory usage bars, group count pills, tree guides for
