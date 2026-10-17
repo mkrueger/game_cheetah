@@ -433,4 +433,30 @@ mod panel {
         ui.click(&tr("close-button"));
         assert_eq!(ui.app.state.pid, 0);
     }
+
+    #[test]
+    fn header_and_exit_button_fit_at_the_default_window_size() {
+        let ctx = egui::Context::default();
+        game_cheetah::ui::theme::apply(&ctx);
+        let mut app = App::default();
+        app.start_tutorial_with(Path::new(EXE), Lesson::KnownValue);
+        let mut ui = Ui { ctx, app };
+        let tr = |id: &str| game_cheetah::LANGUAGE_LOADER.get(id);
+        let texts = ui.settle();
+        let rect = |label: &str| texts.iter().find(|(text, _)| text == label).unwrap_or_else(|| panic!("{label:?} not shown")).1;
+
+        let known = rect(&tr("tutorial-lesson-known"));
+        let bar = rect(&tr("tutorial-lesson-bar"));
+        assert_eq!(known.center().y, bar.center().y, "both lessons fit on one row");
+        // The panel ends 14 px before the window edge; the restart icon takes 30 px.
+        assert!(bar.right() <= 1100.0 - 14.0 - 30.0, "lesson tab runs into the restart icon: {bar:?}");
+        assert!(!texts.iter().any(|(text, _)| *text == tr("tutorial-restart")), "restart is an icon");
+
+        let exit = rect(&tr("tutorial-exit"));
+        assert!(exit.bottom() <= 720.0 - 8.0, "exit button is cut off: {exit:?}");
+        // Pinned: still visible while the lesson text is long.
+        ui.click(&tr("tutorial-begin"));
+        let texts = ui.settle();
+        assert!(texts.iter().any(|(text, rect)| *text == tr("tutorial-exit") && rect.bottom() <= 712.0));
+    }
 }

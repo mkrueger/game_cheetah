@@ -356,6 +356,15 @@ pub(crate) fn show(app: &mut App, ui: &mut egui::Ui) {
         .max_size(600.0)
         .frame(egui::Frame::new().fill(ui.visuals().panel_fill).inner_margin(egui::Margin::symmetric(14, 12)))
         .show(ui, |ui| {
+            // Pinned, so ending the tutorial never scrolls out of view.
+            egui::Panel::bottom("tutorial_footer")
+                .show_separator_line(false)
+                .frame(egui::Frame::new().inner_margin(egui::Margin { top: 8, ..Default::default() }))
+                .show(ui, |ui| {
+                    if ui.button(fl!(crate::LANGUAGE_LOADER, "tutorial-exit")).clicked() {
+                        action = Some(Action::Exit);
+                    }
+                });
             egui::ScrollArea::vertical()
                 .id_salt("tutorial_scroll")
                 .auto_shrink([false, false])
@@ -370,18 +379,13 @@ pub(crate) fn show(app: &mut App, ui: &mut egui::Ui) {
                         return;
                     }
                     game_card(ui, tutorial);
-                    ui.add_space(10.0);
+                    ui.add_space(8.0);
                     step_card(ui, tutorial, &mut action);
-                    ui.add_space(12.0);
+                    ui.add_space(6.0);
                     egui::CollapsingHeader::new(fl!(crate::LANGUAGE_LOADER, "tutorial-glossary-title"))
                         .id_salt("tutorial_glossary")
                         .show(ui, |ui| ui.label(fl!(crate::LANGUAGE_LOADER, "tutorial-glossary")));
-                    ui.add_space(8.0);
                     ui.label(egui::RichText::new(fl!(crate::LANGUAGE_LOADER, "tutorial-safety")).small().weak());
-                    ui.add_space(8.0);
-                    if ui.button(fl!(crate::LANGUAGE_LOADER, "tutorial-exit")).clicked() {
-                        action = Some(Action::Exit);
-                    }
                 });
         });
     match action {
@@ -406,29 +410,61 @@ pub(crate) fn show(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
-/// Lesson choice and restart share one row to keep the instructions visible;
-/// the tutorial ends via the button at the bottom or the top bar's Close.
+/// Lesson choice and restart share one row to keep the instructions visible.
 fn header(ui: &mut egui::Ui, lesson: Lesson, action: &mut Option<Action>) {
-    ui.horizontal(|ui| {
-        for (option, label) in [
-            (Lesson::KnownValue, fl!(crate::LANGUAGE_LOADER, "tutorial-lesson-known")),
-            (Lesson::HealthBar, fl!(crate::LANGUAGE_LOADER, "tutorial-lesson-bar")),
-        ] {
-            let response = ui.selectable_label(option == lesson, egui::RichText::new(label).strong());
-            if option != lesson && response.on_hover_text(fl!(crate::LANGUAGE_LOADER, "tutorial-lesson-switch")).clicked() {
-                *action = Some(Action::Start(option));
-            }
+    // A bare right-to-left layout would claim the scroll area's whole height.
+    let row = egui::vec2(ui.available_width(), 30.0);
+    ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        if restart_button(ui)
+            .on_hover_text(format!(
+                "{}\n{}",
+                fl!(crate::LANGUAGE_LOADER, "tutorial-restart"),
+                fl!(crate::LANGUAGE_LOADER, "tutorial-lesson-switch")
+            ))
+            .clicked()
+        {
+            *action = Some(Action::Start(lesson));
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .button(fl!(crate::LANGUAGE_LOADER, "tutorial-restart"))
-                .on_hover_text(fl!(crate::LANGUAGE_LOADER, "tutorial-lesson-switch"))
-                .clicked()
-            {
-                *action = Some(Action::Start(lesson));
+        // The lessons take the remaining width and wrap in narrow panels.
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true), |ui| {
+            for (option, label) in [
+                (Lesson::KnownValue, fl!(crate::LANGUAGE_LOADER, "tutorial-lesson-known")),
+                (Lesson::HealthBar, fl!(crate::LANGUAGE_LOADER, "tutorial-lesson-bar")),
+            ] {
+                let response = ui.selectable_label(option == lesson, egui::RichText::new(label).strong());
+                if option != lesson && response.on_hover_text(fl!(crate::LANGUAGE_LOADER, "tutorial-lesson-switch")).clicked() {
+                    *action = Some(Action::Start(option));
+                }
             }
         });
     });
+}
+
+/// Circular-arrow icon, painted because the bundled fonts lack arrow glyphs.
+fn restart_button(ui: &mut egui::Ui) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, fl!(crate::LANGUAGE_LOADER, "tutorial-restart")));
+    let visuals = ui.style().interact(&response);
+    if response.hovered() || response.has_focus() {
+        ui.painter().rect_filled(rect, egui::CornerRadius::same(6), visuals.weak_bg_fill);
+    }
+    let stroke = egui::Stroke::new(1.8, visuals.fg_stroke.color);
+    let center = rect.center();
+    let radius = 7.5;
+    // Clockwise arc (screen y points down) with a gap at the top right.
+    let (start, end) = (-1.2_f32, -1.2 + 5.2);
+    let point = |angle: f32| center + radius * egui::vec2(angle.cos(), angle.sin());
+    let arc: Vec<_> = (0..=24).map(|index| point(start + (end - start) * index as f32 / 24.0)).collect();
+    ui.painter().add(egui::Shape::line(arc, stroke));
+    let tip = point(end);
+    let along = egui::vec2(-end.sin(), end.cos());
+    let across = egui::vec2(end.cos(), end.sin());
+    ui.painter().add(egui::Shape::convex_polygon(
+        vec![tip + along * 3.5, tip + across * 3.5 - along * 1.5, tip - across * 3.5 - along * 1.5],
+        stroke.color,
+        egui::Stroke::NONE,
+    ));
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 fn card(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
