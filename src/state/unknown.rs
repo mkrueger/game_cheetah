@@ -37,7 +37,7 @@ pub fn compare_values(old_bytes: &[u8], new_bytes: &[u8], search_type: SearchTyp
                 UnknownComparison::Unchanged => new == old,
             }
         }
-        SearchType::Int => {
+        SearchType::Int | SearchType::IntScaled10 | SearchType::IntScaled100 => {
             let old = i32::from_le_bytes([old_bytes[0], old_bytes[1], old_bytes[2], old_bytes[3]]);
             let new = i32::from_le_bytes([new_bytes[0], new_bytes[1], new_bytes[2], new_bytes[3]]);
             match comparison {

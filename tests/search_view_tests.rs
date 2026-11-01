@@ -629,11 +629,15 @@ fn click(app: &mut App, ctx: &Context, size: Vec2, pos: Pos2) {
 }
 
 fn press_key(app: &mut App, ctx: &Context, key: Key) {
+    press_key_at_size(app, ctx, LARGE, key);
+}
+
+fn press_key_at_size(app: &mut App, ctx: &Context, size: Vec2, key: Key) {
     for pressed in [true, false] {
         frame(
             app,
             ctx,
-            LARGE,
+            size,
             vec![Event::Key {
                 key,
                 physical_key: None,
@@ -1915,7 +1919,7 @@ fn only_unknown_shows_numeric_controls_and_switching_back_preserves_bounds() {
             let search = &mut app.state.searches[0];
             search.show_numeric_filter = true;
             search.type_filter_enabled = true;
-            search.filter_types = [false, false, false, true, false, false];
+            search.filter_types = [false, false, false, true, false, false, false, false];
             search.stable_filter_enabled = true;
             search.numeric_comparison = game_cheetah::NumericComparison::Between;
             search.numeric_filter_lower = "17".to_owned();
@@ -1953,9 +1957,10 @@ fn only_unknown_shows_numeric_controls_and_switching_back_preserves_bounds() {
                     assert_single_line_visible(&output, &label, size);
                 }
                 // The dropdown and result rows also paint compact type labels.
-                for (chip_type, label) in SearchType::NUMERIC_TYPES
-                    .into_iter()
-                    .zip(["UInt8", "Int16", "Int32", "Int64", "Float32", "Float64"])
+                for (chip_type, label) in
+                    SearchType::NUMERIC_TYPES
+                        .into_iter()
+                        .zip(["UInt8", "Int16", "Int32", "Int64", "Float32", "Float64", "Int32 ×10", "Int32 ×100"])
                 {
                     if types_visible {
                         text_rect(&output, label);
@@ -1970,7 +1975,7 @@ fn only_unknown_shows_numeric_controls_and_switching_back_preserves_bounds() {
                 assert_eq!(search.numeric_filter_lower, "17");
                 assert_eq!(search.numeric_filter_upper, "987");
                 assert!(search.type_filter_enabled);
-                assert_eq!(search.filter_types, [false, false, false, true, false, false]);
+                assert_eq!(search.filter_types, [false, false, false, true, false, false, false, false]);
                 let expected_types = if types_visible {
                     vec![SearchType::Int64]
                 } else {
@@ -1994,7 +1999,11 @@ fn hidden_numeric_defaults_cannot_enable_apply_without_independent_criteria() {
         let ctx = context();
         for lower in ["0", "invalid hidden number"] {
             app.state.searches[0].numeric_filter_lower = lower.to_owned();
-            for selection in [[true; 6], [false; 6], [false, false, false, true, false, false]] {
+            for selection in [
+                [true; SearchType::NUMERIC_TYPES.len()],
+                [false; SearchType::NUMERIC_TYPES.len()],
+                [false, false, false, true, false, false, false, false],
+            ] {
                 app.state.searches[0].type_filter_enabled = ty != SearchType::Guess;
                 app.state.searches[0].filter_types = selection;
                 let output = settle(&mut app, &ctx, LARGE);
@@ -2098,11 +2107,11 @@ fn type_chips_and_filter_toggles_are_independent_and_empty_selection_cannot_appl
         LARGE,
         text_rect(&output, &fl!(LANGUAGE_LOADER, "result-filter-types-none")).center(),
     );
-    assert_eq!(app.state.searches[0].filter_types, [false; 6]);
+    assert_eq!(app.state.searches[0].filter_types, [false; SearchType::NUMERIC_TYPES.len()]);
     let output = settle(&mut app, &ctx, LARGE);
     text_rect(&output, &fl!(LANGUAGE_LOADER, "result-filter-no-types"));
     click(&mut app, &ctx, LARGE, text_rect(&output, "Int64").center());
-    assert_eq!(app.state.searches[0].filter_types, [false, false, false, true, false, false]);
+    assert_eq!(app.state.searches[0].filter_types, [false, false, false, true, false, false, false, false]);
     assert!(app.state.searches[0].numeric_filter_enabled);
     app.state.searches[0].numeric_filter_lower = "invalid".to_owned();
     assert!(app.state.searches[0].result_filter().is_ok());
@@ -2119,7 +2128,7 @@ fn type_chips_and_filter_toggles_are_independent_and_empty_selection_cannot_appl
     assert!(!app.state.searches[1].type_filter_enabled);
     app.switch_search(0);
     assert!(app.state.searches[0].stable_filter_enabled);
-    assert_eq!(app.state.searches[0].filter_types, [false, false, false, true, false, false]);
+    assert_eq!(app.state.searches[0].filter_types, [false, false, false, true, false, false, false, false]);
 }
 
 #[cfg(target_os = "linux")]
@@ -2823,6 +2832,42 @@ fn own_value_app(value: &mut i32) -> App {
     app.state.pid = std::process::id() as _;
     app.state.searches[0].set_cached_results(vec![SearchResult::new(value as *mut i32 as usize, SearchType::Int)]);
     app
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn scaled_int_rows_mark_the_encoding_and_edit_game_values() {
+    for (ty, factor) in [(SearchType::IntScaled10, 10), (SearchType::IntScaled100, 100)] {
+        for size in SIZES {
+            let mut value = Box::new(918_i32 * factor);
+            let address = &*value as *const i32 as usize;
+            let mut app = own_value_app(&mut value);
+            app.confirm_value_writes = true;
+            app.state.searches[0].search_type = SearchType::Guess;
+            app.state.searches[0].set_cached_results(vec![SearchResult::new(address, ty)]);
+            let ctx = context();
+            let output = settle(&mut app, &ctx, size);
+            assert_single_line_visible(&output, &format!("Int32 ×{factor}"), size);
+            assert_single_line_visible(&output, "918", size);
+            assert_text_absent(&output, &(918 * factor).to_string());
+            click(&mut app, &ctx, size, text_rect(&output, "918").center());
+            assert_eq!(app.editing_result.as_ref().unwrap().1, "918");
+            // Replace the first digit through the actual result editor.
+            press_key_at_size(&mut app, &ctx, size, Key::Home);
+            press_key_at_size(&mut app, &ctx, size, Key::Delete);
+            frame(&mut app, &ctx, size, vec![Event::Text("1".into())]);
+            assert_eq!(*value, 918 * factor);
+            press_key_at_size(&mut app, &ctx, size, Key::Enter);
+            assert_eq!(*value, 118 * factor);
+            assert_single_line_visible(&settle(&mut app, &ctx, size), "118", size);
+
+            // A manual reinterpretation in a concrete-type search has no type column.
+            app.state.searches[0].search_type = SearchType::Int;
+            let output = settle(&mut app, &ctx, size);
+            assert_single_line_visible(&output, &format!("×{factor}"), size);
+            assert_single_line_visible(&output, "118", size);
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]

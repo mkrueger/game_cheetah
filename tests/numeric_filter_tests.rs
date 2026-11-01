@@ -13,6 +13,8 @@ fn every_operator_works_for_every_numeric_type() {
         SearchType::Int64,
         SearchType::Float,
         SearchType::Double,
+        SearchType::IntScaled10,
+        SearchType::IntScaled100,
     ] {
         for (op, expected) in [
             (Op::Equal, vec![5]),
@@ -26,6 +28,25 @@ fn every_operator_works_for_every_numeric_type() {
             let actual: Vec<_> = (4..=7).filter(|n| matches(op, "5", "6", ty, &n.to_string())).collect();
             assert_eq!(actual, expected, "{ty:?} {op:?}");
         }
+    }
+}
+
+#[test]
+fn scaled_int_predicates_compare_displayed_values() {
+    for (ty, min, max) in [
+        (SearchType::IntScaled10, "-214748364.8", "214748364.7"),
+        (SearchType::IntScaled100, "-21474836.48", "21474836.47"),
+    ] {
+        for text in ["918", "-0.1", "0.1", min, max] {
+            assert!(matches(Op::Equal, text, "", ty, text), "{text}");
+        }
+        assert!(!matches(Op::Equal, "9180", "", ty, "918"));
+        assert!(matches(Op::Between, "917.9", "918.1", ty, "918"));
+        assert!(matches(Op::Less, "0", "", ty, "-0.1"));
+        assert!(matches(Op::Greater, "0.01", "", ty, "0.1"));
+    }
+    for text in ["0.01", "-0.01", "918.23"] {
+        assert!(matches(Op::Equal, text, "", SearchType::IntScaled100, text));
     }
 }
 
@@ -192,7 +213,7 @@ mod own_process {
                 search.numeric_comparison = Op::Greater;
                 search.numeric_filter_lower = lower.to_owned();
                 search.type_filter_enabled = true;
-                search.filter_types = [false, false, false, true, false, false];
+                search.filter_types = [false, false, false, true, false, false, false, false];
                 app.apply_numeric_filter();
                 assert!(app.state.current_error().is_none(), "{ty:?}: {lower}");
                 let results = app.state.searches[0].collect_results();
@@ -211,9 +232,9 @@ mod own_process {
         // More than the visible rows; stable filtering must read every candidate.
         let values = vec![-7_i64; 4096];
         for (ty, selected_types) in [
-            (SearchType::Unknown, [true; 6]),
-            (SearchType::Int64, [false; 6]),
-            (SearchType::Int64, [true, false, false, false, false, false]),
+            (SearchType::Unknown, [true; SearchType::NUMERIC_TYPES.len()]),
+            (SearchType::Int64, [false; SearchType::NUMERIC_TYPES.len()]),
+            (SearchType::Int64, [true, false, false, false, false, false, false, false]),
         ] {
             let mut app = App::default();
             app.state.pid = std::process::id() as process_memory::Pid;
@@ -311,7 +332,7 @@ fn hidden_numeric_fields_are_ignored_and_do_not_count_as_criteria() {
                 "{ty:?}: {lower}, {upper}"
             );
             search.type_filter_enabled = true;
-            search.filter_types = [false, false, false, true, false, false];
+            search.filter_types = [false, false, false, true, false, false, false, false];
             if ty == SearchType::Guess {
                 let filter = search.result_filter().unwrap();
                 assert!(filter.numeric.is_none());
@@ -368,7 +389,11 @@ fn returning_to_unknown_restores_numeric_bounds_and_validation() {
 #[test]
 fn hidden_type_selections_are_ignored_for_stability_and_restored_for_guess_and_unknown() {
     for ty in SearchType::NUMERIC_TYPES {
-        for selection in [[false; 6], [false, false, false, true, false, false], [true; 6]] {
+        for selection in [
+            [false; SearchType::NUMERIC_TYPES.len()],
+            [false, false, false, true, false, false, false, false],
+            [true; SearchType::NUMERIC_TYPES.len()],
+        ] {
             let mut search = game_cheetah::SearchContext::new("filter".to_owned());
             search.numeric_filter_enabled = false;
             search.type_filter_enabled = true;
@@ -389,7 +414,7 @@ fn hidden_type_selections_are_ignored_for_stability_and_restored_for_guess_and_u
                 search.search_type = visible_type;
                 assert!(search.type_filter_enabled);
                 assert_eq!(search.filter_types, selection);
-                if selection == [false; 6] {
+                if selection == [false; SearchType::NUMERIC_TYPES.len()] {
                     assert_eq!(
                         search.result_filter().unwrap_err(),
                         i18n_embed_fl::fl!(game_cheetah::LANGUAGE_LOADER, "result-filter-no-types")

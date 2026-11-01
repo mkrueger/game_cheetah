@@ -661,6 +661,45 @@ mod tests {
 
     const ADDRESS: usize = 0x1234;
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn scaled_ints_edit_and_freeze_encoded_bytes_without_touching_neighbors() {
+        for (ty, factor) in [(SearchType::IntScaled10, 10_i32), (SearchType::IntScaled100, 100)] {
+            for all in [false, true] {
+                let mut values = Box::new([918 * factor, 1234567]);
+                let address = values.as_mut_ptr() as usize;
+                let mut app = App::default();
+                app.state.pid = std::process::id() as _;
+                app.state.searches[0].set_cached_results(vec![SearchResult::new(address, ty)]);
+                let (tx, rx) = crossbeam_channel::unbounded();
+                app.state.freeze_sender = tx;
+                if all {
+                    app.toggle_freeze_all();
+                } else {
+                    app.toggle_freeze(0);
+                }
+                let frozen = rx.try_recv().unwrap();
+                assert_eq!(frozen.addr, address);
+                assert_eq!(frozen.value.0, ty);
+                assert_eq!(frozen.value.1, (918 * factor).to_le_bytes());
+                assert!(matches!(frozen.msg, MessageCommand::Freeze));
+                for (text, raw) in [("1000", 1000 * factor), ("-0.1", -factor / 10)] {
+                    assert!(app.commit_result_value(0, text));
+                    assert_eq!(*values, [raw, 1234567]);
+                    let frozen = rx.try_recv().unwrap();
+                    assert_eq!(frozen.value.0, ty);
+                    assert_eq!(frozen.value.1, raw.to_le_bytes());
+                }
+                assert!(!app.commit_result_value(0, &(i32::MAX / factor + 1).to_string()));
+                assert_eq!(*values, [-factor / 10, 1234567]);
+                assert!(app.state.current_error().is_some());
+                assert!(rx.try_recv().is_err());
+                app.toggle_freeze(0);
+                assert!(matches!(rx.try_recv().unwrap().msg, MessageCommand::Unfreeze));
+            }
+        }
+    }
+
     fn shared_freeze_app() -> (App, crossbeam_channel::Receiver<FreezeMessage>) {
         let mut app = App::default();
         let (tx, rx) = crossbeam_channel::unbounded();

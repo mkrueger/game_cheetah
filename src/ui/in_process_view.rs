@@ -714,6 +714,7 @@ fn compact_type_label(search_type: SearchType) -> String {
         SearchType::Byte => "UInt8".to_owned(),
         SearchType::Short => "Int16".to_owned(),
         SearchType::Int => "Int32".to_owned(),
+        SearchType::IntScaled10 | SearchType::IntScaled100 => search_type.get_short_description_text(),
         SearchType::Int64 => "Int64".to_owned(),
         SearchType::Float => "Float32".to_owned(),
         SearchType::Double => "Float64".to_owned(),
@@ -1067,6 +1068,10 @@ fn result_table(app: &mut App, ui: &mut egui::Ui, active: bool) {
                 // the row into `app.editing_result`; otherwise the box
                 // displays the live value freshly read this frame.
                 row.col(|ui| {
+                    if !show_search_types && let Some(hint) = result.search_type.scaling_hint() {
+                        let label = if result.search_type == SearchType::IntScaled10 { "×10" } else { "×100" };
+                        ui.label(label).on_hover_text(hint);
+                    }
                     let cell_hovered = pointer_pos.is_some_and(|pos| ui.max_rect().contains(pos));
                     if is_selected {
                         ui.visuals_mut().override_text_color = Some(ui.visuals().selection.stroke.color);
@@ -1201,7 +1206,12 @@ fn result_table(app: &mut App, ui: &mut egui::Ui, active: bool) {
                         }
                         if ui
                             .add(egui::Label::new(label).selectable(false).sense(egui::Sense::click()))
-                            .on_hover_text(fl!(crate::LANGUAGE_LOADER, "check-result-type"))
+                            .on_hover_text(
+                                result
+                                    .search_type
+                                    .scaling_hint()
+                                    .unwrap_or_else(|| fl!(crate::LANGUAGE_LOADER, "check-result-type")),
+                            )
                             .clicked()
                         {
                             open_editor = Some(i);

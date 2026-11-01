@@ -214,7 +214,7 @@ pub struct SearchContext {
     pub numeric_filter_lower: String,
     pub numeric_filter_upper: String,
     pub type_filter_enabled: bool,
-    pub filter_types: [bool; 6],
+    pub filter_types: [bool; SearchType::NUMERIC_TYPES.len()],
     pub stable_filter_enabled: bool,
     pub stable_filter_seconds: u32,
     /// Dropping a tab also drops the only cancellation sender for its workers.
@@ -267,7 +267,7 @@ impl SearchContext {
             numeric_filter_lower: "0".to_owned(),
             numeric_filter_upper: String::new(),
             type_filter_enabled: false,
-            filter_types: [true; 6],
+            filter_types: [true; SearchType::NUMERIC_TYPES.len()],
             stable_filter_enabled: false,
             stable_filter_seconds: 3,
             task: None,

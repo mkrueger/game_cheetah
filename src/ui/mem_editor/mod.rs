@@ -155,6 +155,8 @@ const INSPECTOR_NUMERIC_TYPES: &[SearchType] = &[
     SearchType::Int64,
     SearchType::Float,
     SearchType::Double,
+    SearchType::IntScaled10,
+    SearchType::IntScaled100,
 ];
 
 impl InspectorKind {
@@ -187,7 +189,7 @@ impl InspectorKind {
         Some(match search_type {
             SearchType::Byte => InspectorKind::U8,
             SearchType::Short => InspectorKind::I16,
-            SearchType::Int => InspectorKind::I32,
+            SearchType::Int | SearchType::IntScaled10 | SearchType::IntScaled100 => InspectorKind::I32,
             SearchType::Int64 => InspectorKind::I64,
             SearchType::Float => InspectorKind::F32,
             SearchType::Double => InspectorKind::F64,
@@ -1045,9 +1047,11 @@ fn inspector_body(editor: &mut MemoryEditor, ui: &mut egui::Ui) -> Option<Search
                             ui.selectable_value(&mut selected, ty, ty.get_short_description_text());
                         }
                     });
-                    response
-                        .response
-                        .on_hover_text(fl!(crate::LANGUAGE_LOADER, "memory-editor-inspector-type-tooltip"));
+                    response.response.on_hover_text(
+                        current_type
+                            .scaling_hint()
+                            .unwrap_or_else(|| fl!(crate::LANGUAGE_LOADER, "memory-editor-inspector-type-tooltip")),
+                    );
                     if selected != current_type {
                         requested_type = Some(selected);
                     }

@@ -380,7 +380,15 @@ integer-range-error = Outside the range of { $kind } ({ $min } to { $max }). Che
 integer-input-error = Invalid integer: { $value }
 check-result-type = Check data type…
 type-width-warning = A type change reinterprets memory; it does not enlarge the game's variable. Writing a wider type can overwrite adjacent values.
-guess-type-hint = Tries Int32 plus Float32 and Float64. Int64 replaces Int32 only for integers outside −2147483648 through 2147483647. Select Int64 explicitly for small values in 64-bit variables. This does not identify the game's variable type.
+guess-type-hint = Tries Int32 plus Float32 and Float64, and Int32 ×10 and ×100 when representable (e.g. 918 stored as 9180 or 91800). Int64 replaces Int32 only for integers outside −2147483648 through 2147483647. Select Int64 explicitly for small values in 64-bit variables. These are possible interpretations, not detection of the game's variable type.
+int-scaled10-value-item = Int32 ×10 (4 bytes, scaled)
+int-scaled10-descr = Int32 ×10
+int-scaled10-hint = Possible ×10 encoding: memory stores ten times the displayed value. Search, edit and freeze using the displayed game value (918 means 9180 in memory). The memory editor shows and edits raw bytes and numbers without scaling.
+int-scaled10-input-error = Enter a value from -214748364.8 through 214748364.7 in steps of 0.1 for Int32 ×10.
+int-scaled100-value-item = Int32 ×100 (4 bytes, scaled)
+int-scaled100-descr = Int32 ×100
+int-scaled100-hint = Possible ×100 encoding: memory stores one hundred times the displayed value. Search, edit and freeze using the displayed game value (918 means 91800 in memory). The memory editor shows and edits raw bytes and numbers without scaling.
+int-scaled100-input-error = Enter a value from -21474836.48 through 21474836.47 in steps of 0.01 for Int32 ×100.
 
 guess-value-item = number (4-8 bytes)
 byte-value-item = byte (1 byte)

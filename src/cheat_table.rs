@@ -205,6 +205,27 @@ pub fn load_cheat_table_with_process(
 mod tests {
     use super::*;
 
+    #[test]
+    fn scaled_int_interpretations_survive_table_roundtrip_without_freezes() {
+        for (ty, raw) in [(SearchType::IntScaled10, 9180_i32), (SearchType::IntScaled100, 91800)] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("scaled.toml");
+            let mut engine = GameCheetahEngine::default();
+            engine.process_name = "test-game".into();
+            let search = &mut engine.searches[0];
+            search.set_cached_results(vec![SearchResult::new(0x1234, ty)]);
+            search.freezed_addresses.insert(0x1234);
+            save_cheat_table(&engine, &path).unwrap();
+            let loaded = load_cheat_table(&path, "test-game").unwrap();
+            let results = loaded[0].collect_results();
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].addr, 0x1234);
+            assert_eq!(results[0].search_type, ty);
+            assert!(loaded[0].freezed_addresses.is_empty());
+            assert_eq!(results[0].search_type.from_string("918").unwrap().1, raw.to_le_bytes());
+        }
+    }
+
     fn table_fixture() -> CheatTable {
         CheatTable {
             version: 2,

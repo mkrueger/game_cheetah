@@ -14,7 +14,9 @@ impl SearchValue {
         match self.0 {
             SearchType::Byte => self.1.first().map(|b| format!("0x{b:02X}")),
             SearchType::Short => self.fixed_bytes::<2>().map(|arr| format!("0x{:04X}", u16::from_le_bytes(arr))),
-            SearchType::Int => self.fixed_bytes::<4>().map(|arr| format!("0x{:08X}", u32::from_le_bytes(arr))),
+            SearchType::Int | SearchType::IntScaled10 | SearchType::IntScaled100 => {
+                self.fixed_bytes::<4>().map(|arr| format!("0x{:08X}", u32::from_le_bytes(arr)))
+            }
             SearchType::Int64 => self.fixed_bytes::<8>().map(|arr| format!("0x{:016X}", u64::from_le_bytes(arr))),
             SearchType::Float => self.fixed_bytes::<4>().map(|arr| format!("0x{:08X}", u32::from_le_bytes(arr))),
             SearchType::Double => self.fixed_bytes::<8>().map(|arr| format!("0x{:016X}", u64::from_le_bytes(arr))),
@@ -43,6 +45,8 @@ pub fn format_value(search_type: SearchType, bytes: &[u8]) -> Option<String> {
         SearchType::Byte => bytes.first().map(|b| b.to_string()),
         SearchType::Short => fixed_bytes::<2>(bytes).map(|arr| i16::from_le_bytes(arr).to_string()),
         SearchType::Int => fixed_bytes::<4>(bytes).map(|arr| i32::from_le_bytes(arr).to_string()),
+        SearchType::IntScaled10 => fixed_bytes::<4>(bytes).map(|arr| (f64::from(i32::from_le_bytes(arr)) / 10.0).to_string()),
+        SearchType::IntScaled100 => fixed_bytes::<4>(bytes).map(|arr| (f64::from(i32::from_le_bytes(arr)) / 100.0).to_string()),
         SearchType::Int64 => fixed_bytes::<8>(bytes).map(|arr| i64::from_le_bytes(arr).to_string()),
         SearchType::Float => fixed_bytes::<4>(bytes).map(|arr| f32::from_le_bytes(arr).to_string()),
         SearchType::Double => fixed_bytes::<8>(bytes).map(|arr| f64::from_le_bytes(arr).to_string()),

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Number searches also find Int32 values stored at ten or one hundred times the entered value.
+  Results are marked **Int32 ×10** or **Int32 ×100** and display the game value; narrowing, editing,
+  freezing, filters and saved cheat tables preserve the scaled interpretation.
+
 ## [0.7.5] - 2026-10-17
 
 ### Added

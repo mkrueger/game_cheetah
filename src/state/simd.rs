@@ -26,7 +26,7 @@ use wide::{f32x8, f64x4};
 pub(super) fn search_integers(memory_data: &[u8], search_data: &[u8], search_type: SearchType, start: usize) -> Vec<SearchResult> {
     let expected_len = match search_type {
         SearchType::Short => 2,
-        SearchType::Int => 4,
+        SearchType::Int | SearchType::IntScaled10 | SearchType::IntScaled100 => 4,
         SearchType::Int64 => 8,
         _ => return Vec::new(),
     };

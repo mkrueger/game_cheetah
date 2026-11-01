@@ -189,6 +189,21 @@ explicitly when searching for a small value known to occupy eight bytes. Guess i
 a heuristic, not reliable identification of the game's variable type; floating-point
 interpretations can still match the same address (for example for zero).
 
+**Number / Guess** also tries **Int32 ×10** and **Int32 ×100** when the input fits:
+searching for `918` finds four-byte integers containing `9180` or `91800`.
+Warcraft III resources use ×10. These candidates are visibly marked **Int32 ×10**
+or **Int32 ×100** in the result
+list, with a tooltip explaining the possible encoding. Values are displayed
+divided by the factor; narrowing and editing use that displayed game value, and freezing
+preserves its encoded bytes. For example, enter `1000` to write `10000` to memory.
+For ×100, the same input writes `100000`. Decimal tenths (×10) are supported
+exactly within -214748364.8 through 214748364.7, and hundredths (×100) within
+-21474836.48 through 21474836.47;
+other factors are not guessed. This remains a heuristic: confirm candidates by
+changing the value in the game. Explicit **Int32** searches remain unscaled.
+Saved cheat tables retain the interpretation. The memory editor deliberately
+continues to show and edit raw bytes and numbers without scaling.
+
 Float32 and Float64 matches use **Float search tolerance** from **Settings**. Choose
 **Number** to accept values that differ by less than a fixed amount, or **Percent**
 to accept a percentage of the entered value (0–50 %). The default, **Number ± 1**,
@@ -227,7 +242,7 @@ The numeric value filter excludes unreadable, non-numeric and non-finite values.
 
 Each filter can be enabled independently; enabled filters are combined:
 - **Data types** keeps only selected interpretations (UInt8, Int16, Int32, Int64,
-  Float32, Float64), without changing types or writing memory. Use **None** then
+  Float32, Float64, Int32 ×10, Int32 ×100), without changing types or writing memory. Use **None** then
   select a type to keep only that type.
 - **Stable values only** observes matching results for 3 seconds by default
   (adjustable from 1 to 30 seconds). Every observed byte change or failed read

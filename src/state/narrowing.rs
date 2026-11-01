@@ -7,7 +7,7 @@ use crate::FloatTolerance;
 // entire pages to be read. This is a grouping limit, not an OS page-size claim.
 const READ_WINDOW: usize = 4096;
 const MAX_GAP: usize = 64;
-const TYPE_COUNT: usize = SearchType::StringUtf16 as usize + 1;
+const TYPE_COUNT: usize = SearchType::IntScaled100 as usize + 1;
 
 enum Needle {
     Any { len: usize },

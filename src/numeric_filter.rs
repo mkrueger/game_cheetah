@@ -144,6 +144,8 @@ impl NumericFilter {
             SearchType::Byte if bytes.len() == 1 => Number::Integer(i64::from(bytes[0])),
             SearchType::Short if bytes.len() == 2 => Number::Integer(i64::from(i16::from_le_bytes(bytes.try_into().unwrap()))),
             SearchType::Int if bytes.len() == 4 => Number::Integer(i64::from(i32::from_le_bytes(bytes.try_into().unwrap()))),
+            SearchType::IntScaled10 if bytes.len() == 4 => Number::Float(f64::from(i32::from_le_bytes(bytes.try_into().unwrap())) / 10.0),
+            SearchType::IntScaled100 if bytes.len() == 4 => Number::Float(f64::from(i32::from_le_bytes(bytes.try_into().unwrap())) / 100.0),
             SearchType::Int64 if bytes.len() == 8 => Number::Integer(i64::from_le_bytes(bytes.try_into().unwrap())),
             SearchType::Float if bytes.len() == 4 => Number::Float(f64::from(f32::from_le_bytes(bytes.try_into().unwrap()))),
             SearchType::Double if bytes.len() == 8 => Number::Float(f64::from_le_bytes(bytes.try_into().unwrap())),

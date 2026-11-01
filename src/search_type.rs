@@ -16,6 +16,8 @@ pub enum SearchType {
     Unknown,
     String,
     StringUtf16,
+    IntScaled10,
+    IntScaled100,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -27,16 +29,39 @@ pub enum UnknownComparison {
 }
 
 impl SearchType {
-    pub const NUMERIC_TYPES: [Self; 6] = [Self::Byte, Self::Short, Self::Int, Self::Int64, Self::Float, Self::Double];
+    pub const NUMERIC_TYPES: [Self; 8] = [
+        Self::Byte,
+        Self::Short,
+        Self::Int,
+        Self::Int64,
+        Self::Float,
+        Self::Double,
+        Self::IntScaled10,
+        Self::IntScaled100,
+    ];
 
     /// Prefer Int32 whenever the input fits; trying Int64 as well would
     /// duplicate hits when the adjacent four bytes happen to be zero.
     /// This is a heuristic, not detection of the game's variable width.
     pub fn guess_types(text: &str) -> &'static [Self] {
         if text.parse::<i32>().is_ok() {
-            &[Self::Int, Self::Float, Self::Double]
+            if parse_scaled_int(text, 2).is_some() {
+                &[Self::Int, Self::Float, Self::Double, Self::IntScaled10, Self::IntScaled100]
+            } else if parse_scaled_int(text, 1).is_some() {
+                &[Self::Int, Self::Float, Self::Double, Self::IntScaled10]
+            } else {
+                &[Self::Int, Self::Float, Self::Double]
+            }
         } else if text.parse::<i64>().is_ok() {
             &[Self::Int64, Self::Float, Self::Double]
+        } else if parse_scaled_int(text, 1).is_some() {
+            if parse_scaled_int(text, 2).is_some() {
+                &[Self::Float, Self::Double, Self::IntScaled10, Self::IntScaled100]
+            } else {
+                &[Self::Float, Self::Double, Self::IntScaled10]
+            }
+        } else if parse_scaled_int(text, 2).is_some() {
+            &[Self::Float, Self::Double, Self::IntScaled100]
         } else {
             &[Self::Float, Self::Double]
         }
@@ -48,6 +73,14 @@ impl SearchType {
             Self::Short => Some(("Int16", "-32768", "32767")),
             Self::Int => Some(("Int32", "-2147483648", "2147483647")),
             Self::Int64 => Some(("Int64", "-9223372036854775808", "9223372036854775807")),
+            _ => None,
+        }
+    }
+
+    pub fn scaling_hint(&self) -> Option<String> {
+        match self {
+            Self::IntScaled10 => Some(fl!(crate::LANGUAGE_LOADER, "int-scaled10-hint")),
+            Self::IntScaled100 => Some(fl!(crate::LANGUAGE_LOADER, "int-scaled100-hint")),
             _ => None,
         }
     }
@@ -68,6 +101,8 @@ impl SearchType {
             SearchType::Byte => fl!(crate::LANGUAGE_LOADER, "byte-value-item"),
             SearchType::Short => fl!(crate::LANGUAGE_LOADER, "short-value-item"),
             SearchType::Int => fl!(crate::LANGUAGE_LOADER, "int-value-item"),
+            SearchType::IntScaled10 => fl!(crate::LANGUAGE_LOADER, "int-scaled10-value-item"),
+            SearchType::IntScaled100 => fl!(crate::LANGUAGE_LOADER, "int-scaled100-value-item"),
             SearchType::Int64 => fl!(crate::LANGUAGE_LOADER, "int64-value-item"),
             SearchType::Float => fl!(crate::LANGUAGE_LOADER, "float-value-item"),
             SearchType::Double => fl!(crate::LANGUAGE_LOADER, "double-value-item"),
@@ -81,7 +116,7 @@ impl SearchType {
             SearchType::Guess | SearchType::Unknown | SearchType::String | SearchType::StringUtf16 => None,
             SearchType::Byte => Some(1),
             SearchType::Short => Some(2),
-            SearchType::Int => Some(4),
+            SearchType::Int | SearchType::IntScaled10 | SearchType::IntScaled100 => Some(4),
             SearchType::Int64 => Some(8),
             SearchType::Float => Some(4),
             SearchType::Double => Some(8),
@@ -94,6 +129,8 @@ impl SearchType {
             SearchType::Byte => fl!(crate::LANGUAGE_LOADER, "byte-descr"),
             SearchType::Short => fl!(crate::LANGUAGE_LOADER, "short-descr"),
             SearchType::Int => fl!(crate::LANGUAGE_LOADER, "int-descr"),
+            SearchType::IntScaled10 => fl!(crate::LANGUAGE_LOADER, "int-scaled10-descr"),
+            SearchType::IntScaled100 => fl!(crate::LANGUAGE_LOADER, "int-scaled100-descr"),
             SearchType::Int64 => fl!(crate::LANGUAGE_LOADER, "int64-descr"),
             SearchType::Float => fl!(crate::LANGUAGE_LOADER, "float-descr"),
             SearchType::Double => fl!(crate::LANGUAGE_LOADER, "double-descr"),
@@ -123,6 +160,14 @@ impl SearchType {
             }
             SearchType::Int => {
                 let val = txt.parse::<i32>().map_err(|err| self.integer_parse_error(txt, err))?;
+                Ok(SearchValue(*self, val.to_le_bytes().to_vec()))
+            }
+            SearchType::IntScaled10 => {
+                let val = parse_scaled_int(txt, 1).ok_or_else(|| fl!(crate::LANGUAGE_LOADER, "int-scaled10-input-error"))?;
+                Ok(SearchValue(*self, val.to_le_bytes().to_vec()))
+            }
+            SearchType::IntScaled100 => {
+                let val = parse_scaled_int(txt, 2).ok_or_else(|| fl!(crate::LANGUAGE_LOADER, "int-scaled100-input-error"))?;
                 Ok(SearchValue(*self, val.to_le_bytes().to_vec()))
             }
             SearchType::Int64 => {
@@ -171,6 +216,8 @@ impl fmt::Display for SearchType {
             SearchType::Byte => fl!(crate::LANGUAGE_LOADER, "byte-value-item"),
             SearchType::Short => fl!(crate::LANGUAGE_LOADER, "short-value-item"),
             SearchType::Int => fl!(crate::LANGUAGE_LOADER, "int-value-item"),
+            SearchType::IntScaled10 => fl!(crate::LANGUAGE_LOADER, "int-scaled10-value-item"),
+            SearchType::IntScaled100 => fl!(crate::LANGUAGE_LOADER, "int-scaled100-value-item"),
             SearchType::Int64 => fl!(crate::LANGUAGE_LOADER, "int64-value-item"),
             SearchType::Float => fl!(crate::LANGUAGE_LOADER, "float-value-item"),
             SearchType::Double => fl!(crate::LANGUAGE_LOADER, "double-value-item"),
@@ -179,4 +226,23 @@ impl fmt::Display for SearchType {
         };
         write!(f, "{text}")
     }
+}
+
+// Parse fixed decimal places without rounding through floating point or overflowing.
+fn parse_scaled_int(text: &str, decimal_places: u32) -> Option<i32> {
+    let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
+    if !fraction.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let fraction = fraction.trim_end_matches('0');
+    if fraction.len() > decimal_places as usize {
+        return None;
+    }
+    let fraction_value = fraction.bytes().fold(0_i64, |n, b| n * 10 + i64::from(b - b'0'));
+    let fraction_value = fraction_value * 10_i64.pow(decimal_places - fraction.len() as u32);
+    let whole = whole.parse::<i64>().ok()?;
+    let raw = whole
+        .checked_mul(10_i64.pow(decimal_places))?
+        .checked_add(if text.starts_with('-') { -fraction_value } else { fraction_value })?;
+    i32::try_from(raw).ok()
 }

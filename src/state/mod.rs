@@ -94,7 +94,7 @@ fn search_loaded_memory(
 ) -> Vec<SearchResult> {
     let mut results = if let Some(needles) = guess_needles {
         // Guess mode: scan the buffer for each precomputed typed needle
-        // (Int / Int64 / Float / Double).
+        // (Int / Int64 / Float / Double / scaled Int32).
         let mut all_results = Vec::new();
         for (search_type, bytes) in needles {
             let typed_results: Vec<SearchResult> = search_memory_with_tolerance(memory, bytes, *search_type, base_address, tolerance);
@@ -842,10 +842,10 @@ impl GameCheetahEngine {
         let results_sender = search_context.results_sender.clone();
         let cache_valid = search_context.cache_valid.clone();
 
-        // Guess tries Int32 OR Int64 (depending on range), plus Float / Double.
+        // Guess tries Int32 OR Int64, Float / Double, and Int32 x10/x100 when they fit.
         // Parsing the user-typed value into these representations is identical
         // for every region, so do it exactly once here instead of inside the
-        // par_iter closure (where it would otherwise run 3*N times). Errors
+        // par_iter closure. Errors
         // are reported once, up front, rather than spamming stderr per region.
         type GuessNeedles = Vec<(SearchType, Vec<u8>)>;
         let guess_needles: Option<Arc<GuessNeedles>> = if matches!(search_data.0, SearchType::Guess) {
@@ -1773,7 +1773,7 @@ pub fn search_memory_with_tolerance(
             }
         }
         // For aligned integer types, use optimized searching
-        SearchType::Short | SearchType::Int | SearchType::Int64 => {
+        SearchType::Short | SearchType::Int | SearchType::Int64 | SearchType::IntScaled10 | SearchType::IntScaled100 => {
             // Use SIMD-optimized pattern matching for aligned data
             result = search_integers(memory_data, search_data, search_type, start);
         }
@@ -2065,6 +2065,64 @@ mod tests {
             assert!(search.freezed_addresses.is_empty());
         }
         assert!(matches!(engine.current_error(), Some(AppError::ProcessExited { .. })));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn guess_scaled_ints_survive_narrowing_and_undo_without_changing_other_types() {
+        fn wait(search: &SearchContext) -> Vec<(usize, SearchType)> {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !search.search_complete.load(Ordering::Acquire) {
+                search.collect_results();
+                assert!(Instant::now() < deadline, "Search worker did not finish");
+                std::thread::yield_now();
+            }
+            search.collect_results().iter().map(|r| (r.addr, r.search_type)).collect()
+        }
+
+        let mut bytes = Box::new([0_u8; 40]);
+        bytes[..4].copy_from_slice(&1098_i32.to_le_bytes());
+        bytes[4..8].copy_from_slice(&10980_i32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&1098_f32.to_le_bytes());
+        bytes[16..24].copy_from_slice(&1098_f64.to_le_bytes());
+        bytes[24..28].copy_from_slice(&10980_i32.to_le_bytes());
+        bytes[28..32].copy_from_slice(&109800_i32.to_le_bytes());
+        bytes[32..36].copy_from_slice(&109800_i32.to_le_bytes());
+        let address = bytes.as_ptr() as usize;
+        let mut engine = GameCheetahEngine {
+            pid: std::process::id() as process_memory::Pid,
+            ..Default::default()
+        };
+        engine.searches[0].search_type = SearchType::Guess;
+        engine.searches[0].search_value_text = "1098".into();
+        engine.spawn_parallel_search(SearchType::Guess.from_string("1098").unwrap(), vec![(address, bytes.len())], 0);
+        let original = vec![
+            (address, SearchType::Int),
+            (address + 4, SearchType::IntScaled10),
+            (address + 8, SearchType::Float),
+            (address + 16, SearchType::Double),
+            (address + 24, SearchType::IntScaled10),
+            (address + 28, SearchType::IntScaled100),
+            (address + 32, SearchType::IntScaled100),
+        ];
+        assert_eq!(wait(&engine.searches[0]), original);
+        engine.poll_searches();
+        bytes[4..8].copy_from_slice(&9180_i32.to_le_bytes());
+        bytes[28..32].copy_from_slice(&91800_i32.to_le_bytes());
+        engine.searches[0].search_value_text = "918".into();
+        engine.filter_searches(0);
+        assert_eq!(
+            wait(&engine.searches[0]),
+            vec![(address + 4, SearchType::IntScaled10), (address + 28, SearchType::IntScaled100)]
+        );
+        engine.poll_searches();
+        engine.searches[0].undo_last_search();
+        assert_eq!(
+            engine.searches[0].collect_results().iter().map(|r| (r.addr, r.search_type)).collect::<Vec<_>>(),
+            original
+        );
+        assert_eq!(i32::from_le_bytes(bytes[4..8].try_into().unwrap()), 9180);
+        assert_eq!(i32::from_le_bytes(bytes[28..32].try_into().unwrap()), 91800);
     }
 
     #[cfg(target_os = "linux")]

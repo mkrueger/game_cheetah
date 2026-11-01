@@ -381,7 +381,15 @@ integer-range-error = Außerhalb des Bereichs von { $kind } ({ $min } bis { $max
 integer-input-error = Ungültige Ganzzahl: { $value }
 check-result-type = Datentyp prüfen…
 type-width-warning = Ein Typwechsel interpretiert Speicher neu; er vergrößert nicht die Spielvariable. Das Schreiben eines breiteren Typs kann benachbarte Werte überschreiben.
-guess-type-hint = Probiert Int32 sowie Float32 und Float64. Int64 ersetzt Int32 nur bei Ganzzahlen außerhalb von −2147483648 bis 2147483647. Für kleine Werte in 64-Bit-Variablen Int64 explizit wählen. Dies erkennt nicht den Variablentyp des Spiels.
+guess-type-hint = Probiert Int32 sowie Float32 und Float64 und, falls darstellbar, Int32 ×10 und ×100 (z. B. 918 als 9180 oder 91800 gespeichert). Int64 ersetzt Int32 nur bei Ganzzahlen außerhalb von −2147483648 bis 2147483647. Für kleine Werte in 64-Bit-Variablen Int64 explizit wählen. Dies sind mögliche Interpretationen, keine Erkennung des Variablentyps des Spiels.
+int-scaled10-value-item = Int32 ×10 (4 Bytes, skaliert)
+int-scaled10-descr = Int32 ×10
+int-scaled10-hint = Mögliche ×10-Kodierung: Im Speicher steht das Zehnfache des angezeigten Wertes. Suchen, Bearbeiten und Einfrieren verwenden den Spielwert (918 entspricht 9180 im Speicher). Der Speichereditor zeigt und bearbeitet rohe Bytes und Zahlen ohne Skalierung.
+int-scaled10-input-error = Für Int32 ×10 einen Wert von -214748364.8 bis 214748364.7 in Schritten von 0.1 eingeben.
+int-scaled100-value-item = Int32 ×100 (4 Bytes, skaliert)
+int-scaled100-descr = Int32 ×100
+int-scaled100-hint = Mögliche ×100-Kodierung: Im Speicher steht das Hundertfache des angezeigten Wertes. Suchen, Bearbeiten und Einfrieren verwenden den Spielwert (918 entspricht 91800 im Speicher). Der Speichereditor zeigt und bearbeitet rohe Bytes und Zahlen ohne Skalierung.
+int-scaled100-input-error = Für Int32 ×100 einen Wert von -21474836.48 bis 21474836.47 in Schritten von 0.01 eingeben.
 
 guess-value-item = Zahl (4-8 Bytes)
 byte-value-item = Byte (1 byte)

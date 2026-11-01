@@ -52,6 +52,33 @@ fn keys(results: &[SearchResult]) -> Vec<(usize, SearchType)> {
 }
 
 #[test]
+fn scaled_ints_narrowing_filters_and_comparisons_keep_the_interpretation() {
+    for (ty, factor) in [(SearchType::IntScaled10, 10_i32), (SearchType::IntScaled100, 100)] {
+        let mut memory = Memory::new(32);
+        let old = [
+            memory.put(0, ty, "918"),
+            memory.put(4, SearchType::Int, "918"),
+            memory.put(8, ty, "918.1"),
+            memory.put(12, ty, "-0.1"),
+        ];
+        assert_eq!(keys(&PreparedSearch::new(&old, "918").update_results(&old, &memory)), keys(&old[..2]));
+        assert_eq!(keys(&PreparedSearch::new(&old, "-0.1").update_results(&old, &memory)), keys(&old[3..]));
+        let filtered = PreparedSearch::filtered(None, &[ty]).update_results(&old, &memory);
+        assert_eq!(keys(&filtered), keys(&[old[0], old[2], old[3]]));
+        let predicate = crate::NumericFilter::parse(crate::NumericComparison::Equal, "918", "").unwrap();
+        assert_eq!(keys(&PreparedSearch::numeric(predicate).update_results(&old, &memory)), keys(&old[..2]));
+        for (new, comparison) in [
+            (918 * factor - 1, crate::UnknownComparison::Decreased),
+            (918 * factor + 1, crate::UnknownComparison::Increased),
+            (918 * factor + 1, crate::UnknownComparison::Changed),
+            (918 * factor, crate::UnknownComparison::Unchanged),
+        ] {
+            assert!(crate::state::compare_values(&(918 * factor).to_le_bytes(), &new.to_le_bytes(), ty, comparison));
+        }
+    }
+}
+
+#[test]
 fn numeric_predicates_share_reads_and_retry_unreadable_gaps() {
     let mut memory = Memory::new(128);
     let old = [

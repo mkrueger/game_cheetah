@@ -2,14 +2,181 @@ use game_cheetah::{FloatTolerance, SearchType, SearchValue, search_memory, searc
 
 #[test]
 fn guess_uses_int64_only_outside_the_signed_int32_range() {
-    for text in ["5222", "0", "-1", "+5222", "2147483647", "-2147483648"] {
+    for text in ["5222", "0", "-1", "+5222"] {
+        assert_eq!(
+            SearchType::guess_types(text),
+            &[
+                SearchType::Int,
+                SearchType::Float,
+                SearchType::Double,
+                SearchType::IntScaled10,
+                SearchType::IntScaled100
+            ]
+        );
+    }
+    for text in ["21474836", "-21474836"] {
+        assert!(SearchType::guess_types(text).contains(&SearchType::IntScaled100));
+    }
+    for text in ["21474837", "-21474837", "214748364", "-214748364"] {
+        assert_eq!(
+            SearchType::guess_types(text),
+            &[SearchType::Int, SearchType::Float, SearchType::Double, SearchType::IntScaled10]
+        );
+    }
+    for text in ["2147483647", "-2147483648", "214748365", "-214748365"] {
         assert_eq!(SearchType::guess_types(text), &[SearchType::Int, SearchType::Float, SearchType::Double]);
     }
     for text in ["2147483648", "-2147483649", "9223372036854775807", "-9223372036854775808"] {
         assert_eq!(SearchType::guess_types(text), &[SearchType::Int64, SearchType::Float, SearchType::Double]);
     }
-    for text in ["1.5", "5e9", "9223372036854775808", "-9223372036854775809"] {
+    for text in ["1.5", "-0.1", "21474836.4", "-21474836.4"] {
+        assert_eq!(
+            SearchType::guess_types(text),
+            &[SearchType::Float, SearchType::Double, SearchType::IntScaled10, SearchType::IntScaled100]
+        );
+    }
+    for text in ["214748364.7", "-214748364.8", "21474836.5", "-21474836.5"] {
+        assert_eq!(SearchType::guess_types(text), &[SearchType::Float, SearchType::Double, SearchType::IntScaled10]);
+    }
+    for text in ["1.23", "-0.01", "21474836.47", "-21474836.48"] {
+        assert_eq!(
+            SearchType::guess_types(text),
+            &[SearchType::Float, SearchType::Double, SearchType::IntScaled100]
+        );
+    }
+    for text in [
+        "1.234",
+        "21474836.48",
+        "-21474836.49",
+        "214748364.8",
+        "-214748364.9",
+        "5e9",
+        "9223372036854775808",
+        "-9223372036854775809",
+    ] {
         assert_eq!(SearchType::guess_types(text), &[SearchType::Float, SearchType::Double]);
+    }
+}
+
+#[test]
+fn scaled_int10_encodes_exact_decimal_tenths_and_rejects_overflow() {
+    let ty = SearchType::IntScaled10;
+    assert_eq!(ty.fixed_byte_length(), Some(4));
+    for (text, raw) in [
+        ("918", 9180_i32),
+        ("+918", 9180),
+        ("0", 0),
+        ("-0.1", -1),
+        ("1.20", 12),
+        ("-918.7", -9187),
+        ("214748364.7", i32::MAX),
+        ("-214748364.8", i32::MIN),
+    ] {
+        let value = ty.from_string(text).unwrap();
+        assert_eq!(value.0, ty);
+        assert_eq!(value.1, raw.to_le_bytes());
+    }
+    for text in [
+        "",
+        "abc",
+        "1.01",
+        "-0.01",
+        "NaN",
+        "inf",
+        "1e2",
+        "1,5",
+        "1.2.3",
+        "214748364.8",
+        "-214748364.9",
+        "214748365",
+        "-214748365",
+        "9223372036854775807",
+        "-9223372036854775808",
+    ] {
+        assert!(ty.from_string(text).is_err(), "{text}");
+    }
+    for raw in (i32::MIN..=i32::MAX).step_by(100_003).chain([-11, -10, -1, 0, 1, 9, 10, 11, i32::MAX]) {
+        let value = SearchValue(ty, raw.to_le_bytes().to_vec());
+        assert_eq!(ty.from_string(&value.to_string()).unwrap(), value, "{raw}");
+    }
+    assert_eq!(ty.from_string("918").unwrap().to_string(), "918");
+    assert_eq!(ty.from_string("-0.1").unwrap().to_string(), "-0.1");
+    assert_eq!(ty.from_string("918").unwrap().to_hex_string(), "0x000023DC");
+    assert_eq!(SearchValue(ty, vec![1, 2, 3]).to_string(), "<invalid>");
+}
+
+#[test]
+fn scaled_int100_encodes_exact_hundredths_and_rejects_overflow() {
+    let ty = SearchType::IntScaled100;
+    assert_eq!(ty.fixed_byte_length(), Some(4));
+    for (text, raw) in [
+        ("918", 91800_i32),
+        ("+918", 91800),
+        ("0", 0),
+        ("-0.01", -1),
+        ("1.20", 120),
+        ("1.2300", 123),
+        ("-918.75", -91875),
+        ("21474836.47", i32::MAX),
+        ("-21474836.48", i32::MIN),
+    ] {
+        let value = ty.from_string(text).unwrap();
+        assert_eq!(value.0, ty);
+        assert_eq!(value.1, raw.to_le_bytes());
+    }
+    for text in [
+        "",
+        "abc",
+        "1.001",
+        "-0.001",
+        "NaN",
+        "inf",
+        "1e2",
+        "1,5",
+        "1.2.3",
+        "21474836.48",
+        "-21474836.49",
+        "21474837",
+        "-21474837",
+        "9223372036854775807",
+        "-9223372036854775808",
+    ] {
+        assert!(ty.from_string(text).is_err(), "{text}");
+    }
+    for raw in (i32::MIN..=i32::MAX)
+        .step_by(100_003)
+        .chain([-101, -100, -1, 0, 1, 9, 10, 11, 99, 100, 101, i32::MAX])
+    {
+        let value = SearchValue(ty, raw.to_le_bytes().to_vec());
+        assert_eq!(ty.from_string(&value.to_string()).unwrap(), value, "{raw}");
+    }
+    assert_eq!(ty.from_string("918").unwrap().to_string(), "918");
+    assert_eq!(ty.from_string("-0.01").unwrap().to_string(), "-0.01");
+    assert_eq!(ty.from_string("918").unwrap().to_hex_string(), format!("0x{:08X}", 91800));
+    assert_eq!(SearchValue(ty, vec![1, 2, 3]).to_string(), "<invalid>");
+}
+
+#[test]
+fn scaled_ints_scan_exact_raw_bytes_including_unaligned_matches() {
+    for ty in [SearchType::IntScaled10, SearchType::IntScaled100] {
+        for raw in [10980_i32, -10980, i32::MIN, i32::MAX] {
+            let mut memory = vec![0xA5; 48];
+            memory[1..5].copy_from_slice(&raw.to_le_bytes());
+            memory[24..28].copy_from_slice(&raw.to_le_bytes());
+            memory[32..36].copy_from_slice(&raw.saturating_sub(1).to_le_bytes());
+            memory[40..44].copy_from_slice(&raw.saturating_add(1).to_le_bytes());
+            let needle = ty.from_string(&SearchValue(ty, raw.to_le_bytes().to_vec()).to_string()).unwrap();
+            let hits = search_memory_with_tolerance(&memory, &needle.1, ty, 0x1000, FloatTolerance::percent(50.0));
+            assert!(hits.iter().all(|r| r.search_type == ty));
+            let mut expected = vec![0x1001, 0x1018];
+            if raw == i32::MIN {
+                expected.push(0x1020);
+            }
+            if raw == i32::MAX {
+                expected.push(0x1028);
+            }
+            assert_eq!(hits.iter().map(|r| r.addr).collect::<Vec<_>>(), expected);
+        }
     }
 }
 
