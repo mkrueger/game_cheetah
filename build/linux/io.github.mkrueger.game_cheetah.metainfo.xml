@@ -83,6 +83,12 @@
   </requires>
 
   <releases>
+    <release version="0.7.6" date="2026-11-02">
+      <url type="details">https://github.com/mkrueger/game_cheetah/releases/tag/v0.7.6</url>
+      <description>
+        <p>Number searches now find Int32 values stored at ten or one hundred times the entered value, preserving their scaled interpretation when narrowing, editing, freezing, filtering, and saving cheat tables.</p>
+      </description>
+    </release>
     <release version="0.7.5" date="2026-10-17">
       <url type="details">https://github.com/mkrueger/game_cheetah/releases/tag/v0.7.5</url>
       <description>

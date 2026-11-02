@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-11-02
+
 ### Added
 
 - Number searches also find Int32 values stored at ten or one hundred times the entered value.
