@@ -10,7 +10,7 @@ depends=('gtk3' 'libxcb' 'libxkbcommon' 'wayland' 'libgl' 'fontconfig' 'freetype
 # rustup provides rust without a version; check the active compiler in prepare().
 makedepends=('rust' 'cargo')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('46448b52854df62f6bb1a62d23853edb44dd2d290b9fcdae39f8529b3eb26133')
 
 prepare() {
     local rust_version
